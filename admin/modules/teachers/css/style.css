@@ -1,0 +1,67 @@
+.table-hover tbody tr:hover {
+    background-color: #f1f3f9;
+    transition: 0.3s;
+}
+
+.card-header {
+    background: linear-gradient(45deg, #4e54c8, #8f94fb);
+    color: white;
+}
+
+.btn-circle {
+    width: 35px;
+    height: 35px;
+    padding: 0;
+    line-height: 35px;
+    text-align: center;
+}
+
+.modal-header {
+    background-color: #4e54c8;
+    color: white;
+}
+
+.page-link {
+    color: #4e54c8;
+    cursor: pointer;
+}
+
+.page-item.active .page-link {
+    background-color: #4e54c8;
+    border-color: #4e54c8;
+}
+.scroll-section {
+    max-height: 250px;
+    overflow-y: auto;
+    border: 1px solid #eee;
+    border-radius: 8px;
+    padding: 10px;
+    background: #fafafa;
+}
+.scroll-section::-webkit-scrollbar {
+    width: 6px;
+}
+.scroll-section::-webkit-scrollbar-thumb {
+    background-color: #ccc;
+    border-radius: 10px;
+}
+.nav-tabs .nav-link {
+    border: none;
+    color: #666;
+    padding: 12px 20px;
+}
+.nav-tabs .nav-link.active {
+    color: #4e54c8;
+    border-bottom: 3px solid #4e54c8;
+    background: none;
+}
+.info-box {
+    background: #e9ecef;
+    border-radius: 6px;
+    padding: 8px 15px;
+    margin-bottom: 5px;
+    font-weight: 600;
+    color: #2c3e50;
+    display: flex;
+    justify-content: space-between;
+}

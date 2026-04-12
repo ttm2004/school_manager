@@ -1,0 +1,108 @@
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&display=swap');
+
+:root {
+    /* Cấu hình chiều rộng Sidebar tại đây cho dễ chỉnh */
+    --sidebar-width: 300px; 
+}
+
+body {
+    font-family: 'Nunito', sans-serif;
+    background-color: #f3f4f6;
+    overflow-x: hidden;
+}
+
+/* --- SIDEBAR STYLING --- */
+#sidebar-wrapper {
+    min-height: 100vh;
+    width: var(--sidebar-width); /* Chiều rộng cố định */
+    margin-left: calc(-1 * var(--sidebar-width)); /* Ẩn sang trái khi trên mobile */
+    transition: margin .25s ease-out;
+    background: #2c3e50; /* Màu nền tối chuyên nghiệp */
+    color: white;
+    box-shadow: 4px 0 10px rgba(0,0,0,0.1);
+    z-index: 1000;
+}
+
+/* Header của Sidebar (Chữ ADMIN) */
+#sidebar-wrapper .sidebar-heading {
+    padding: 1.5rem 1.25rem;
+    font-size: 1.8rem; /* Chữ to hơn */
+    font-weight: 800;
+    background: #1a252f;
+    text-align: center;
+    letter-spacing: 1px;
+    color: #fff;
+}
+
+/* Các link trong menu */
+#sidebar-wrapper .list-group {
+    width: var(--sidebar-width);
+}
+
+.list-group-item {
+    border: none;
+    padding: 18px 30px; /* Tăng khoảng cách lề cho thoáng */
+    font-size: 1.1rem;  /* Cỡ chữ to hơn cho dễ nhìn */
+    background-color: #2c3e50;
+    color: #505f75;
+    font-weight: 600;
+    transition: all 0.3s;
+}
+
+.list-group-item:hover, .list-group-item.active {
+    background-color: #34495e;
+    color: #fff;
+    border-left: 5px solid #3498db; /* Viền trái dày hơn */
+    padding-left: 35px; /* Hiệu ứng đẩy nhẹ sang phải khi hover */
+}
+
+.list-group-item i {
+    width: 30px; /* Icon rộng hơn */
+    font-size: 1.2rem;
+}
+
+/* --- MAIN CONTENT --- */
+#page-content-wrapper {
+    min-width: 100vw;
+    transition: margin .25s ease-out;
+}
+
+/* --- RESPONSIVE LOGIC --- */
+/* Trên máy tính (PC) */
+@media (min-width: 768px) {
+    #sidebar-wrapper {
+        margin-left: 0; /* Hiện sidebar */
+    }
+    
+    #page-content-wrapper {
+        min-width: 0;
+        width: 100%;
+    }
+    
+    /* Khi bấm nút toggle để ẩn sidebar trên PC */
+    body.sb-sidenav-toggled #sidebar-wrapper {
+        margin-left: calc(-1 * var(--sidebar-width));
+    }
+}
+
+/* --- CÁC CARD THỐNG KÊ (GIỮ NGUYÊN) --- */
+.card-stat {
+    border: none;
+    border-radius: 15px;
+    box-shadow: 0 5px 20px rgba(0,0,0,0.05);
+    transition: transform 0.3s;
+    color: white;
+    overflow: hidden;
+    position: relative;
+}
+.card-stat:hover { transform: translateY(-5px); }
+.card-stat .card-body { z-index: 2; position: relative; }
+.card-stat i { position: absolute; right: 20px; bottom: 20px; font-size: 4rem; opacity: 0.3; z-index: 1; }
+
+.table-custom {
+    background: white;
+    border-radius: 10px;
+    box-shadow: 0 5px 20px rgba(0,0,0,0.05);
+    overflow: hidden;
+}
+.table-custom thead { background-color: #34495e; color: white; }
