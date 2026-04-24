@@ -7,6 +7,7 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
 }
 
 require_once '../config/db.php';
+/** @var PDO $conn */
 
 // --- PHẦN XỬ LÝ DỮ LIỆU PHP ---
 
