@@ -8,23 +8,23 @@
     $current_uri = $_SERVER['REQUEST_URI'];
     ?>
 
-    <a href="/school-manager/student/index.php" class="sidebar-link <?= (strpos($current_uri, 'student/index.php') !== false) ? 'active' : '' ?>">
+    <a href="/student/index.php" class="sidebar-link <?= (strpos($current_uri, 'student/index.php') !== false) ? 'active' : '' ?>">
         <i class="fas fa-home"></i> Dashboard
     </a>
     
-    <a href="/school-manager/student/modules/schedule/index.php" class="sidebar-link <?= (strpos($current_uri, 'schedule/') !== false) ? 'active' : '' ?>">
+    <a href="/student/modules/schedule/index.php" class="sidebar-link <?= (strpos($current_uri, 'schedule/') !== false) ? 'active' : '' ?>">
         <i class="fas fa-calendar-alt"></i> Lịch học
     </a>
 
-    <a href="/school-manager/student/modules/grades/index.php" class="sidebar-link <?= (strpos($current_uri, 'grades/') !== false) ? 'active' : '' ?>">
+    <a href="/student/modules/grades/index.php" class="sidebar-link <?= (strpos($current_uri, 'grades/') !== false) ? 'active' : '' ?>">
         <i class="fas fa-poll"></i> Bảng điểm
     </a>
     
-    <a href="/school-manager/student/modules/notifications/index.php" class="sidebar-link <?= (strpos($current_uri, 'notifications/') !== false) ? 'active' : '' ?>">
+    <a href="/student/modules/notifications/index.php" class="sidebar-link <?= (strpos($current_uri, 'notifications/') !== false) ? 'active' : '' ?>">
         <i class="fas fa-bell"></i> Thông báo
     </a>
     
-    <a href="/school-manager/logout.php" class="sidebar-link mt-5 text-danger border-top border-secondary pt-3">
+    <a href="/logout.php" class="sidebar-link mt-5 text-danger border-top border-secondary pt-3">
         <i class="fas fa-sign-out-alt"></i> Đăng xuất
     </a>
 </nav>
