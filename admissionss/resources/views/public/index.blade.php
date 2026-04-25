@@ -408,7 +408,8 @@
                 </div>
 
                 <div class="register-form-container">
-                    <form id="registerForm" class="register-form" action="php/register.php" method="POST" enctype="multipart/form-data">
+                    <form id="registerForm" class="register-form" method="POST" enctype="multipart/form-data">
+                        @csrf
                         <!-- Thông tin cá nhân -->
                         <div class="form-section">
                             <h3><i class="fas fa-user-circle"></i> Thông tin cá nhân</h3>
@@ -1000,8 +1001,8 @@
             // Add AOS animations if you want to use
             // You can add AOS library from: https://michalsnik.github.io/aos/
         </script>
-
-        <script>
+        <script src="{{ asset('js/home.js') }}"></script>
+        <script >
             const province = document.getElementById("province");
             const district = document.getElementById("district");
             const ward = document.getElementById("ward");
@@ -1096,6 +1097,7 @@
 
             });
         </script>
+        
     </body>
 
     </html>
