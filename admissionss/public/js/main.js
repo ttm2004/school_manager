@@ -188,47 +188,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
 
-    // Province-District Cascade
-    const provinceSelect = document.getElementById('province');
-    const districtSelect = document.getElementById('district');
-
-    if (provinceSelect && districtSelect) {
-        provinceSelect.addEventListener('change', function () {
-            const provinceId = this.value;
-            if (provinceId) {
-                // Show loading
-                districtSelect.innerHTML = '<option value="">Đang tải...</option>';
-                districtSelect.disabled = true;
-
-                // Fetch districts via AJAX
-                fetch(`api/get-districts.php?province_id=${provinceId}`)
-                    .then(response => {
-                        if (!response.ok) {
-                            throw new Error('Network response was not ok');
-                        }
-                        return response.json();
-                    })
-                    .then(data => {
-                        districtSelect.innerHTML = '<option value="">Chọn quận/huyện</option>';
-                        if (data && data.length > 0) {
-                            data.forEach(district => {
-                                districtSelect.innerHTML += `<option value="${district.id}">${district.name}</option>`;
-                            });
-                            districtSelect.disabled = false;
-                        } else {
-                            districtSelect.innerHTML = '<option value="">Không có dữ liệu</option>';
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Error:', error);
-                        districtSelect.innerHTML = '<option value="">Lỗi tải dữ liệu</option>';
-                    });
-            } else {
-                districtSelect.innerHTML = '<option value="">Chọn quận/huyện</option>';
-                districtSelect.disabled = true;
-            }
-        });
-    }
+   
 
     // Dynamic Score Fields based on Admission Method
     const methodSelect = document.getElementById('method');
@@ -682,9 +642,12 @@ document.addEventListener('DOMContentLoaded', function () {
 
             try {
                 // Submit form via AJAX
-                const response = await fetch('php/register.php', {
+                const response = await fetch('/api/admissions/register', {
                     method: 'POST',
-                    body: formData
+                    body: formData,
+                    headers: {
+                        'Accept': 'application/json'
+                    }
                 });
 
                 const text = await response.text();
