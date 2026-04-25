@@ -104,26 +104,22 @@ class AdmissionRegistrationController extends Controller
              * Insert registrations
              */
             $registrationId = DB::table('registrations')->insertGetId([
-                'fullname' => trim($request->fullname),
-                'birthday' => $request->birthday,
-                'gender' => $request->gender,
-                'identification' => trim($request->identification),
-                'phone' => trim($request->phone),
-                'email' => trim($request->email),
-                'address' => trim($request->address),
-                'graduation_year' => (int) $request->graduation_year,
-                'school' => trim($request->school),
-                'major' => $request->major,
+                'fullname' => trim($request->input('fullname')),
+                'birthday' => $request->input('birthday'),
+                'gender' => $request->input('gender'),
+                'identification' => trim($request->input('identification')),
+                'phone' => trim($request->input('phone')),
+                'email' => trim($request->input('email')),
+                'address' => trim($request->input('address')),
+                'graduation_year' => (int) $request->input('graduation_year'),
+                'school' => trim($request->input('school')),
+                'major' => $request->input('major'),
                 'method' => $request->input('method'),
-                'combination_id' => $request->combination,
-
-                // File upload theo cấu trúc bảng cũ của bạn
-                'transcript_file' => $transcriptFile,
-                'certificate_file' => $directFile,
-
-                'notes' => $request->notes,
-                'ip_address' => $request->ip(),
-                'user_agent' => $request->userAgent(),
+                'combination_id' => $request->input('combination'),
+                'province_id' => $request->input('province'),
+                'district_id' => $request->input('district'),
+                'file_path' => $transcriptFile ?? $directFile,
+                // 'notes' => $request->input('notes'),
                 'status' => 'pending',
                 'created_at' => now(),
             ]);
@@ -170,7 +166,6 @@ class AdmissionRegistrationController extends Controller
                     'code' => str_pad($registrationId, 8, '0', STR_PAD_LEFT),
                 ],
             ]);
-
         } catch (Exception $e) {
             DB::rollBack();
 
@@ -218,5 +213,4 @@ class AdmissionRegistrationController extends Controller
 
         return 'uploads/' . $folder . '/' . $filename;
     }
-
 }
