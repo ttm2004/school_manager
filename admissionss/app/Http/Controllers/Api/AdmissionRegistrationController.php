@@ -2,6 +2,9 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Models\Registration;
+use App\Models\AdmissionScore;
+use App\Models\Newsletter;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -103,7 +106,7 @@ class AdmissionRegistrationController extends Controller
             /*
              * Insert registrations
              */
-            $registrationId = DB::table('registrations')->insertGetId([
+            $registrationId = Registration::create([
                 'fullname' => trim($request->input('fullname')),
                 'birthday' => $request->input('birthday'),
                 'gender' => $request->input('gender'),
@@ -124,33 +127,36 @@ class AdmissionRegistrationController extends Controller
                 'created_at' => now(),
             ]);
 
+            $registrationId = $registrationId->id;
+
             /*
              * Insert điểm xét tuyển
              */
-            if ($request->has('scores') && is_array($request->scores)) {
-                $scores = $request->scores;
-                $totalScore = $this->calculateTotalScore($request->input('method'), $scores);
+            $scores = $request->input('scores', []);
 
-                DB::table('diemtuyensinh')->insert([
+            if (is_array($scores) && count($scores) > 0) {
+                $method = $request->input('method');
+                $totalScore = $this->calculateTotalScore($method, $scores);
+
+                AdmissionScore::create([
                     'registration_id' => $registrationId,
-                    'method' => $request->input('method'),
+                    'method' => $method,
                     'score_data' => json_encode($scores, JSON_UNESCAPED_UNICODE),
                     'total_score' => $totalScore,
                     'created_at' => now(),
                 ]);
             }
-
             /*
              * Newsletter
              */
             if ($request->has('newsletter')) {
-                $exists = DB::table('newsletter')
-                    ->where('email', trim($request->email))
-                    ->exists();
+                $email = trim($request->input('email'));
+
+                $exists = Newsletter::where('email', $email)->exists();
 
                 if (!$exists) {
-                    DB::table('newsletter')->insert([
-                        'email' => trim($request->email),
+                    Newsletter::create([
+                        'email' => $email,
                         'subscribed_at' => now(),
                     ]);
                 }
