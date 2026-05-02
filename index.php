@@ -2,6 +2,8 @@
 require_once 'config/db.php';
 include 'includes/header.php';
 
+$laravelUrl = 'http://127.0.0.1:8000';
+
 // Cấu hình đường dẫn thư mục chứa ảnh
 $image_path = "uploads/news/";
 
@@ -70,7 +72,7 @@ $news_list = $stmt->fetchAll();
                     </div>
 
                     <div class="col-md-3 mb-3 mb-md-0 border-start border-light">
-                        <a href="../admissions/tra-cuu-tuyen-sinh.php" class="text-decoration-none text-dark">
+                        <a href="admissions/tra-cuu-tuyen-sinh.php" class="text-decoration-none text-dark">
                             <div class="p-3">
                                 <i class="fas fa-chart-line fa-3x text-success mb-3"></i>
                                 <h5 class="fw-bold">Kết quả thi</h5>

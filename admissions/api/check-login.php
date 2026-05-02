@@ -1,6 +1,6 @@
 <?php
 // session_start();
-require_once '../../php/config.php';
+require_once '../php/config.php';
 
 header('Content-Type: application/json; charset=utf-8');
 

@@ -233,7 +233,7 @@
                 .then(data => {
                     if (data.success) {
                         // redirect khi login OK
-                        window.location.href = "dashboard.php";
+                        window.location.href = "admin/dashboard.php";
                     } else {
                         document.getElementById("error").innerText = data.message;
                     }

@@ -50,6 +50,7 @@
                         <li><a href="#tuition">Học phí</a></li>
                         <li><a href="#scholarship">Học bổng</a></li>
                         <li><a href="#contact">Liên hệ</a></li>
+                        <li><a href="login.php">Đăng nhập</a></li>
                         
                     </ul>
                     <div class="hamburger">
