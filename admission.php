@@ -4,31 +4,49 @@ require_once 'includes/auth.php';
 $pageTitle = 'Tuyển sinh';
 
 $success = '';
-$error = '';
+$error   = '';
 
-// Handle form submission
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['apply'])) {
-    $major_id = intval($_POST['major_id'] ?? 0);
-    $method_id = intval($_POST['method_id'] ?? 0);
-    $full_name = trim($_POST['full_name'] ?? '');
-    $gender = trim($_POST['gender'] ?? '');
-    $birthday = trim($_POST['birthday'] ?? '');
-    $citizen_id = trim($_POST['citizen_id'] ?? '');
-    $email = trim($_POST['email'] ?? '');
-    $phone = trim($_POST['phone'] ?? '');
-    $address = trim($_POST['address'] ?? '');
-    $high_school = trim($_POST['high_school'] ?? '');
-    $graduation_year = intval($_POST['graduation_year'] ?? 0);
-    $math_score = floatval($_POST['math_score'] ?? 0);
+// ── Lấy thông tin đợt tuyển sinh hiện tại ──────────────────
+$activeRound   = getActiveRound();
+$roundPhase    = getRoundPhase();
+$regOpen       = isRegistrationOpen();
+$isSupp        = isSupplementaryPhase();
+
+// Xác định round_id để gắn vào hồ sơ
+$currentRoundId = $activeRound['id'] ?? null;
+$isSupplementaryReg = ($roundPhase === 'supp_reg_open');
+
+// Handle form submission — chỉ cho phép khi đang mở đăng ký
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['apply']) && $regOpen) {
+    $major_id         = intval($_POST['major_id'] ?? 0);
+    $method_id        = intval($_POST['method_id'] ?? 0);
+    $full_name        = trim($_POST['full_name'] ?? '');
+    $gender           = trim($_POST['gender'] ?? '');
+    $birthday         = trim($_POST['birthday'] ?? '');
+    $citizen_id       = trim($_POST['citizen_id'] ?? '');
+    $email            = trim($_POST['email'] ?? '');
+    $phone            = trim($_POST['phone'] ?? '');
+    $address          = trim($_POST['address'] ?? '');
+    $high_school      = trim($_POST['high_school'] ?? '');
+    $graduation_year  = intval($_POST['graduation_year'] ?? 0);
+    $math_score       = floatval($_POST['math_score'] ?? 0);
     $literature_score = floatval($_POST['literature_score'] ?? 0);
-    $english_score = floatval($_POST['english_score'] ?? 0);
-    $note = trim($_POST['note'] ?? '');
+    $english_score    = floatval($_POST['english_score'] ?? 0);
+    $note             = trim($_POST['note'] ?? '');
 
     if (empty($full_name) || empty($email) || empty($phone) || $major_id == 0 || $method_id == 0) {
         $error = 'Vui lòng điền đầy đủ các trường bắt buộc.';
     } else {
-        $stmt = $conn->prepare("INSERT INTO admission_applications (major_id, method_id, full_name, gender, birthday, citizen_id, email, phone, address, high_school, graduation_year, math_score, literature_score, english_score, note, status, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new',NOW())");
-        $stmt->bind_param('iissssssssiddds', $major_id, $method_id, $full_name, $gender, $birthday, $citizen_id, $email, $phone, $address, $high_school, $graduation_year, $math_score, $literature_score, $english_score, $note);
+        $stmt = $conn->prepare("INSERT INTO admission_applications
+            (major_id, method_id, full_name, gender, birthday, citizen_id, email, phone,
+             address, high_school, graduation_year, math_score, literature_score, english_score,
+             note, round_id, is_supplementary, status, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new',NOW())");
+        $stmt->bind_param('iissssssssidddssii',
+            $major_id, $method_id, $full_name, $gender, $birthday, $citizen_id,
+            $email, $phone, $address, $high_school, $graduation_year,
+            $math_score, $literature_score, $english_score, $note,
+            $currentRoundId, $isSupplementaryReg);
         if ($stmt->execute()) {
             $success = 'Đăng ký xét tuyển thành công! Chúng tôi sẽ liên hệ với bạn sớm nhất.';
         } else {
@@ -36,6 +54,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['apply'])) {
         }
         $stmt->close();
     }
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['apply']) && !$regOpen) {
+    $error = 'Hiện tại không trong thời gian nhận hồ sơ.';
 }
 
 // Fetch admission methods
