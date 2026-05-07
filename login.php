@@ -2,6 +2,46 @@
 require_once 'config/database.php';
 require_once 'includes/auth.php';
 
+// ── Mapping: role code prefix → module URL ──────────────────
+// Thêm vào đây khi có module mới
+define('ROLE_MODULE_MAP', [
+    'admissions_'  => '/university/admissions/',
+    'academic_'    => '/university/academic/',
+    'finance_'     => '/university/finance/',
+    'hr_'          => '/university/hr/',
+    'student_affairs_' => '/university/student_affairs/',
+    'exam_'        => '/university/exam/',
+    'it_'          => '/university/admin/',
+]);
+
+/**
+ * Lấy URL redirect cho nhân viên dựa trên role phòng ban đầu tiên
+ * Ưu tiên role có priority cao nhất (manager > staff)
+ */
+function getStaffRedirectUrl(int $userId, $conn): string {
+    $result = $conn->query("
+        SELECT r.code FROM user_roles ur
+        JOIN roles r ON ur.role_id = r.id
+        WHERE ur.user_id = $userId
+          AND r.is_active = 1
+          AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
+        ORDER BY
+            CASE WHEN r.code LIKE '%_manager' THEN 0 ELSE 1 END,
+            r.department
+        LIMIT 1
+    ");
+    if ($result && $row = $result->fetch_assoc()) {
+        $code = $row['code'];
+        foreach (ROLE_MODULE_MAP as $prefix => $url) {
+            if (str_starts_with($code, $prefix)) {
+                return $url;
+            }
+        }
+    }
+    // Không có role nào → về trang thông báo
+    return '/university/no_access.php';
+}
+
 if (isset($_GET['logout'])) {
     session_destroy();
     header('Location: /university/login.php?msg=logout');
@@ -10,10 +50,21 @@ if (isset($_GET['logout'])) {
 
 if (isLoggedIn()) {
     switch ($_SESSION['role']) {
-        case 'admin':   header('Location: /university/admin/');   break;
-        case 'student': header('Location: /university/student/'); break;
-        case 'teacher': header('Location: /university/teacher/'); break;
-        default:        header('Location: /university/index.php');
+        case 'admin':
+            header('Location: /university/admin/');
+            break;
+        case 'student':
+            header('Location: /university/student/');
+            break;
+        case 'teacher':
+            header('Location: /university/teacher/');
+            break;
+        case 'staff':
+            // Redirect theo role phòng ban
+            header('Location: ' . getStaffRedirectUrl((int)$_SESSION['user_id'], $conn));
+            break;
+        default:
+            header('Location: /university/index.php');
     }
     exit();
 }
@@ -36,17 +87,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $user = $stmt->get_result()->fetch_assoc();
         $stmt->close();
 
-        if ($user && $user['password'] === $password) {
+        if ($user && password_verify($password, $user['password'])) {
             session_regenerate_id(true);
             $_SESSION['user_id']   = $user['id'];
             $_SESSION['role']      = $user['role'];
             $_SESSION['full_name'] = $user['full_name'];
             $_SESSION['username']  = $user['username'];
+
             switch ($user['role']) {
-                case 'admin':   header('Location: /university/admin/');   break;
-                case 'student': header('Location: /university/student/'); break;
-                case 'teacher': header('Location: /university/teacher/'); break;
-                default:        header('Location: /university/index.php');
+                case 'admin':
+                    header('Location: /university/admin/');
+                    break;
+                case 'student':
+                    header('Location: /university/student/');
+                    break;
+                case 'teacher':
+                    header('Location: /university/teacher/');
+                    break;
+                case 'staff':
+                    // Redirect theo role phòng ban được cấp
+                    header('Location: ' . getStaffRedirectUrl((int)$user['id'], $conn));
+                    break;
+                default:
+                    header('Location: /university/index.php');
             }
             exit();
         } else {
