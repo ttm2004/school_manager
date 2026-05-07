@@ -19,9 +19,9 @@ $currentDir = basename(dirname($_SERVER['PHP_SELF']));
             <i class="bi bi-speedometer2"></i> Dashboard
         </a>
 
-        <div class="sidebar-section-title">Quản lý người dùng</div>
+        <div class="sidebar-section-title">Quản lý Nhân viên</div>
         <a href="/university/admin/users.php" class="sidebar-link <?php echo $currentFile=='users.php'?'active':''; ?>">
-            <i class="bi bi-people-fill"></i> Người dùng
+            <i class="bi bi-people-fill"></i> Nhân viên
         </a>
         <a href="/university/admin/students.php" class="sidebar-link <?php echo $currentFile=='students.php'?'active':''; ?>">
             <i class="bi bi-person-fill"></i> Sinh viên
@@ -63,6 +63,9 @@ $currentDir = basename(dirname($_SERVER['PHP_SELF']));
         </a>
 
         <div class="sidebar-section-title">Tuyển sinh</div>
+        <a href="/university/admissions/" class="sidebar-link <?php echo $currentDir==='admissions'?'active':''; ?>" style="background:rgba(245,166,35,.08);border-left:3px solid var(--gold);">
+            <i class="bi bi-mortarboard-fill text-gold"></i> <strong>Module Tuyển sinh</strong>
+        </a>
         <a href="/university/admin/admission_methods.php" class="sidebar-link <?php echo $currentFile=='admission_methods.php'?'active':''; ?>">
             <i class="bi bi-list-check"></i> Phương thức XT
         </a>
