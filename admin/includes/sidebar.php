@@ -1,39 +1,103 @@
-<div class="border-end bg-white" id="sidebar-wrapper">
-    <div class="sidebar-heading border-bottom text-uppercase text-center py-4 primary-text fs-4 fw-bold">
-        <i class="fas fa-user-shield me-2"></i>Admin
+<?php
+$currentFile = basename($_SERVER['PHP_SELF']);
+$currentDir = basename(dirname($_SERVER['PHP_SELF']));
+?>
+<aside class="admin-sidebar">
+    <div class="sidebar-brand">
+        <div class="sidebar-brand-icon">
+            <i class="bi bi-mortarboard-fill"></i>
+        </div>
+        <div class="sidebar-brand-text">
+            <div>Trường ĐH</div>
+            <small>Thủ Dầu Một</small>
+        </div>
     </div>
-    <div class="list-group list-group-flush my-3">
-        <a href="/admin/index.php" class="list-group-item list-group-item-action bg-transparent second-text fw-bold">
-            <i class="fas fa-tachometer-alt me-2"></i>Tổng quan
-        </a>
-        
-        <a href="/admin/modules/departments/index.php" class="list-group-item list-group-item-action bg-transparent second-text fw-bold">
-            <i class="fas fa-university me-2"></i>Quản lý Khoa
+
+    <nav class="sidebar-nav">
+        <div class="sidebar-section-title">Tổng quan</div>
+        <a href="/university/admin/index.php" class="sidebar-link <?php echo $currentFile=='index.php'&&$currentDir=='admin'?'active':''; ?>">
+            <i class="bi bi-speedometer2"></i> Dashboard
         </a>
 
-        <a href="/admin/modules/subjects/index.php" class="list-group-item list-group-item-action bg-transparent second-text fw-bold">
-            <i class="fas fa-book me-2"></i>Quản lý Môn học
+        <div class="sidebar-section-title">Quản lý người dùng</div>
+        <a href="/university/admin/users.php" class="sidebar-link <?php echo $currentFile=='users.php'?'active':''; ?>">
+            <i class="bi bi-people-fill"></i> Người dùng
         </a>
-        
-        <a href="/admin/modules/classes/index.php" class="list-group-item list-group-item-action bg-transparent second-text fw-bold">
-            <i class="fas fa-chalkboard me-2"></i>Quản lý Lớp học
+        <a href="/university/admin/students.php" class="sidebar-link <?php echo $currentFile=='students.php'?'active':''; ?>">
+            <i class="bi bi-person-fill"></i> Sinh viên
         </a>
-
-        <a href="/admin/modules/teachers/index.php" class="list-group-item list-group-item-action bg-transparent second-text fw-bold">
-            <i class="fas fa-chalkboard-teacher me-2"></i>Giáo viên
-        </a>
-
-        <a href="/admin/modules/students/index.php" class="list-group-item list-group-item-action bg-transparent second-text fw-bold">
-            <i class="fas fa-user-graduate me-2"></i>Học sinh
+        <a href="/university/admin/teachers.php" class="sidebar-link <?php echo $currentFile=='teachers.php'?'active':''; ?>">
+            <i class="bi bi-person-badge-fill"></i> Giảng viên
         </a>
 
-        <a href="/admin/modules/news/index.php" class="list-group-item list-group-item-action bg-transparent second-text fw-bold">
-            <i class="fas fa-newspaper me-2"></i>Tin tức & Slide
+        <div class="sidebar-section-title">Đào tạo</div>
+        <a href="/university/admin/faculties.php" class="sidebar-link <?php echo $currentFile=='faculties.php'?'active':''; ?>">
+            <i class="bi bi-building-fill"></i> Khoa
+        </a>
+        <a href="/university/admin/majors.php" class="sidebar-link <?php echo $currentFile=='majors.php'?'active':''; ?>">
+            <i class="bi bi-book-fill"></i> Ngành học
+        </a>
+        <a href="/university/admin/classes.php" class="sidebar-link <?php echo $currentFile=='classes.php'?'active':''; ?>">
+            <i class="bi bi-collection-fill"></i> Lớp học
+        </a>
+        <a href="/university/admin/semesters.php" class="sidebar-link <?php echo $currentFile=='semesters.php'?'active':''; ?>">
+            <i class="bi bi-calendar3"></i> Học kỳ
+        </a>
+        <a href="/university/admin/subjects.php" class="sidebar-link <?php echo $currentFile=='subjects.php'?'active':''; ?>">
+            <i class="bi bi-journal-text"></i> Môn học
+        </a>
+        <a href="/university/admin/course_sections.php" class="sidebar-link <?php echo $currentFile=='course_sections.php'?'active':''; ?>">
+            <i class="bi bi-grid-3x3-gap-fill"></i> Lớp học phần
+        </a>
+        <a href="/university/admin/teacher_assignments.php" class="sidebar-link <?php echo $currentFile=='teacher_assignments.php'?'active':''; ?>">
+            <i class="bi bi-person-lines-fill"></i> Phân công GV
+        </a>
+        <a href="/university/admin/grades.php" class="sidebar-link <?php echo $currentFile=='grades.php'?'active':''; ?>">
+            <i class="bi bi-bar-chart-fill"></i> Điểm số
+        </a>
+        <a href="/university/admin/curriculum.php" class="sidebar-link <?php echo $currentFile=='curriculum.php'?'active':''; ?>">
+            <i class="bi bi-journal-bookmark-fill"></i> Chương trình ĐT
+        </a>
+        <a href="/university/admin/final_exam_schedules.php" class="sidebar-link <?php echo $currentFile=='final_exam_schedules.php'?'active':''; ?>">
+            <i class="bi bi-calendar-event-fill"></i> Lịch thi cuối kỳ
         </a>
 
-
-        <a href="/logout.php" class="list-group-item list-group-item-action bg-transparent text-danger fw-bold">
-            <i class="fas fa-sign-out-alt me-2"></i>Đăng xuất
+        <div class="sidebar-section-title">Tuyển sinh</div>
+        <a href="/university/admin/admission_methods.php" class="sidebar-link <?php echo $currentFile=='admission_methods.php'?'active':''; ?>">
+            <i class="bi bi-list-check"></i> Phương thức XT
         </a>
-    </div>
-</div>
+        <a href="/university/admin/admission_news.php" class="sidebar-link <?php echo $currentFile=='admission_news.php'?'active':''; ?>">
+            <i class="bi bi-newspaper"></i> Tin tuyển sinh
+        </a>
+        <a href="/university/admin/admission_applications.php" class="sidebar-link <?php echo $currentFile=='admission_applications.php'?'active':''; ?>">
+            <i class="bi bi-file-earmark-person-fill"></i> Hồ sơ xét tuyển
+        </a>
+
+        <div class="sidebar-section-title">Đánh giá giảng viên</div>
+        <a href="/university/admin/evaluation_periods.php" class="sidebar-link <?php echo $currentFile=='evaluation_periods.php'?'active':''; ?>">
+            <i class="bi bi-clipboard-check-fill"></i> Đợt đánh giá
+        </a>
+        <a href="/university/admin/evaluation_questions.php" class="sidebar-link <?php echo $currentFile=='evaluation_questions.php'?'active':''; ?>">
+            <i class="bi bi-question-circle-fill"></i> Câu hỏi đánh giá
+        </a>
+        <a href="/university/admin/evaluation_results.php" class="sidebar-link <?php echo $currentFile=='evaluation_results.php'?'active':''; ?>">
+            <i class="bi bi-graph-up-arrow"></i> Kết quả đánh giá
+        </a>
+
+        <div class="sidebar-section-title">Truyền thông</div>
+        <a href="/university/admin/notifications.php" class="sidebar-link <?php echo $currentFile=='notifications.php'?'active':''; ?>">
+            <i class="bi bi-bell-fill"></i> Thông báo
+        </a>
+        <a href="/university/admin/contacts.php" class="sidebar-link <?php echo $currentFile=='contacts.php'?'active':''; ?>">
+            <i class="bi bi-chat-dots-fill"></i> Liên hệ
+        </a>
+
+        <div class="sidebar-section-title">Hệ thống</div>
+        <a href="/university/index.php" class="sidebar-link" target="_blank">
+            <i class="bi bi-globe"></i> Xem trang web
+        </a>
+        <a href="/university/login.php?logout=1" class="sidebar-link text-danger">
+            <i class="bi bi-box-arrow-right"></i> Đăng xuất
+        </a>
+    </nav>
+</aside>

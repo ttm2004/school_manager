@@ -1,236 +1,152 @@
 <?php
-session_start();
-// 1. Check quyền Admin
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    header("Location: ../login.php");
-    exit;
-}
+require_once '../config/database.php';
+require_once '../includes/auth.php';
+requireRole('admin');
+$pageTitle = 'Dashboard';
 
-require_once '../config/db.php';
-/** @var PDO $conn */
+$totalStudents = $conn->query("SELECT COUNT(*) as c FROM students")->fetch_assoc()['c'] ?? 0;
+$totalTeachers = $conn->query("SELECT COUNT(*) as c FROM teachers")->fetch_assoc()['c'] ?? 0;
+$totalSections = $conn->query("SELECT COUNT(*) as c FROM course_sections")->fetch_assoc()['c'] ?? 0;
+$pendingApps   = $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='new'")->fetch_assoc()['c'] ?? 0;
+$totalUsers    = $conn->query("SELECT COUNT(*) as c FROM users")->fetch_assoc()['c'] ?? 0;
+$newContacts   = $conn->query("SELECT COUNT(*) as c FROM contacts WHERE status='new'")->fetch_assoc()['c'] ?? 0;
 
-// --- PHẦN XỬ LÝ DỮ LIỆU PHP ---
+$recentContacts = $conn->query("SELECT * FROM contacts ORDER BY created_at DESC LIMIT 5");
+$recentApps     = $conn->query("SELECT aa.*, m.major_name, am.method_name FROM admission_applications aa LEFT JOIN majors m ON aa.major_id=m.id LEFT JOIN admission_methods am ON aa.method_id=am.id ORDER BY aa.created_at DESC LIMIT 5");
 
-// 1. Thống kê số lượng tổng (Cards)
-$total_students = $conn->query("SELECT COUNT(*) FROM users WHERE role = 'student'")->fetchColumn();
-$total_teachers = $conn->query("SELECT COUNT(*) FROM users WHERE role = 'teacher'")->fetchColumn();
-$total_classes  = $conn->query("SELECT COUNT(*) FROM classes")->fetchColumn();
-$total_news     = $conn->query("SELECT COUNT(*) FROM news")->fetchColumn();
-
-// 2. Dữ liệu cho Biểu đồ Tròn (Tỉ lệ thành viên)
-$stmt_roles = $conn->query("SELECT role, COUNT(*) as count FROM users GROUP BY role");
-$role_data = [];
-$role_labels = [];
-while ($row = $stmt_roles->fetch()) {
-    $role_labels[] = ucfirst($row['role']); 
-    $role_data[] = $row['count'];
-}
-
-// 3. Dữ liệu cho Biểu đồ Cột (Số lớp theo Khoa)
-$sql_dept = "SELECT d.name, COUNT(c.id) as class_count 
-             FROM departments d 
-             LEFT JOIN classes c ON d.id = c.department_id 
-             GROUP BY d.id";
-$stmt_dept = $conn->query($sql_dept);
-$dept_labels = [];
-$dept_data = [];
-while ($row = $stmt_dept->fetch()) {
-    $dept_labels[] = $row['name'];
-    $dept_data[] = $row['class_count'];
-}
+include 'includes/header.php';
+include 'includes/sidebar.php';
 ?>
-
-<!DOCTYPE html>
-<html lang="vi">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Dashboard - Smart School</title>
-    
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <link rel="stylesheet" href="../assets/css/admin.css">
-    
-    <style>
-        /* CSS riêng cho Dashboard */
-        .card-box {
-            border-radius: 15px;
-            border: none;
-            transition: all 0.3s ease;
-            color: white;
-            overflow: hidden;
-            position: relative;
-        }
-        .card-box:hover { transform: translateY(-5px); box-shadow: 0 10px 20px rgba(0,0,0,0.1); }
-        .card-box .icon-bg { position: absolute; right: 10px; bottom: 10px; font-size: 5rem; opacity: 0.2; }
-        
-        .bg-gradient-1 { background: linear-gradient(45deg, #FF512F, #DD2476); }
-        .bg-gradient-2 { background: linear-gradient(45deg, #4facfe, #00f2fe); }
-        .bg-gradient-3 { background: linear-gradient(45deg, #43e97b, #38f9d7); }
-        .bg-gradient-4 { background: linear-gradient(45deg, #fa709a, #fee140); }
-
-        .chart-container {
-            background: white;
-            padding: 15px;
-            border-radius: 15px;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.05);
-            /* Giới hạn chiều cao biểu đồ tại đây */
-            height: 350px; 
-            display: flex;
-            flex-direction: column;
-        }
-        .chart-canvas-wrapper {
-            flex-grow: 1;
-            position: relative;
-            width: 100%;
-            height: 100%;
-        }
-    </style>
-</head>
-<body>
-
-<div class="d-flex" id="wrapper">
-    
-    <?php include 'includes/sidebar.php'; ?>
-
-    <div id="page-content-wrapper" class="w-100 bg-light">
-        
-        <nav class="navbar navbar-expand-lg navbar-light bg-white border-bottom shadow-sm px-4 py-3">
-            <button class="btn btn-light me-3" id="sidebarToggle"><i class="fas fa-bars"></i></button>
-            <h4 class="m-0 fw-bold text-primary">Tổng quan</h4>
-            
-            <div class="ms-auto d-flex align-items-center">
-                <span class="me-3 text-muted"><?= date('d/m/Y l') ?></span>
-                <div class="dropdown">
-                    <a class="nav-link dropdown-toggle fw-bold text-dark" href="#" role="button" data-bs-toggle="dropdown">
-                        <img src="https://ui-avatars.com/api/?name=<?= $_SESSION['full_name'] ?>&background=random" class="rounded-circle me-2" width="35">
-                        <?= $_SESSION['full_name'] ?>
-                    </a>
-                    <ul class="dropdown-menu dropdown-menu-end shadow border-0">
-                        <li><a class="dropdown-item" href="#">Cài đặt</a></li>
-                        <li><hr class="dropdown-divider"></li>
-                        <li><a class="dropdown-item text-danger" href="../logout.php">Đăng xuất</a></li>
-                    </ul>
+<div class="admin-main">
+    <div class="admin-topbar">
+        <div class="d-flex align-items-center gap-3">
+            <button class="btn btn-sm btn-outline-secondary d-lg-none" id="sidebarToggle"><i class="bi bi-list fs-5"></i></button>
+            <span class="admin-topbar-title">Dashboard</span>
+        </div>
+        <div class="d-flex align-items-center gap-3">
+            <span class="text-muted small"><i class="bi bi-person-circle me-1"></i><?php echo htmlspecialchars($_SESSION['full_name']); ?></span>
+            <a href="/university/login.php?logout=1" class="btn btn-sm btn-outline-danger"><i class="bi bi-box-arrow-right me-1"></i>&#272;&#259;ng xu&#7845;t</a>
+        </div>
+    </div>
+    <div class="admin-content">
+        <div class="row g-4 mb-4">
+            <div class="col-6 col-lg-2">
+                <div class="stat-card-admin stat-bg-1">
+                    <div class="stat-icon"><i class="bi bi-people-fill"></i></div>
+                    <div class="stat-value mt-2"><?php echo number_format($totalStudents); ?></div>
+                    <div class="stat-label">Sinh vi&#234;n</div>
                 </div>
             </div>
-        </nav>
+            <div class="col-6 col-lg-2">
+                <div class="stat-card-admin stat-bg-2">
+                    <div class="stat-icon"><i class="bi bi-person-badge-fill"></i></div>
+                    <div class="stat-value mt-2"><?php echo number_format($totalTeachers); ?></div>
+                    <div class="stat-label">Gi&#7843;ng vi&#234;n</div>
+                </div>
+            </div>
+            <div class="col-6 col-lg-2">
+                <div class="stat-card-admin stat-bg-3">
+                    <div class="stat-icon"><i class="bi bi-grid-3x3-gap-fill"></i></div>
+                    <div class="stat-value mt-2"><?php echo number_format($totalSections); ?></div>
+                    <div class="stat-label">L&#7899;p h&#7885;c ph&#7847;n</div>
+                </div>
+            </div>
+            <div class="col-6 col-lg-2">
+                <div class="stat-card-admin stat-bg-4">
+                    <div class="stat-icon"><i class="bi bi-file-earmark-person-fill"></i></div>
+                    <div class="stat-value mt-2"><?php echo number_format($pendingApps); ?></div>
+                    <div class="stat-label">H&#7891; s&#417; m&#7899;i</div>
+                </div>
+            </div>
+            <div class="col-6 col-lg-2">
+                <div class="stat-card-admin stat-bg-5">
+                    <div class="stat-icon"><i class="bi bi-person-fill-check"></i></div>
+                    <div class="stat-value mt-2"><?php echo number_format($totalUsers); ?></div>
+                    <div class="stat-label">Ng&#432;&#7901;i d&#249;ng</div>
+                </div>
+            </div>
+            <div class="col-6 col-lg-2">
+                <div class="stat-card-admin stat-bg-6">
+                    <div class="stat-icon"><i class="bi bi-chat-dots-fill"></i></div>
+                    <div class="stat-value mt-2"><?php echo number_format($newContacts); ?></div>
+                    <div class="stat-label">Li&#234;n h&#7879; m&#7899;i</div>
+                </div>
+            </div>
+        </div>
 
-        <div class="container-fluid px-4 py-4">
-            
-            <div class="row g-4 mb-4">
-                <div class="col-md-3">
-                    <div class="card card-box bg-gradient-1 h-100">
-                        <div class="card-body">
-                            <h5 class="card-title text-uppercase opacity-75" style="font-size: 0.9rem;">Học sinh</h5>
-                            <h2 class="display-6 fw-bold"><?= $total_students ?></h2>
-                            <i class="fas fa-user-graduate icon-bg"></i>
-                        </div>
+        <div class="row g-4">
+            <div class="col-lg-6">
+                <div class="card h-100">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span><i class="bi bi-chat-dots me-2"></i>Li&#234;n h&#7879; m&#7899;i nh&#7845;t</span>
+                        <a href="/university/admin/contacts.php" class="btn btn-sm btn-outline-light">Xem t&#7845;t c&#7843;</a>
                     </div>
-                </div>
-                <div class="col-md-3">
-                    <div class="card card-box bg-gradient-2 h-100">
-                        <div class="card-body">
-                            <h5 class="card-title text-uppercase opacity-75" style="font-size: 0.9rem;">Giáo viên</h5>
-                            <h2 class="display-6 fw-bold"><?= $total_teachers ?></h2>
-                            <i class="fas fa-chalkboard-teacher icon-bg"></i>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-3">
-                    <div class="card card-box bg-gradient-3 h-100 text-dark">
-                        <div class="card-body">
-                            <h5 class="card-title text-uppercase opacity-75" style="font-size: 0.9rem;">Lớp học</h5>
-                            <h2 class="display-6 fw-bold"><?= $total_classes ?></h2>
-                            <i class="fas fa-school icon-bg"></i>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-3">
-                    <div class="card card-box bg-gradient-4 h-100 text-dark">
-                        <div class="card-body">
-                            <h5 class="card-title text-uppercase opacity-75" style="font-size: 0.9rem;">Tin tức</h5>
-                            <h2 class="display-6 fw-bold"><?= $total_news ?></h2>
-                            <i class="fas fa-newspaper icon-bg"></i>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-hover mb-0">
+                                <thead><tr><th>H&#7885; t&#234;n</th><th>Email</th><th>Tr&#7841;ng th&#225;i</th><th>Ng&#224;y</th></tr></thead>
+                                <tbody>
+                                <?php
+                                $csMap = ['new'=>['M&#7899;i','warning'],'read'=>['&#272;&#227; &#273;&#7885;c','info'],'replied'=>['&#272;&#227; tr&#7843; l&#7901;i','success']];
+                                if ($recentContacts && $recentContacts->num_rows > 0):
+                                    while ($c = $recentContacts->fetch_assoc()):
+                                        $cs = $csMap[$c['status']] ?? ['N/A','secondary'];
+                                ?>
+                                <tr>
+                                    <td>
+                                        <div class="fw-bold"><?php echo htmlspecialchars($c['full_name']); ?></div>
+                                        <?php if (!empty($c['subject'])): ?>
+                                        <div class="text-muted small"><?php echo htmlspecialchars(mb_substr($c['subject'],0,30)); ?></div>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="text-muted small"><?php echo htmlspecialchars($c['email']); ?></td>
+                                    <td><span class="badge bg-<?php echo $cs[1]; ?>"><?php echo $cs[0]; ?></span></td>
+                                    <td class="text-muted small"><?php echo date('d/m/Y', strtotime($c['created_at'])); ?></td>
+                                </tr>
+                                <?php endwhile; else: ?>
+                                <tr><td colspan="4" class="text-center text-muted py-3">Ch&#432;a c&#243; li&#234;n h&#7879; n&#224;o</td></tr>
+                                <?php endif; ?>
+                                </tbody>
+                            </table>
                         </div>
                     </div>
                 </div>
             </div>
-
-            <div class="row g-4">
-                <div class="col-md-6">
-                    <div class="chart-container">
-                        <h6 class="fw-bold mb-2 text-secondary"><i class="fas fa-chart-bar me-2"></i>Thống kê Lớp học</h6>
-                        <div class="chart-canvas-wrapper">
-                            <canvas id="barChart"></canvas>
-                        </div>
+            <div class="col-lg-6">
+                <div class="card h-100">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span><i class="bi bi-file-earmark-person me-2"></i>H&#7891; s&#417; x&#233;t tuy&#7875;n m&#7899;i</span>
+                        <a href="/university/admin/admission_applications.php" class="btn btn-sm btn-outline-light">Xem t&#7845;t c&#7843;</a>
                     </div>
-                </div>
-                
-                <div class="col-md-6">
-                    <div class="chart-container">
-                        <h6 class="fw-bold mb-2 text-secondary"><i class="fas fa-chart-pie me-2"></i>Tỉ lệ Thành viên</h6>
-                        <div class="chart-canvas-wrapper" style="padding: 10px;">
-                            <canvas id="pieChart"></canvas>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-hover mb-0">
+                                <thead><tr><th>H&#7885; t&#234;n</th><th>Ng&#224;nh</th><th>Tr&#7841;ng th&#225;i</th></tr></thead>
+                                <tbody>
+                                <?php
+                                $sMap = ['new'=>['M&#7899;i','warning'],'checking'=>['&#272;ang x&#233;t','info'],'approved'=>['&#272;&#227; duy&#7879;t','success'],'rejected'=>['T&#7915; ch&#7889;i','danger']];
+                                if ($recentApps && $recentApps->num_rows > 0):
+                                    while ($app = $recentApps->fetch_assoc()):
+                                        $s = $sMap[$app['status']] ?? ['N/A','secondary'];
+                                ?>
+                                <tr>
+                                    <td class="fw-bold"><?php echo htmlspecialchars($app['full_name']); ?></td>
+                                    <td class="text-muted small"><?php echo htmlspecialchars($app['major_name'] ?? 'N/A'); ?></td>
+                                    <td><span class="badge bg-<?php echo $s[1]; ?>"><?php echo $s[0]; ?></span></td>
+                                </tr>
+                                <?php endwhile; else: ?>
+                                <tr><td colspan="3" class="text-center text-muted py-3">Kh&#244;ng c&#243; h&#7891; s&#417; m&#7899;i</td></tr>
+                                <?php endif; ?>
+                                </tbody>
+                            </table>
                         </div>
                     </div>
                 </div>
             </div>
-
-        </div> </div> </div> <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-
-<script>
-    // 1. Toggle Sidebar
-    var el = document.getElementById("wrapper");
-    var toggleButton = document.getElementById("sidebarToggle");
-    toggleButton.onclick = function () {
-        el.classList.toggle("sb-sidenav-toggled");
-    };
-
-    // 2. Cấu hình Biểu đồ Cột
-    const ctxBar = document.getElementById('barChart').getContext('2d');
-    new Chart(ctxBar, {
-        type: 'bar',
-        data: {
-            labels: <?= json_encode($dept_labels) ?>, 
-            datasets: [{
-                label: 'Số lớp',
-                data: <?= json_encode($dept_data) ?>,
-                backgroundColor: ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0'],
-                borderRadius: 5
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false, // Quan trọng để chỉnh size theo css
-            scales: {
-                y: { beginAtZero: true, ticks: { stepSize: 1 } }
-            },
-            plugins: { legend: { display: false } } // Ẩn chú thích cho gọn
-        }
-    });
-
-    // 3. Cấu hình Biểu đồ Tròn
-    const ctxPie = document.getElementById('pieChart').getContext('2d');
-    new Chart(ctxPie, {
-        type: 'doughnut',
-        data: {
-            labels: <?= json_encode($role_labels) ?>,
-            datasets: [{
-                data: <?= json_encode($role_data) ?>,
-                backgroundColor: ['#FF6384', '#36A2EB', '#FFCE56'],
-                hoverOffset: 4
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false, // Quan trọng
-            plugins: {
-                legend: { position: 'right' } // Đưa chú thích sang phải cho gọn
-            }
-        }
-    });
-</script>
-
-</body>
-</html>
+        </div>
+    </div>
+    <div class="admin-footer">&copy; <?php echo date('Y'); ?> TDMU - Tr&#432;&#7901;ng &#272;&#7841;i h&#7885;c Th&#7911; D&#7847;u M&#7897;t</div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="/university/assets/js/main.js"></script>
+</body></html>

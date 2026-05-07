@@ -2,79 +2,72 @@
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
-
-// Xác định có đang ở trong thư mục admissions không
-$isInAdmissions = (strpos($_SERVER['REQUEST_URI'], '/admissions/') !== false);
-
-// Đường dẫn login phù hợp
-$loginUrl = $isInAdmissions ? 'login.php' : '../login.php';
-
-// Đường dẫn cơ sở cho các file css, js, link
-$baseUrl = $isInAdmissions ? '' : '../';
+$currentPage = basename($_SERVER['PHP_SELF']);
 ?>
 <!DOCTYPE html>
 <html lang="vi">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Trường Học Hạnh Phúc - Smart School</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="<?php echo $baseUrl; ?>assets/css/style.css">
+    <title><?php echo isset($pageTitle) ? $pageTitle . ' - ' : ''; ?>TDMU - Trường Đại học Thủ Dầu Một</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+    <link rel="stylesheet" href="/university/assets/css/style.css">
 </head>
-
 <body>
-
-    <nav class="navbar navbar-expand-lg navbar-custom sticky-top py-3">
-        <div class="container">
-            <a class="navbar-brand fw-bold fs-4" href="<?php echo $baseUrl; ?>index.php" style="color: #4e54c8;">
-                <i class="fas fa-graduation-cap me-2"></i>EDUTECH<span class="text-warning">2026</span>
-            </a>
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
-                <span class="navbar-toggler-icon"></span>
-            </button>
-
-            <div class="collapse navbar-collapse" id="navbarNav">
-                <ul class="navbar-nav ms-auto align-items-center">
-                    <li class="nav-item"><a class="nav-link active" href="<?php echo $baseUrl; ?>index.php">Trang chủ</a></li>
-                    <li class="nav-item"><a class="nav-link" href="<?php echo $baseUrl; ?>about.php">Giới thiệu</a></li>
-                    <li class="nav-item"><a class="nav-link" href="<?php echo $baseUrl; ?>teachers.php">Giảng viên</a></li>
-                    <li class="nav-item"><a class="nav-link" href="<?php echo $baseUrl; ?>all_news.php">Tin tức</a></li>
-                    <li class="nav-item"><a class="nav-link" href="<?php echo $baseUrl; ?>contact.php">Liên hệ</a></li>
-                    
-
-                    <?php if (isset($_SESSION['user_id'])): ?>
-                        <li class="nav-item dropdown ms-3">
-                            <a class="nav-link dropdown-toggle btn btn-light rounded-pill px-4 shadow-sm" href="#" role="button" data-bs-toggle="dropdown">
-                                <i class="fas fa-user-circle me-1"></i> <?= $_SESSION['full_name'] ?>
-                            </a>
-                            <ul class="dropdown-menu dropdown-menu-end shadow border-0 mt-2 rounded-3">
-                                <?php if ($_SESSION['role'] == 'admin'): ?>
-                                    <li><a class="dropdown-item py-2" href="<?php echo $baseUrl; ?>admin/index.php"><i class="fas fa-user-shield me-2 text-primary"></i>Bảng điều khiển Admin</a></li>
-                                <?php endif; ?>
-
-                                <?php if ($_SESSION['role'] == 'teacher'): ?>
-                                    <li><a class="dropdown-item py-2" href="<?php echo $baseUrl; ?>teacher/modules/dashboard/index.php"><i class="fas fa-chalkboard-teacher me-2 text-success"></i>Quản lý lớp học</a></li>
-                                <?php endif; ?>
-
-                                <?php if ($_SESSION['role'] == 'student'): ?>
-                                    <li><a class="dropdown-item py-2" href="<?php echo $baseUrl; ?>student/index.php"><i class="fas fa-user-graduate me-2 text-warning"></i>Cổng học sinh</a></li>
-                                <?php endif; ?>
-
-                                <li><a class="dropdown-item py-2" href="<?php echo $baseUrl; ?>profile.php"><i class="fas fa-user me-2 text-info"></i>Hồ sơ cá nhân</a></li>
-                                <li>
-                                    <hr class="dropdown-divider">
-                                </li>
-                                <li><a class="dropdown-item py-2 text-danger" href="<?php echo $baseUrl; ?>logout.php"><i class="fas fa-sign-out-alt me-2"></i>Đăng xuất</a></li>
-                            </ul>
-                        </li>
-                    <?php else: ?>
-                        <li class="nav-item ms-3">
-                            <a class="btn btn-gradient rounded-pill px-4" href="<?php echo $loginUrl; ?>">Đăng nhập</a>
-                        </li>
-                    <?php endif; ?>
-                </ul>
+<nav class="navbar navbar-expand-lg navbar-dark bg-navy sticky-top">
+    <div class="container">
+        <a class="navbar-brand d-flex align-items-center" href="/university/index.php">
+            <div class="brand-logo me-2">
+                <i class="bi bi-mortarboard-fill fs-2 text-gold"></i>
+            </div>
+            <div>
+                <div class="fw-bold" style="font-size:1rem;line-height:1.1;">Trường Đại học</div>
+                <div class="fw-bold text-gold" style="font-size:1.1rem;line-height:1.1;">Thủ Dầu Một</div>
+            </div>
+        </a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="mainNav">
+            <ul class="navbar-nav ms-auto mb-2 mb-lg-0">
+                <li class="nav-item">
+                    <a class="nav-link <?php echo $currentPage=='index.php'?'active':''; ?>" href="/university/index.php">Trang chủ</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link <?php echo $currentPage=='about.php'?'active':''; ?>" href="/university/about.php">Giới thiệu</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link <?php echo $currentPage=='programs.php'?'active':''; ?>" href="/university/programs.php">Chương trình ĐT</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link <?php echo $currentPage=='admission.php'?'active':''; ?>" href="/university/admission.php">Tuyển sinh</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link <?php echo $currentPage=='news.php'?'active':''; ?>" href="/university/news.php">Tin tức</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link <?php echo $currentPage=='contact.php'?'active':''; ?>" href="/university/contact.php">Liên hệ</a>
+                </li>
+            </ul>
+            <div class="ms-3 d-flex gap-2">
+                <?php if (isLoggedIn()): ?>
+                    <?php
+                    $dashLink = '/university/login.php';
+                    if ($_SESSION['role'] === 'admin') $dashLink = '/university/admin/';
+                    elseif ($_SESSION['role'] === 'student') $dashLink = '/university/student/';
+                    elseif ($_SESSION['role'] === 'teacher') $dashLink = '/university/teacher/';
+                    ?>
+                    <a href="<?php echo $dashLink; ?>" class="btn btn-outline-gold btn-sm">
+                        <i class="bi bi-person-circle me-1"></i><?php echo htmlspecialchars($_SESSION['full_name']); ?>
+                    </a>
+                    <a href="/university/login.php?logout=1" class="btn btn-gold btn-sm">Đăng xuất</a>
+                <?php else: ?>
+                    <a href="/university/login.php" class="btn btn-gold btn-sm">
+                        <i class="bi bi-box-arrow-in-right me-1"></i>Đăng nhập
+                    </a>
+                <?php endif; ?>
             </div>
         </div>
-    </nav>
+    </div>
+</nav>
