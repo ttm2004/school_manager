@@ -5,7 +5,7 @@ $pageTitle = 'Giới thiệu';
 include 'includes/header.php';
 
 // Fetch faculties
-$faculties = $conn->query("SELECT * FROM faculties ORDER BY name ASC");
+$faculties = $conn->query("SELECT * FROM faculties ORDER BY faculty_name ASC");
 ?>
 
 <!-- Page Header -->
@@ -169,7 +169,7 @@ $faculties = $conn->query("SELECT * FROM faculties ORDER BY name ASC");
                         <div class="faculty-icon mb-3">
                             <i class="bi <?php echo $ficon; ?>"></i>
                         </div>
-                        <h5 class="fw-bold text-navy"><?php echo htmlspecialchars($faculty['name']); ?></h5>
+                        <h5 class="fw-bold text-navy"><?php echo htmlspecialchars($faculty['faculty_name']); ?></h5>
                         <?php if (!empty($faculty['description'])): ?>
                         <p class="text-muted small text-truncate-3"><?php echo htmlspecialchars($faculty['description']); ?></p>
                         <?php else: ?>
