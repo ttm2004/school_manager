@@ -105,15 +105,282 @@
     }, 3000);
 })();
 
+// ===== TOAST NOTIFICATION SYSTEM =====
+// Tự động convert tất cả .alert thành toast nổi góc phải màn hình
+(function () {
+    // Inject toast container + styles một lần
+    function initToastSystem() {
+        if (document.getElementById('tdmu-toast-container')) return;
+
+        // Container
+        const container = document.createElement('div');
+        container.id = 'tdmu-toast-container';
+        document.body.appendChild(container);
+
+        // Styles
+        const style = document.createElement('style');
+        style.textContent = `
+            #tdmu-toast-container {
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                z-index: 99998;
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+                max-width: 420px;
+                width: calc(100vw - 40px);
+            }
+            .tdmu-toast {
+                background: #fff;
+                border-radius: 12px;
+                box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+                padding: 0;
+                overflow: hidden;
+                display: flex;
+                align-items: stretch;
+                animation: tdmuToastIn 0.35s cubic-bezier(0.34,1.56,0.64,1);
+                border: 1px solid rgba(0,0,0,0.08);
+            }
+            .tdmu-toast.hiding {
+                animation: tdmuToastOut 0.3s ease forwards;
+            }
+            @keyframes tdmuToastIn {
+                from { opacity:0; transform: translateX(60px) scale(0.95); }
+                to   { opacity:1; transform: translateX(0) scale(1); }
+            }
+            @keyframes tdmuToastOut {
+                from { opacity:1; transform: translateX(0) scale(1); max-height:200px; margin-bottom:0; }
+                to   { opacity:0; transform: translateX(60px) scale(0.95); max-height:0; margin-bottom:-10px; }
+            }
+            .tdmu-toast-bar {
+                width: 5px;
+                flex-shrink: 0;
+                border-radius: 12px 0 0 12px;
+            }
+            .tdmu-toast-body {
+                flex: 1;
+                padding: 14px 16px;
+                display: flex;
+                align-items: flex-start;
+                gap: 12px;
+            }
+            .tdmu-toast-icon {
+                font-size: 1.2rem;
+                flex-shrink: 0;
+                margin-top: 1px;
+            }
+            .tdmu-toast-content { flex: 1; }
+            .tdmu-toast-text {
+                font-size: 0.875rem;
+                color: #1a2340;
+                line-height: 1.5;
+                margin: 0;
+            }
+            .tdmu-toast-close {
+                background: none;
+                border: none;
+                color: #9ca3af;
+                cursor: pointer;
+                padding: 4px;
+                border-radius: 6px;
+                font-size: 0.9rem;
+                flex-shrink: 0;
+                transition: color 0.2s, background 0.2s;
+                align-self: flex-start;
+            }
+            .tdmu-toast-close:hover { color: #374151; background: #f3f4f6; }
+            .tdmu-toast-progress {
+                height: 3px;
+                background: rgba(0,0,0,0.08);
+                position: relative;
+                overflow: hidden;
+            }
+            .tdmu-toast-progress-bar {
+                position: absolute;
+                left: 0; top: 0; bottom: 0;
+                transition: width linear;
+                width: 100%;
+            }
+            /* Types */
+            .tdmu-toast.success .tdmu-toast-bar { background: #10b981; }
+            .tdmu-toast.success .tdmu-toast-icon { color: #10b981; }
+            .tdmu-toast.success .tdmu-toast-progress-bar { background: #10b981; }
+            .tdmu-toast.danger .tdmu-toast-bar { background: #ef4444; }
+            .tdmu-toast.danger .tdmu-toast-icon { color: #ef4444; }
+            .tdmu-toast.danger .tdmu-toast-progress-bar { background: #ef4444; }
+            .tdmu-toast.warning .tdmu-toast-bar { background: #f59e0b; }
+            .tdmu-toast.warning .tdmu-toast-icon { color: #f59e0b; }
+            .tdmu-toast.warning .tdmu-toast-progress-bar { background: #f59e0b; }
+            .tdmu-toast.info .tdmu-toast-bar { background: #3b82f6; }
+            .tdmu-toast.info .tdmu-toast-icon { color: #3b82f6; }
+            .tdmu-toast.info .tdmu-toast-progress-bar { background: #3b82f6; }
+            .tdmu-toast.secondary .tdmu-toast-bar { background: #6b7280; }
+            .tdmu-toast.secondary .tdmu-toast-icon { color: #6b7280; }
+            .tdmu-toast.secondary .tdmu-toast-progress-bar { background: #6b7280; }
+        `;
+        document.head.appendChild(style);
+    }
+
+    // Map Bootstrap alert class → toast type
+    function getToastType(alertEl) {
+        if (alertEl.classList.contains('alert-success'))   return 'success';
+        if (alertEl.classList.contains('alert-danger'))    return 'danger';
+        if (alertEl.classList.contains('alert-warning'))   return 'warning';
+        if (alertEl.classList.contains('alert-info'))      return 'info';
+        if (alertEl.classList.contains('alert-secondary')) return 'secondary';
+        return 'info';
+    }
+
+    const typeIcons = {
+        success:   'bi-check-circle-fill',
+        danger:    'bi-exclamation-circle-fill',
+        warning:   'bi-exclamation-triangle-fill',
+        info:      'bi-info-circle-fill',
+        secondary: 'bi-bell-fill',
+    };
+
+    // Tính thời gian tự đóng dựa trên độ dài text (5s-10s)
+    function calcDuration(text) {
+        const words = text.trim().split(/\s+/).length;
+        const ms = Math.min(10000, Math.max(5000, words * 400));
+        return ms;
+    }
+
+    // Tạo và hiển thị 1 toast
+    function showToast(type, html, duration) {
+        initToastSystem();
+        const container = document.getElementById('tdmu-toast-container');
+
+        // Strip HTML tags để tính độ dài
+        const plainText = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        const ms = duration || calcDuration(plainText);
+
+        const toast = document.createElement('div');
+        toast.className = `tdmu-toast ${type}`;
+        toast.innerHTML = `
+            <div class="tdmu-toast-bar"></div>
+            <div style="flex:1;display:flex;flex-direction:column;">
+                <div class="tdmu-toast-body">
+                    <i class="bi ${typeIcons[type] || 'bi-info-circle-fill'} tdmu-toast-icon"></i>
+                    <p class="tdmu-toast-text">${html}</p>
+                    <button class="tdmu-toast-close" title="Đóng"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="tdmu-toast-progress">
+                    <div class="tdmu-toast-progress-bar" style="width:100%;transition-duration:${ms}ms;"></div>
+                </div>
+            </div>
+        `;
+
+        container.appendChild(toast);
+
+        // Nút đóng
+        toast.querySelector('.tdmu-toast-close').addEventListener('click', () => closeToast(toast));
+
+        // Bắt đầu progress bar
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                const bar = toast.querySelector('.tdmu-toast-progress-bar');
+                if (bar) bar.style.width = '0%';
+            });
+        });
+
+        // Auto close
+        const timer = setTimeout(() => closeToast(toast), ms);
+        toast._timer = timer;
+
+        // Pause on hover
+        toast.addEventListener('mouseenter', () => {
+            clearTimeout(toast._timer);
+            const bar = toast.querySelector('.tdmu-toast-progress-bar');
+            if (bar) { bar.style.transitionDuration = '0ms'; }
+        });
+        toast.addEventListener('mouseleave', () => {
+            const remaining = 2000;
+            const bar = toast.querySelector('.tdmu-toast-progress-bar');
+            if (bar) { bar.style.transitionDuration = remaining + 'ms'; bar.style.width = '0%'; }
+            toast._timer = setTimeout(() => closeToast(toast), remaining);
+        });
+
+        return toast;
+    }
+
+    function closeToast(toast) {
+        if (!toast || toast._closing) return;
+        toast._closing = true;
+        clearTimeout(toast._timer);
+        toast.classList.add('hiding');
+        setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 320);
+    }
+
+    // Expose globally
+    window.tdmuToast = {
+        success: (msg, ms) => showToast('success', msg, ms),
+        error:   (msg, ms) => showToast('danger',  msg, ms),
+        danger:  (msg, ms) => showToast('danger',  msg, ms),
+        warning: (msg, ms) => showToast('warning', msg, ms),
+        info:    (msg, ms) => showToast('info',    msg, ms),
+        show:    showToast,
+    };
+
+    // Auto-convert tất cả .alert trong DOM thành toast
+    function convertAlertsToToasts() {
+        // Chỉ convert các alert thông báo (success, danger, warning, info)
+        // KHÔNG convert các alert dạng banner cố định (alert-danger không có btn-close, banner trạng thái)
+        const alerts = document.querySelectorAll(
+            '.alert.alert-success, .alert.alert-danger.auto-dismiss, .alert.alert-warning.auto-dismiss, .alert.alert-info.auto-dismiss'
+        );
+
+        alerts.forEach(function (alert) {
+            // Bỏ qua alert không có nội dung hoặc là banner cố định (không có auto-dismiss và không có btn-close)
+            const hasBtnClose = alert.querySelector('.btn-close');
+            const isAutoDismiss = alert.classList.contains('auto-dismiss');
+            const isSuccess = alert.classList.contains('alert-success');
+
+            // Convert: success luôn convert, các loại khác chỉ convert nếu có auto-dismiss hoặc btn-close
+            if (!isSuccess && !isAutoDismiss && !hasBtnClose) return;
+
+            const type = getToastType(alert);
+
+            // Lấy nội dung (bỏ btn-close)
+            const clone = alert.cloneNode(true);
+            const closeBtn = clone.querySelector('.btn-close, button[data-bs-dismiss]');
+            if (closeBtn) closeBtn.remove();
+            // Bỏ icon Bootstrap Icons đầu tiên nếu có (đã có icon trong toast)
+            const firstIcon = clone.querySelector('i.bi:first-child');
+            if (firstIcon && firstIcon === clone.firstElementChild) firstIcon.remove();
+
+            const html = clone.innerHTML.trim();
+            if (!html) return;
+
+            // Ẩn alert gốc
+            alert.style.display = 'none';
+
+            // Hiện toast
+            showToast(type, html);
+        });
+    }
+
+    // Chạy sau khi DOM ready
+    document.addEventListener('DOMContentLoaded', convertAlertsToToasts);
+
+    // Cũng chạy ngay nếu DOM đã ready
+    if (document.readyState !== 'loading') {
+        setTimeout(convertAlertsToToasts, 100);
+    }
+})();
+
 // ===== AUTO DISMISS ALERTS =====
 document.addEventListener('DOMContentLoaded', function () {
-    // Auto dismiss alerts after 4 seconds
+    // Auto dismiss alerts after 4 seconds (fallback cho alert không được convert)
     const alerts = document.querySelectorAll('.alert.auto-dismiss');
     alerts.forEach(function (alert) {
         setTimeout(function () {
-            const bsAlert = bootstrap.Alert.getOrCreateInstance(alert);
-            bsAlert.close();
-        }, 4000);
+            try {
+                const bsAlert = bootstrap.Alert.getOrCreateInstance(alert);
+                bsAlert.close();
+            } catch(e) { if (alert.parentNode) alert.style.display = 'none'; }
+        }, 5000);
     });
 
     // ===== CONFIRM DELETE =====
