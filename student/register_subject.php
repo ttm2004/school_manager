@@ -47,6 +47,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!$sem) {
             $error = 'Hiện tại không trong thời gian đăng ký học phần.';
         } else {
+            // Kiểm tra nợ học phí
+            if (hasTuitionDebt($student['id'])) {
+                $error = '⚠️ Bạn đang nợ học phí. Vui lòng đóng học phí trước khi đăng ký học phần. <a href="/university/student/tuition.php" class="alert-link">Xem chi tiết học phí</a>';
+            } else {
             // Kiểm tra đã đăng ký chưa (cùng lớp)
             $chk = $conn->prepare("SELECT id FROM student_subjects WHERE student_id=? AND course_section_id=?");
             $chk->bind_param('ii', $student['id'], $section_id);
@@ -166,6 +170,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
             }
+            } // end hasTuitionDebt check
         }
     }
 

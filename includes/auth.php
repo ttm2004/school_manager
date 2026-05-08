@@ -220,7 +220,6 @@ function getVisitStats($conn): array {
 
 /**
  * Lấy flash message từ session (xóa sau khi đọc)
- * Trả về ['type'=>'success'|'danger', 'message'=>'...'] hoặc null
  */
 function getFlash(): ?array {
     if (session_status() === PHP_SESSION_NONE) session_start();
@@ -230,6 +229,24 @@ function getFlash(): ?array {
         return $flash;
     }
     return null;
+}
+
+/**
+ * Kiểm tra sinh viên có nợ học phí không
+ * Trả về true nếu có hóa đơn unpaid/partial/overdue
+ */
+function hasTuitionDebt(int $studentId): bool {
+    global $conn;
+    // Kiểm tra bảng tồn tại trước
+    $tbl = $conn->query("SHOW TABLES LIKE 'tuition_invoices'");
+    if (!$tbl || $tbl->num_rows === 0) return false;
+    $res = $conn->prepare("SELECT id FROM tuition_invoices WHERE student_id=? AND status IN ('unpaid','partial','overdue') LIMIT 1");
+    if (!$res) return false;
+    $res->bind_param('i', $studentId);
+    $res->execute();
+    $has = $res->get_result()->num_rows > 0;
+    $res->close();
+    return $has;
 }
 
 function cacheUserRoles(): void {
@@ -366,4 +383,13 @@ function getRoundStatusMessage(): array {
     ];
 
     return $messages[$phase] ?? ['secondary', 'Không xác định.'];
+}
+
+/**
+ * Kiểm tra sinh viên có nợ học phí không
+ * Trả về true nếu có hóa đơn unpaid/partial/overdue
+ */
+function hasDebt(int $studentId, $conn): bool {
+    $r = $conn->query("SELECT id FROM tuition_invoices WHERE student_id=$studentId AND status IN ('unpaid','partial','overdue') LIMIT 1");
+    return $r && $r->num_rows > 0;
 }
