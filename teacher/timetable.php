@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
 requireRole('teacher');
@@ -525,5 +525,6 @@ $qString = $qParams ? '&' . http_build_query($qParams) : '';
 <script>
 document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => new bootstrap.Tooltip(el));
 </script>
+<?php include_once __DIR__ . "/../includes/analytics_widget.php"; ?>
 </body>
 </html>

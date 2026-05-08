@@ -243,15 +243,6 @@ $_enrollCount  = $conn->query("SELECT COUNT(*) as c FROM admission_applications 
             <i class="bi bi-box-arrow-right"></i><span class="link-text"> Đăng xuất</span>
         </a>
     </nav>
-    <?php if (function_exists('getVisitStats') && function_exists('isLoggedIn') && isLoggedIn()): ?>
-    <?php global $conn; $__vs = getVisitStats($conn); $__online = $__vs['total'] ?? 0; ?>
-    <div style="padding:10px 16px 14px;border-top:1px solid rgba(255,255,255,.08);margin-top:auto;">
-        <div style="display:flex;align-items:center;gap:7px;font-size:.75rem;color:rgba(255,255,255,.5);">
-            <span style="width:7px;height:7px;border-radius:50%;background:#4ade80;flex-shrink:0;box-shadow:0 0 6px #4ade80;"></span>
-            <span class="link-text"><strong style="color:#fff;"><?php echo number_format($__online); ?></strong> người đang trực tuyến</span>
-        </div>
-    </div>
-    <?php endif; ?>
 </div>
 <div class="sb-overlay" id="sbOverlay" onclick="closeSidebar()"></div>
 

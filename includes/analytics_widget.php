@@ -1,7 +1,7 @@
 <?php
 /**
- * Analytics Widget — hiển thị dạng panel cố định góc dưới phải
- * Không ảnh hưởng layout, hoạt động trên mọi trang
+ * Analytics Widget — thống kê truy cập theo phân quyền
+ * Fixed position góc dưới phải, toggle mở/đóng
  */
 if (!isLoggedIn()) return;
 
@@ -13,152 +13,265 @@ $level = $stats['level'];
 
 $rows = [];
 if ($level === 'admin') {
-    $rows[] = ['icon' => 'bi-people-fill',       'label' => 'Đang truy cập',  'value' => $stats['total']];
-    $rows[] = ['icon' => 'bi-mortarboard-fill',   'label' => 'SV đăng nhập',   'value' => $stats['by_role']['student']];
-    $rows[] = ['icon' => 'bi-person-badge-fill',  'label' => 'GV đăng nhập',   'value' => $stats['by_role']['teacher']];
-    $rows[] = ['icon' => 'bi-person-gear',        'label' => 'Nhân viên',       'value' => $stats['by_role']['staff']];
-    $rows[] = ['icon' => 'bi-calendar-day',       'label' => 'Hôm nay',         'value' => $stats['today']];
-    $rows[] = ['icon' => 'bi-calendar-week',      'label' => 'Tuần này',        'value' => $stats['this_week']];
+    $rows[] = ['icon' => 'bi-people-fill',      'label' => 'Tổng truy cập',  'value' => $stats['total'],                   'color' => '#6366f1'];
+    $rows[] = ['icon' => 'bi-mortarboard-fill', 'label' => 'Sinh viên',       'value' => $stats['by_role']['student'],       'color' => '#0ea5e9'];
+    $rows[] = ['icon' => 'bi-person-badge-fill','label' => 'Giảng viên',      'value' => $stats['by_role']['teacher'],       'color' => '#10b981'];
+    $rows[] = ['icon' => 'bi-person-gear',      'label' => 'Nhân viên',       'value' => $stats['by_role']['staff'],         'color' => '#f59e0b'];
+    $rows[] = ['icon' => 'bi-calendar-day',     'label' => 'Hôm nay',         'value' => $stats['today'],                   'color' => '#ec4899'];
+    $rows[] = ['icon' => 'bi-calendar-week',    'label' => 'Tuần này',        'value' => $stats['this_week'],               'color' => '#8b5cf6'];
 } elseif ($level === 'staff') {
-    $rows[] = ['icon' => 'bi-people-fill',        'label' => 'Đang truy cập',  'value' => $stats['total']];
-    $rows[] = ['icon' => 'bi-mortarboard-fill',   'label' => 'SV đăng nhập',   'value' => $stats['students']];
-    $rows[] = ['icon' => 'bi-person-badge-fill',  'label' => 'GV đăng nhập',   'value' => $stats['teachers']];
-    $rows[] = ['icon' => 'bi-calendar-day',       'label' => 'Hôm nay',         'value' => $stats['today']];
+    $rows[] = ['icon' => 'bi-people-fill',      'label' => 'Tổng truy cập',  'value' => $stats['total'],    'color' => '#6366f1'];
+    $rows[] = ['icon' => 'bi-mortarboard-fill', 'label' => 'Sinh viên',       'value' => $stats['students'], 'color' => '#0ea5e9'];
+    $rows[] = ['icon' => 'bi-person-badge-fill','label' => 'Giảng viên',      'value' => $stats['teachers'], 'color' => '#10b981'];
+    $rows[] = ['icon' => 'bi-calendar-day',     'label' => 'Hôm nay',         'value' => $stats['today'],    'color' => '#ec4899'];
 } else {
-    // teacher / student
-    $rows[] = ['icon' => 'bi-people-fill',        'label' => 'Đang truy cập',  'value' => $stats['total']];
-    $rows[] = ['icon' => 'bi-mortarboard-fill',   'label' => 'SV đăng nhập',   'value' => $stats['students']];
-    $rows[] = ['icon' => 'bi-person-badge-fill',  'label' => 'GV đăng nhập',   'value' => $stats['teachers']];
+    $rows[] = ['icon' => 'bi-people-fill',      'label' => 'Tổng truy cập',  'value' => $stats['total'],    'color' => '#6366f1'];
+    $rows[] = ['icon' => 'bi-mortarboard-fill', 'label' => 'Sinh viên',       'value' => $stats['students'], 'color' => '#0ea5e9'];
+    $rows[] = ['icon' => 'bi-person-badge-fill','label' => 'Giảng viên',      'value' => $stats['teachers'], 'color' => '#10b981'];
 }
+
+// Số online để hiển thị trên nút toggle
+$onlineCount = $stats['total'] ?? 0;
 ?>
 <style>
-#aw-toggle {
+/* ── Toggle button ── */
+#aw-btn {
     position: fixed;
-    bottom: 20px;
-    right: 20px;
-    z-index: 9990;
-    width: 44px;
-    height: 44px;
-    border-radius: 50%;
-    background: #1a5276;
-    color: #fff;
-    border: none;
-    box-shadow: 0 4px 16px rgba(26,82,118,.45);
+    bottom: 24px;
+    right: 24px;
+    z-index: 9992;
     display: flex;
     align-items: center;
-    justify-content: center;
-    font-size: 1.15rem;
+    gap: 8px;
+    padding: 0 16px 0 10px;
+    height: 40px;
+    border-radius: 20px;
+    background: #0d2d6b;
+    color: #fff;
+    border: none;
+    box-shadow: 0 4px 18px rgba(13,45,107,.35);
     cursor: pointer;
-    transition: background .2s, transform .2s;
+    font-size: .82rem;
+    font-weight: 600;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    transition: background .2s, box-shadow .2s, transform .15s;
+    white-space: nowrap;
 }
-#aw-toggle:hover { background: #0d2d6b; transform: scale(1.08); }
+#aw-btn:hover {
+    background: #1a4fa0;
+    box-shadow: 0 6px 24px rgba(13,45,107,.45);
+    transform: translateY(-1px);
+}
+#aw-btn .aw-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #4ade80;
+    box-shadow: 0 0 0 2px rgba(74,222,128,.3);
+    flex-shrink: 0;
+    animation: awPulse 2s ease-in-out infinite;
+}
+@keyframes awPulse {
+    0%,100% { box-shadow: 0 0 0 2px rgba(74,222,128,.3); }
+    50%      { box-shadow: 0 0 0 5px rgba(74,222,128,.0); }
+}
+#aw-btn .aw-btn-icon {
+    font-size: .95rem;
+    opacity: .85;
+}
+#aw-btn .aw-btn-count {
+    background: rgba(255,255,255,.18);
+    border-radius: 10px;
+    padding: 1px 8px;
+    font-size: .78rem;
+    font-weight: 700;
+    margin-left: 2px;
+}
 
-#analytics-widget {
+/* ── Panel ── */
+#aw-panel {
     position: fixed;
     bottom: 74px;
-    right: 20px;
-    z-index: 9989;
-    width: 240px;
+    right: 24px;
+    z-index: 9991;
+    width: 260px;
     background: #fff;
-    border-left: 4px solid #1a5276;
-    border-radius: 10px;
-    box-shadow: 0 8px 32px rgba(26,82,118,.18);
-    padding: 16px 18px 14px;
+    border-radius: 14px;
+    box-shadow: 0 12px 40px rgba(13,45,107,.18), 0 2px 8px rgba(0,0,0,.08);
+    overflow: hidden;
     font-family: 'Segoe UI', system-ui, sans-serif;
-    transition: opacity .2s, transform .2s;
+    transform-origin: bottom right;
+    transition: opacity .2s ease, transform .2s ease;
 }
-#analytics-widget.aw-hidden {
+#aw-panel.aw-hidden {
     opacity: 0;
     pointer-events: none;
-    transform: translateY(10px);
+    transform: scale(.92) translateY(8px);
 }
-.aw-title {
-    font-size: .75rem;
-    font-weight: 800;
-    color: #1a3a6b;
-    letter-spacing: .08em;
-    text-transform: uppercase;
-    margin-bottom: 12px;
+
+/* Panel header */
+.aw-head {
+    background: linear-gradient(135deg, #0d2d6b 0%, #1a4fa0 100%);
+    padding: 12px 16px 10px;
     display: flex;
     align-items: center;
     justify-content: space-between;
 }
+.aw-head-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.aw-head-icon {
+    width: 30px; height: 30px;
+    border-radius: 8px;
+    background: rgba(255,255,255,.15);
+    display: flex; align-items: center; justify-content: center;
+    font-size: .95rem; color: #fff;
+}
+.aw-head-title {
+    color: #fff;
+    font-size: .78rem;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    line-height: 1.2;
+}
+.aw-head-sub {
+    color: rgba(255,255,255,.55);
+    font-size: .65rem;
+    margin-top: 1px;
+}
+.aw-head-close {
+    background: rgba(255,255,255,.12);
+    border: none;
+    color: rgba(255,255,255,.7);
+    width: 24px; height: 24px;
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    font-size: .75rem;
+    transition: background .15s, color .15s;
+}
+.aw-head-close:hover { background: rgba(255,255,255,.25); color: #fff; }
+
+/* Panel body */
+.aw-body {
+    padding: 12px 14px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+/* Row */
 .aw-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: 10px;
-    margin-bottom: 8px;
+    padding: 7px 10px;
+    border-radius: 8px;
+    background: #f8faff;
+    transition: background .15s;
 }
-.aw-row:last-child { margin-bottom: 0; }
-.aw-label {
+.aw-row:hover { background: #eef2ff; }
+.aw-row-icon {
+    width: 28px; height: 28px;
+    border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: .85rem;
+    flex-shrink: 0;
+}
+.aw-row-label {
+    flex: 1;
+    font-size: .8rem;
+    color: #374151;
+    font-weight: 500;
+}
+.aw-row-val {
+    font-size: .85rem;
+    font-weight: 700;
+    color: #0d2d6b;
+    min-width: 28px;
+    text-align: right;
+}
+
+/* Footer */
+.aw-foot {
+    padding: 8px 14px;
+    border-top: 1px solid #f0f2f7;
     display: flex;
     align-items: center;
-    gap: 7px;
-    color: #1a3a6b;
-    font-size: .82rem;
+    gap: 6px;
+    font-size: .68rem;
+    color: #9ca3af;
 }
-.aw-label i {
-    font-size: .9rem;
-    color: #1a5276;
-    width: 16px;
-    text-align: center;
-}
-.aw-badge {
-    background: #1a5276;
-    color: #fff;
-    font-weight: 700;
-    font-size: .78rem;
-    padding: 2px 10px;
-    border-radius: 5px;
-    min-width: 44px;
-    text-align: center;
+.aw-foot .aw-dot-sm {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #4ade80;
+    flex-shrink: 0;
 }
 </style>
 
-<div id="analytics-widget" class="aw-hidden">
-    <div class="aw-title">
-        <span>Thống kê truy cập</span>
-    </div>
-    <?php foreach ($rows as $row): ?>
-    <div class="aw-row">
-        <div class="aw-label">
-            <i class="bi <?php echo $row['icon']; ?>"></i>
-            <span><?php echo $row['label']; ?></span>
+<!-- Panel -->
+<div id="aw-panel" class="aw-hidden">
+    <div class="aw-head">
+        <div class="aw-head-left">
+            <div class="aw-head-icon"><i class="bi bi-bar-chart-fill"></i></div>
+            <div>
+                <div class="aw-head-title">Thống kê truy cập</div>
+                <div class="aw-head-sub"><?php echo date('d/m/Y H:i'); ?></div>
+            </div>
         </div>
-        <span class="aw-badge"><?php echo number_format($row['value']); ?></span>
+        <button class="aw-head-close" id="aw-close" title="Đóng"><i class="bi bi-x-lg"></i></button>
     </div>
-    <?php endforeach; ?>
+    <div class="aw-body">
+        <?php foreach ($rows as $row):
+            $bg = $row['color'] . '1a'; // ~10% opacity hex
+        ?>
+        <div class="aw-row">
+            <div class="aw-row-icon" style="background:<?php echo $bg; ?>;">
+                <i class="bi <?php echo $row['icon']; ?>" style="color:<?php echo $row['color']; ?>;"></i>
+            </div>
+            <span class="aw-row-label"><?php echo $row['label']; ?></span>
+            <span class="aw-row-val"><?php echo number_format($row['value']); ?></span>
+        </div>
+        <?php endforeach; ?>
+    </div>
+    <div class="aw-foot">
+        <span class="aw-dot-sm"></span>
+        Dữ liệu theo phiên đăng nhập
+    </div>
 </div>
 
-<button id="aw-toggle" title="Thống kê truy cập">
-    <i class="bi bi-bar-chart-fill"></i>
+<!-- Toggle button -->
+<button id="aw-btn" title="Thống kê truy cập">
+    <span class="aw-dot"></span>
+    <i class="bi bi-bar-chart-fill aw-btn-icon"></i>
+    <span><?php echo number_format($onlineCount); ?> trực tuyến</span>
 </button>
 
 <script>
 (function() {
-    const widget = document.getElementById('analytics-widget');
-    const btn    = document.getElementById('aw-toggle');
-    if (!widget || !btn) return;
+    const panel = document.getElementById('aw-panel');
+    const btn   = document.getElementById('aw-btn');
+    const close = document.getElementById('aw-close');
+    if (!panel || !btn) return;
 
     const KEY = 'tdmu_aw_open';
-    // Khôi phục trạng thái
-    if (localStorage.getItem(KEY) === '1') {
-        widget.classList.remove('aw-hidden');
-        btn.innerHTML = '<i class="bi bi-x-lg"></i>';
-    }
 
-    btn.addEventListener('click', function() {
-        const isOpen = !widget.classList.contains('aw-hidden');
-        if (isOpen) {
-            widget.classList.add('aw-hidden');
-            btn.innerHTML = '<i class="bi bi-bar-chart-fill"></i>';
-            localStorage.setItem(KEY, '0');
-        } else {
-            widget.classList.remove('aw-hidden');
-            btn.innerHTML = '<i class="bi bi-x-lg"></i>';
-            localStorage.setItem(KEY, '1');
-        }
+    function open()  { panel.classList.remove('aw-hidden'); localStorage.setItem(KEY,'1'); }
+    function shut()  { panel.classList.add('aw-hidden');    localStorage.setItem(KEY,'0'); }
+    function toggle(){ panel.classList.contains('aw-hidden') ? open() : shut(); }
+
+    // Khôi phục trạng thái
+    if (localStorage.getItem(KEY) === '1') open();
+
+    btn.addEventListener('click', toggle);
+    if (close) close.addEventListener('click', shut);
+
+    // Click ngoài panel thì đóng
+    document.addEventListener('click', function(e) {
+        if (!panel.contains(e.target) && !btn.contains(e.target)) shut();
     });
 })();
 </script>

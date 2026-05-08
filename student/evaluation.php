@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
 requireRole('student');
@@ -715,5 +715,6 @@ document.getElementById('evalForm')?.addEventListener('submit', function(e) {
     }
 });
 </script>
+<?php include_once __DIR__ . "/../includes/analytics_widget.php"; ?>
 </body>
 </html>
