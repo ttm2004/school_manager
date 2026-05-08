@@ -219,6 +219,36 @@ function getVisitStats($conn): array {
 // ============================================================
 
 /**
+ * Kiểm tra user có thuộc phòng Kế toán không
+ */
+function isFinanceStaff(): bool {
+    if (!isLoggedIn()) return false;
+    if ($_SESSION['role'] === 'admin') return true;
+    return hasRole('finance_manager') || hasRole('finance_staff');
+}
+
+function isFinanceManager(): bool {
+    if (!isLoggedIn()) return false;
+    if ($_SESSION['role'] === 'admin') return true;
+    return hasRole('finance_manager');
+}
+
+/**
+ * Kiểm tra user có thuộc phòng Đào tạo không
+ */
+function isTrainingStaff(): bool {
+    if (!isLoggedIn()) return false;
+    if ($_SESSION['role'] === 'admin') return true;
+    return hasRole('training_manager') || hasRole('training_staff');
+}
+
+function isTrainingManager(): bool {
+    if (!isLoggedIn()) return false;
+    if ($_SESSION['role'] === 'admin') return true;
+    return hasRole('training_manager');
+}
+
+/**
  * Lấy flash message từ session (xóa sau khi đọc)
  */
 function getFlash(): ?array {
