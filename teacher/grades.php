@@ -49,6 +49,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt->execute() ? $success = 'Luu diem thanh cong!' : $error = 'Loi: ' . $conn->error;
         $stmt->close();
     }
+
+    // ── PRG: redirect sau POST để tránh F5 gửi lại form ──
+    if (!empty($success) || !empty($error)) {
+        $_SESSION['_flash'] = [
+            'type'    => !empty($success) ? 'success' : 'danger',
+            'message' => !empty($success) ? $success : $error,
+        ];
+        $qs = $_SERVER['QUERY_STRING'] ?? '';
+        header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?') . ($qs ? '?' . $qs : ''));
+        exit();
+    }
 }
 
 $filter_section = intval($_GET['section_id'] ?? 0);
@@ -130,8 +141,7 @@ if ($filter_section > 0) {
             <a href="/university/login.php?logout=1" class="btn btn-sm btn-outline-danger"><i class="bi bi-box-arrow-right"></i></a>
         </div>
         <div class="student-content">
-            <?php if ($success): ?><div class="alert alert-success auto-dismiss alert-dismissible fade show"><i class="bi bi-check-circle-fill me-2"></i><?php echo $success; ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div><?php endif; ?>
-            <?php if ($error): ?><div class="alert alert-danger auto-dismiss alert-dismissible fade show"><i class="bi bi-exclamation-circle-fill me-2"></i><?php echo $error; ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div><?php endif; ?>
+            <?php $flash = getFlash(); if ($flash): ?><div class="alert alert-<?php echo $flash['type']; ?> auto-dismiss alert-dismissible fade show"><i class="bi bi-<?php echo $flash['type']=='success'?'check-circle-fill':'exclamation-circle-fill'; ?> me-2"></i><?php echo htmlspecialchars($flash['message']); ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div><?php endif; ?>
 
             <div class="card mb-4">
                 <div class="card-header"><i class="bi bi-funnel me-2"></i>Chon lop hoc phan</div>

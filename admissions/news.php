@@ -3,7 +3,6 @@ require_once '../config/database.php';
 require_once '../includes/auth.php';
 requireAnyRole(['admissions_manager']);
 $pageTitle = 'Tin Tuyển sinh';
-include __DIR__ . '/includes/header.php';
 
 $success = $error = '';
 
@@ -81,9 +80,9 @@ $stmt->execute();
 $news = $stmt->get_result();
 $stmt->close();
 $totalPages = ceil($total / $perPage);
+include __DIR__ . '/includes/header.php';
 ?>
-<?php if ($success): ?><div class="alert alert-success auto-dismiss alert-dismissible fade show"><i class="bi bi-check-circle-fill me-2"></i><?php echo $success; ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div><?php endif; ?>
-<?php if ($error): ?><div class="alert alert-danger auto-dismiss alert-dismissible fade show"><i class="bi bi-exclamation-circle-fill me-2"></i><?php echo $error; ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div><?php endif; ?>
+<?php $flash = getFlash(); if ($flash): ?><div class="alert alert-<?php echo $flash['type']; ?> auto-dismiss alert-dismissible fade show"><i class="bi bi-<?php echo $flash['type']==='success'?'check-circle-fill':'exclamation-circle-fill'; ?> me-2"></i><?php echo htmlspecialchars($flash['message']); ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div><?php endif; ?>
 
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">

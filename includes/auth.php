@@ -214,6 +214,24 @@ function getVisitStats($conn): array {
         'teachers' => $count("role='teacher'"),
     ];
 }
+// ============================================================
+// PRG HELPERS — Post/Redirect/Get pattern
+// ============================================================
+
+/**
+ * Lấy flash message từ session (xóa sau khi đọc)
+ * Trả về ['type'=>'success'|'danger', 'message'=>'...'] hoặc null
+ */
+function getFlash(): ?array {
+    if (session_status() === PHP_SESSION_NONE) session_start();
+    if (!empty($_SESSION['_flash'])) {
+        $flash = $_SESSION['_flash'];
+        unset($_SESSION['_flash']);
+        return $flash;
+    }
+    return null;
+}
+
 function cacheUserRoles(): void {
     if (!isLoggedIn() || isset($_SESSION['_roles_cached'])) return;
     global $conn;

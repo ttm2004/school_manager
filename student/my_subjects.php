@@ -44,6 +44,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'cance
             $del->close();
         }
     }
+    // ── PRG ──
+    if (!empty($success) || !empty($error)) {
+        $_SESSION['_flash'] = ['type' => !empty($success) ? 'success' : 'danger', 'message' => !empty($success) ? $success : $error];
+        header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?'));
+        exit();
+    }
 }
 
 // Lấy danh sách học phần đã đăng ký
@@ -142,8 +148,7 @@ if ($allSections) {
             <a href="/university/login.php?logout=1" class="btn btn-sm btn-outline-danger"><i class="bi bi-box-arrow-right"></i></a>
         </div>
         <div class="student-content">
-            <?php if ($success): ?><div class="alert alert-success auto-dismiss alert-dismissible fade show"><i class="bi bi-check-circle-fill me-2"></i><?php echo $success; ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div><?php endif; ?>
-            <?php if ($error): ?><div class="alert alert-danger auto-dismiss alert-dismissible fade show"><i class="bi bi-exclamation-circle-fill me-2"></i><?php echo $error; ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div><?php endif; ?>
+            <?php $flash = getFlash(); if ($flash): ?><div class="alert alert-<?php echo $flash['type']; ?> auto-dismiss alert-dismissible fade show"><i class="bi bi-<?php echo $flash['type']=='success'?'check-circle-fill':'exclamation-circle-fill'; ?> me-2"></i><?php echo htmlspecialchars($flash['message']); ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div><?php endif; ?>
 
             <div class="card">
                 <div class="card-header"><i class="bi bi-journal-check me-2"></i>Danh sách học phần đã đăng ký</div>

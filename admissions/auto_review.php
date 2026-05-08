@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
 requireAnyRole(['admissions_manager', 'admissions_staff']);
@@ -15,8 +15,6 @@ if (isset($_GET['download_template'])) {
     echo "7340101,Quản trị kinh doanh,100,16.00,2026\n";
     exit();
 }
-
-include __DIR__ . '/includes/header.php';
 
 // ── Trạng thái đợt tuyển sinh ────────────────────────────────
 $roundPhase    = getRoundPhase();
@@ -287,7 +285,10 @@ $statRes = $conn->query("
     ORDER BY m.major_name
 ");
 if ($statRes) while ($r = $statRes->fetch_assoc()) $statsByMajor[] = $r;
+
+include __DIR__ . '/includes/header.php';
 ?>
+<?php $flash = getFlash(); if ($flash): ?><div class="alert alert-<?php echo $flash['type']; ?> auto-dismiss alert-dismissible fade show"><i class="bi bi-<?php echo $flash['type']==='success'?'check-circle-fill':'exclamation-circle-fill'; ?> me-2"></i><?php echo htmlspecialchars($flash['message']); ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div><?php endif; ?>
 
 <!-- ── Modal trạng thái ──────────────────────────────────── -->
 <?php

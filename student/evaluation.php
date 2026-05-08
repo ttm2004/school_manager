@@ -107,6 +107,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'submi
             }
         }
     }
+    // PRG cho error
+    if (!empty($error)) {
+        $_SESSION['_flash'] = ['type' => 'danger', 'message' => $error];
+        header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?') . ($_SERVER['QUERY_STRING'] ? '?' . $_SERVER['QUERY_STRING'] : ''));
+        exit();
+    }
 }
 
 // ============================================================

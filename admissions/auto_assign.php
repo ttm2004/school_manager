@@ -3,7 +3,6 @@ require_once '../config/database.php';
 require_once '../includes/auth.php';
 requireAnyRole(['admissions_manager']);
 $pageTitle = 'Phân lớp & Cấp tài khoản tự động';
-include __DIR__ . '/includes/header.php';
 
 $success = $error = '';
 $preview = null;
@@ -170,7 +169,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     // ── PRG: redirect sau POST để tránh F5 gửi lại form ──
-    if (!empty($success) || !empty($error)) {
+    // Chỉ redirect khi không có preview/result cần hiển thị
+    if ((!empty($success) || !empty($error)) && $preview === null && $assignResult === null) {
         $_SESSION['_flash'] = [
             'type'    => !empty($success) ? 'success' : 'danger',
             'message' => !empty($success) ? $success : $error,
@@ -180,13 +180,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit();
     }
 }
+
+include __DIR__ . '/includes/header.php';
 ?>
 
+<?php $flash = getFlash(); if ($flash): ?>
+<div class="alert alert-<?php echo $flash['type']; ?> alert-dismissible fade show auto-dismiss">
+    <i class="bi bi-<?php echo $flash['type']==='success'?'check-circle-fill':'exclamation-circle-fill'; ?> me-2"></i>
+    <?php echo htmlspecialchars($flash['message']); ?>
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+<?php endif; ?>
+<?php $flash = getFlash(); if ($flash): ?>
+<div class="alert alert-<?php echo $flash['type']; ?> alert-dismissible fade show auto-dismiss"><i class="bi bi-<?php echo $flash['type']==='success'?'check-circle-fill':'exclamation-circle-fill'; ?> me-2"></i><?php echo htmlspecialchars($flash['message']); ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+<?php endif; ?>
 <?php if ($success): ?>
-<div class="alert alert-success alert-dismissible fade show"><i class="bi bi-check-circle-fill me-2"></i><?php echo $success; ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+<div class="alert alert-success alert-dismissible fade show auto-dismiss"><i class="bi bi-check-circle-fill me-2"></i><?php echo $success; ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
 <?php endif; ?>
 <?php if ($error): ?>
-<div class="alert alert-danger alert-dismissible fade show"><i class="bi bi-exclamation-circle-fill me-2"></i><?php echo $error; ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+<div class="alert alert-danger alert-dismissible fade show auto-dismiss"><i class="bi bi-exclamation-circle-fill me-2"></i><?php echo $error; ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
 <?php endif; ?>
 
 <div class="row g-4">
