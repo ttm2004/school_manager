@@ -2,6 +2,52 @@
 require_once '../config/database.php';
 require_once '../includes/auth.php';
 requireAnyRole(['admissions_manager', 'admissions_staff']);
+
+// ── AJAX: chỉ trả về partial table ──────────────────────────
+if (isset($_GET['ajax'])) {
+    $isManager   = hasRole('admissions_manager');
+    $canEnroll   = hasPermission('admissions', 'manage_enrollment');
+    $roundPhase  = getRoundPhase();
+    $enrollAllowed = in_array($roundPhase, ['enrolling', 'supp_enrolling']);
+    $enrollLocked  = !$enrollAllowed;
+
+    $tab          = $_GET['tab'] ?? 'approved';
+    $filter_major = intval($_GET['major_id'] ?? 0);
+    $filter_search= trim($_GET['q'] ?? '');
+    $statusFilter = $tab === 'enrolled' ? 'enrolled' : 'approved';
+
+    $where  = ["aa.status='$statusFilter'"];
+    $params = []; $types = '';
+    if ($filter_major) { $where[] = 'aa.major_id=?'; $params[] = $filter_major; $types .= 'i'; }
+    if ($filter_search) {
+        $like = "%$filter_search%";
+        $where[] = '(aa.full_name LIKE ? OR aa.email LIKE ? OR aa.citizen_id LIKE ?)';
+        $params = array_merge($params, [$like, $like, $like]); $types .= 'sss';
+    }
+    $wSQL    = 'WHERE ' . implode(' AND ', $where);
+    $perPage = 15;
+    $page    = max(1, intval($_GET['page'] ?? 1));
+    $offset  = ($page - 1) * $perPage;
+
+    if ($params) { $cs = $conn->prepare("SELECT COUNT(*) c FROM admission_applications aa $wSQL"); $cs->bind_param($types, ...$params); $cs->execute(); $total = (int)$cs->get_result()->fetch_assoc()['c']; $cs->close(); }
+    else { $total = (int)$conn->query("SELECT COUNT(*) c FROM admission_applications aa $wSQL")->fetch_assoc()['c']; }
+    $totalPages = ceil($total / $perPage);
+
+    $dSQL = "SELECT aa.*, m.major_name, m.major_code, am.method_name,
+        (aa.math_score+aa.literature_score+aa.english_score) as total_score,
+        (SELECT u.id FROM users u JOIN students s ON u.id=s.user_id WHERE u.email=aa.email LIMIT 1) as has_account
+        FROM admission_applications aa
+        LEFT JOIN majors m ON aa.major_id=m.id
+        LEFT JOIN admission_methods am ON aa.method_id=am.id
+        $wSQL ORDER BY aa.created_at DESC LIMIT ? OFFSET ?";
+    $allP = array_merge($params, [$perPage, $offset]); $allT = $types . 'ii';
+    $stmt = $conn->prepare($dSQL); $stmt->bind_param($allT, ...$allP); $stmt->execute();
+    $applications = $stmt->get_result(); $stmt->close();
+
+    include __DIR__ . '/enrollment_table.php';
+    exit();
+}
+
 $pageTitle = 'Thủ tục Nhập học';
 
 $isManager   = hasRole('admissions_manager');
