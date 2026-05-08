@@ -89,6 +89,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->close();
         }
     }
+
+    // PRG: redirect sau POST de tranh F5 gui lai form
+    if (!empty($success) || !empty($error)) {
+        $_SESSION['_flash'] = [
+            'type'    => !empty($success) ? 'success' : 'danger',
+            'message' => !empty($success) ? $success : $error,
+        ];
+        $qs = $_SERVER['QUERY_STRING'] ?? '';
+        header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?') . ($qs ? '?' . $qs : ''));
+        exit();
+    }
 }
 
 $perPage = 10;
