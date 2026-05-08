@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
 requireRole('admin');
@@ -48,6 +48,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->close();
         }
     }
+
+    // ── PRG: redirect sau POST để tránh F5 gửi lại form ──
+    if (!empty($success) || !empty($error)) {
+        $_SESSION['_flash'] = [
+            'type'    => !empty($success) ? 'success' : 'danger',
+            'message' => !empty($success) ? $success : $error,
+        ];
+        $qs = $_SERVER['QUERY_STRING'] ?? '';
+        header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?') . ($qs ? '?' . $qs : ''));
+        exit();
+    }
 }
 
 $majors = $conn->query("SELECT m.*, f.faculty_name FROM majors m LEFT JOIN faculties f ON m.faculty_id=f.id ORDER BY f.faculty_name, m.major_name");
@@ -65,8 +76,7 @@ include 'includes/sidebar.php';
         <span class="text-muted small"><?php echo htmlspecialchars($_SESSION['full_name']); ?></span>
     </div>
     <div class="admin-content">
-        <?php if ($success): ?><div class="alert alert-success auto-dismiss alert-dismissible fade show"><i class="bi bi-check-circle-fill me-2"></i><?php echo $success; ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div><?php endif; ?>
-        <?php if ($error): ?><div class="alert alert-danger auto-dismiss alert-dismissible fade show"><i class="bi bi-exclamation-circle-fill me-2"></i><?php echo $error; ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div><?php endif; ?>
+        <?php $flash = getFlash(); if ($flash): ?><div class="alert alert-<?php echo $flash['type']; ?> auto-dismiss alert-dismissible fade show"><i class="bi bi-<?php echo $flash['type']=='success'?'check-circle-fill':'exclamation-circle-fill'; ?> me-2"></i><?php echo htmlspecialchars($flash['message']); ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div><?php endif; ?>
 
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">

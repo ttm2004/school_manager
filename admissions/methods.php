@@ -46,6 +46,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->close();
         }
     }
+
+    // ── PRG: redirect sau POST để tránh F5 gửi lại form ──
+    if (!empty($success) || !empty($error)) {
+        $_SESSION['_flash'] = [
+            'type'    => !empty($success) ? 'success' : 'danger',
+            'message' => !empty($success) ? $success : $error,
+        ];
+        $qs = $_SERVER['QUERY_STRING'] ?? '';
+        header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?') . ($qs ? '?' . $qs : ''));
+        exit();
+    }
 }
 
 $methods = $conn->query("SELECT am.*, COUNT(aa.id) as app_count FROM admission_methods am LEFT JOIN admission_applications aa ON am.id=aa.method_id GROUP BY am.id ORDER BY am.id");

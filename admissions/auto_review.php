@@ -244,6 +244,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $success = "Đã $label <strong>$cnt</strong> hồ sơ.";
         }
     }
+
+    // ── PRG: redirect sau POST để tránh F5 gửi lại form ──
+    if (!empty($success) || !empty($error)) {
+        $_SESSION['_flash'] = [
+            'type'    => !empty($success) ? 'success' : 'danger',
+            'message' => !empty($success) ? $success : $error,
+        ];
+        $qs = $_SERVER['QUERY_STRING'] ?? '';
+        header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?') . ($qs ? '?' . $qs : ''));
+        exit();
+    }
 }
 
 // ── Load dữ liệu hiển thị ────────────────────────────────────
