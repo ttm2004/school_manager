@@ -66,15 +66,6 @@ $currentDir = basename(dirname($_SERVER['PHP_SELF']));
         <a href="/university/admissions/" class="sidebar-link <?php echo $currentDir==='admissions'?'active':''; ?>" style="background:rgba(245,166,35,.08);border-left:3px solid var(--gold);">
             <i class="bi bi-mortarboard-fill text-gold"></i> <strong>Module Tuyển sinh</strong>
         </a>
-        <a href="/university/admin/admission_methods.php" class="sidebar-link <?php echo $currentFile=='admission_methods.php'?'active':''; ?>">
-            <i class="bi bi-list-check"></i> Phương thức XT
-        </a>
-        <a href="/university/admin/admission_news.php" class="sidebar-link <?php echo $currentFile=='admission_news.php'?'active':''; ?>">
-            <i class="bi bi-newspaper"></i> Tin tuyển sinh
-        </a>
-        <a href="/university/admin/admission_applications.php" class="sidebar-link <?php echo $currentFile=='admission_applications.php'?'active':''; ?>">
-            <i class="bi bi-file-earmark-person-fill"></i> Hồ sơ xét tuyển
-        </a>
 
         <div class="sidebar-section-title">Đánh giá giảng viên</div>
         <a href="/university/admin/evaluation_periods.php" class="sidebar-link <?php echo $currentFile=='evaluation_periods.php'?'active':''; ?>">
