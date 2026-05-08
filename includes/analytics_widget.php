@@ -2,34 +2,34 @@
 /**
  * Analytics Widget — thống kê truy cập theo phân quyền
  * Fixed position góc dưới phải, toggle mở/đóng
+ * Dùng prefix $_aw_ để tránh conflict với biến của trang chứa
  */
 if (!isLoggedIn()) return;
 
 global $conn;
-$stats = getVisitStats($conn);
-if (empty($stats)) return;
+$_aw_stats = getVisitStats($conn);
+if (empty($_aw_stats)) return;
 
-$level = $stats['level'];
+$_aw_level = $_aw_stats['level'];
+$_aw_rows  = [];
 
-$rows = [];
-if ($level === 'admin') {
-    $rows[] = ['icon' => 'bi-people-fill',      'label' => 'Đang trực tuyến', 'value' => $stats['total'],             'color' => '#6366f1'];
-    $rows[] = ['icon' => 'bi-mortarboard-fill', 'label' => 'Sinh viên',        'value' => $stats['by_role']['student'], 'color' => '#0ea5e9'];
-    $rows[] = ['icon' => 'bi-person-badge-fill','label' => 'Giảng viên',       'value' => $stats['by_role']['teacher'], 'color' => '#10b981'];
-    $rows[] = ['icon' => 'bi-person-gear',      'label' => 'Nhân viên',        'value' => $stats['by_role']['staff'],   'color' => '#f59e0b'];
-    $rows[] = ['icon' => 'bi-shield-fill',      'label' => 'Quản trị',         'value' => $stats['by_role']['admin'],   'color' => '#8b5cf6'];
-} elseif ($level === 'staff') {
-    $rows[] = ['icon' => 'bi-people-fill',      'label' => 'Đang trực tuyến', 'value' => $stats['total'],    'color' => '#6366f1'];
-    $rows[] = ['icon' => 'bi-mortarboard-fill', 'label' => 'Sinh viên',        'value' => $stats['students'], 'color' => '#0ea5e9'];
-    $rows[] = ['icon' => 'bi-person-badge-fill','label' => 'Giảng viên',       'value' => $stats['teachers'], 'color' => '#10b981'];
+if ($_aw_level === 'admin') {
+    $_aw_rows[] = ['icon' => 'bi-people-fill',      'label' => 'Đang trực tuyến', 'value' => $_aw_stats['total'],             'color' => '#6366f1'];
+    $_aw_rows[] = ['icon' => 'bi-mortarboard-fill', 'label' => 'Sinh viên',        'value' => $_aw_stats['by_role']['student'], 'color' => '#0ea5e9'];
+    $_aw_rows[] = ['icon' => 'bi-person-badge-fill','label' => 'Giảng viên',       'value' => $_aw_stats['by_role']['teacher'], 'color' => '#10b981'];
+    $_aw_rows[] = ['icon' => 'bi-person-gear',      'label' => 'Nhân viên',        'value' => $_aw_stats['by_role']['staff'],   'color' => '#f59e0b'];
+    $_aw_rows[] = ['icon' => 'bi-shield-fill',      'label' => 'Quản trị',         'value' => $_aw_stats['by_role']['admin'],   'color' => '#8b5cf6'];
+} elseif ($_aw_level === 'staff') {
+    $_aw_rows[] = ['icon' => 'bi-people-fill',      'label' => 'Đang trực tuyến', 'value' => $_aw_stats['total'],    'color' => '#6366f1'];
+    $_aw_rows[] = ['icon' => 'bi-mortarboard-fill', 'label' => 'Sinh viên',        'value' => $_aw_stats['students'], 'color' => '#0ea5e9'];
+    $_aw_rows[] = ['icon' => 'bi-person-badge-fill','label' => 'Giảng viên',       'value' => $_aw_stats['teachers'], 'color' => '#10b981'];
 } else {
-    $rows[] = ['icon' => 'bi-people-fill',      'label' => 'Đang trực tuyến', 'value' => $stats['total'],    'color' => '#6366f1'];
-    $rows[] = ['icon' => 'bi-mortarboard-fill', 'label' => 'Sinh viên',        'value' => $stats['students'], 'color' => '#0ea5e9'];
-    $rows[] = ['icon' => 'bi-person-badge-fill','label' => 'Giảng viên',       'value' => $stats['teachers'], 'color' => '#10b981'];
+    $_aw_rows[] = ['icon' => 'bi-people-fill',      'label' => 'Đang trực tuyến', 'value' => $_aw_stats['total'],    'color' => '#6366f1'];
+    $_aw_rows[] = ['icon' => 'bi-mortarboard-fill', 'label' => 'Sinh viên',        'value' => $_aw_stats['students'], 'color' => '#0ea5e9'];
+    $_aw_rows[] = ['icon' => 'bi-person-badge-fill','label' => 'Giảng viên',       'value' => $_aw_stats['teachers'], 'color' => '#10b981'];
 }
 
-// Số online để hiển thị trên nút toggle
-$onlineCount = $stats['total'] ?? 0;
+$_aw_onlineCount = $_aw_stats['total'] ?? 0;
 ?>
 <style>
 /* ── Toggle button ── */
@@ -223,8 +223,8 @@ $onlineCount = $stats['total'] ?? 0;
         <button class="aw-head-close" id="aw-close" title="Đóng"><i class="bi bi-x-lg"></i></button>
     </div>
     <div class="aw-body">
-        <?php foreach ($rows as $row):
-            $bg = $row['color'] . '1a'; // ~10% opacity hex
+        <?php foreach ($_aw_rows as $row):
+            $bg = $row['color'] . '1a';
         ?>
         <div class="aw-row">
             <div class="aw-row-icon" style="background:<?php echo $bg; ?>;">
@@ -245,7 +245,7 @@ $onlineCount = $stats['total'] ?? 0;
 <button id="aw-btn" title="Thống kê truy cập">
     <span class="aw-dot"></span>
     <i class="bi bi-bar-chart-fill aw-btn-icon"></i>
-    <span><?php echo number_format($onlineCount); ?> trực tuyến</span>
+    <span><?php echo number_format($_aw_onlineCount); ?> trực tuyến</span>
 </button>
 
 <script>

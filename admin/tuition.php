@@ -221,20 +221,20 @@ $semesters = $conn->query("SELECT * FROM semesters ORDER BY school_year DESC, se
 
 // ── STATS ─────────────────────────────────────────────────────────────────────
 $stats_where = $filter_semester ? "WHERE ti.semester_id = $filter_semester" : '';
-$stats = $conn->query("
+$_statsRes = $conn->query("
     SELECT
         COUNT(*) AS total_invoices,
-        SUM(status='paid') AS total_paid,
-        SUM(status='unpaid') AS total_unpaid,
-        SUM(status='partial') AS total_partial,
-        SUM(status='overdue') AS total_overdue,
-        SUM(status='waived') AS total_waived,
-        COALESCE(SUM(net_amount),0) AS sum_net,
-        COALESCE(SUM(paid_amount),0) AS sum_paid,
+        COALESCE(SUM(status='paid'),0)    AS total_paid,
+        COALESCE(SUM(status='unpaid'),0)  AS total_unpaid,
+        COALESCE(SUM(status='partial'),0) AS total_partial,
+        COALESCE(SUM(status='overdue'),0) AS total_overdue,
+        COALESCE(SUM(status='waived'),0)  AS total_waived,
+        COALESCE(SUM(net_amount),0)       AS sum_net,
+        COALESCE(SUM(paid_amount),0)      AS sum_paid,
         COALESCE(SUM(net_amount - paid_amount),0) AS sum_remaining
     FROM tuition_invoices ti $stats_where
 ");
-$stats = ($stats && $stats->num_rows > 0) ? $stats->fetch_assoc() : [];
+$_statsRow = ($_statsRes instanceof mysqli_result) ? $_statsRes->fetch_assoc() : null;
 $stats = array_merge([
     'total_invoices' => 0,
     'total_paid'     => 0,
@@ -245,7 +245,7 @@ $stats = array_merge([
     'sum_net'        => 0,
     'sum_paid'       => 0,
     'sum_remaining'  => 0,
-], $stats ?: []);
+], $_statsRow ?? []);
 
 // ── INVOICE LIST ──────────────────────────────────────────────────────────────
 $conditions = [];
