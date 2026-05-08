@@ -244,6 +244,12 @@ $_enrollCount  = $conn->query("SELECT COUNT(*) as c FROM admission_applications 
         </a>
     </nav>
 </div>
+<?php
+// Widget thống kê truy cập — fixed position, không ảnh hưởng layout
+if (function_exists('isLoggedIn') && isLoggedIn()) {
+    include_once __DIR__ . '/../../includes/analytics_widget.php';
+}
+?>
 <div class="sb-overlay" id="sbOverlay" onclick="closeSidebar()"></div>
 
 <div class="adm-main" id="admMain">

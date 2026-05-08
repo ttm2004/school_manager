@@ -95,3 +95,9 @@ $currentDir = basename(dirname($_SERVER['PHP_SELF']));
         </a>
     </nav>
 </aside>
+<?php
+// Widget thống kê truy cập — fixed position, không ảnh hưởng layout
+if (function_exists('isLoggedIn') && isLoggedIn()) {
+    include_once __DIR__ . '/../../includes/analytics_widget.php';
+}
+?>

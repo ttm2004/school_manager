@@ -370,7 +370,7 @@
     }
 })();
 
-// ===== AUTO DISMISS ALERTS =====
+
 document.addEventListener('DOMContentLoaded', function () {
     // Auto dismiss alerts after 4 seconds (fallback cho alert không được convert)
     const alerts = document.querySelectorAll('.alert.auto-dismiss');
