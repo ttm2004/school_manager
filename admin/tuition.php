@@ -175,6 +175,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+// ── Tự động tạo bảng nếu chưa có (chạy migration tự động) ───────────────────
+$conn->query("CREATE TABLE IF NOT EXISTS `tuition_invoices` (
+    `id`            INT AUTO_INCREMENT PRIMARY KEY,
+    `student_id`    INT NOT NULL,
+    `semester_id`   INT NOT NULL,
+    `total_credits` INT NOT NULL DEFAULT 0,
+    `unit_price`    DECIMAL(12,2) NOT NULL DEFAULT 0,
+    `gross_amount`  DECIMAL(14,2) NOT NULL DEFAULT 0,
+    `discount`      DECIMAL(14,2) NOT NULL DEFAULT 0,
+    `net_amount`    DECIMAL(14,2) NOT NULL DEFAULT 0,
+    `paid_amount`   DECIMAL(14,2) NOT NULL DEFAULT 0,
+    `due_date`      DATE NULL,
+    `status`        ENUM('unpaid','partial','paid','overdue','waived') NOT NULL DEFAULT 'unpaid',
+    `note`          TEXT NULL,
+    `created_by`    INT NULL,
+    `created_at`    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    `updated_at`    TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY `uq_student_semester` (`student_id`, `semester_id`),
+    INDEX (`semester_id`), INDEX (`status`), INDEX (`due_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+$conn->query("CREATE TABLE IF NOT EXISTS `tuition_payments` (
+    `id`         INT AUTO_INCREMENT PRIMARY KEY,
+    `invoice_id` INT NOT NULL,
+    `amount`     DECIMAL(14,2) NOT NULL,
+    `method`     ENUM('cash','bank_transfer','online','other') NOT NULL DEFAULT 'cash',
+    `reference`  VARCHAR(100) NULL,
+    `note`       VARCHAR(255) NULL,
+    `paid_by`    INT NULL,
+    `paid_at`    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX (`invoice_id`), INDEX (`paid_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
 // ── FILTERS ───────────────────────────────────────────────────────────────────
 $filter_semester = intval($_GET['semester_id'] ?? 0);
 $filter_status   = trim($_GET['status'] ?? '');
@@ -200,7 +233,19 @@ $stats = $conn->query("
         COALESCE(SUM(paid_amount),0) AS sum_paid,
         COALESCE(SUM(net_amount - paid_amount),0) AS sum_remaining
     FROM tuition_invoices ti $stats_where
-")->fetch_assoc();
+");
+$stats = ($stats && $stats->num_rows > 0) ? $stats->fetch_assoc() : [];
+$stats = array_merge([
+    'total_invoices' => 0,
+    'total_paid'     => 0,
+    'total_unpaid'   => 0,
+    'total_partial'  => 0,
+    'total_overdue'  => 0,
+    'total_waived'   => 0,
+    'sum_net'        => 0,
+    'sum_paid'       => 0,
+    'sum_remaining'  => 0,
+], $stats ?: []);
 
 // ── INVOICE LIST ──────────────────────────────────────────────────────────────
 $conditions = [];
@@ -236,13 +281,17 @@ $base_sql = "FROM tuition_invoices ti
 
 // Count
 $count_stmt = $conn->prepare("SELECT COUNT(*) AS c $base_sql");
-if ($types) { $count_stmt->bind_param($types, ...$params); }
-$count_stmt->execute();
-$total = $count_stmt->get_result()->fetch_assoc()['c'];
-$count_stmt->close();
+if (!$count_stmt) { $total = 0; }
+else {
+    if ($types) { $count_stmt->bind_param($types, ...$params); }
+    $count_stmt->execute();
+    $total = (int)($count_stmt->get_result()->fetch_assoc()['c'] ?? 0);
+    $count_stmt->close();
+}
 $totalPages = ceil($total / $perPage);
 
 // Data
+$invoices = null;
 $data_stmt = $conn->prepare("SELECT
     ti.*,
     u.full_name, u.email,
@@ -253,14 +302,16 @@ $data_stmt = $conn->prepare("SELECT
     $base_sql
     ORDER BY ti.created_at DESC
     LIMIT ? OFFSET ?");
-$data_params = $params;
-$data_types  = $types . 'ii';
-$data_params[] = $perPage;
-$data_params[] = $offset;
-$data_stmt->bind_param($data_types, ...$data_params);
-$data_stmt->execute();
-$invoices = $data_stmt->get_result();
-$data_stmt->close();
+if ($data_stmt) {
+    $data_params   = $params;
+    $data_types    = $types . 'ii';
+    $data_params[] = $perPage;
+    $data_params[] = $offset;
+    $data_stmt->bind_param($data_types, ...$data_params);
+    $data_stmt->execute();
+    $invoices = $data_stmt->get_result();
+    $data_stmt->close();
+}
 
 // Helper: format tiền VND
 function fmtVND($n) {
