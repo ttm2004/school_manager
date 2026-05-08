@@ -13,21 +13,19 @@ $level = $stats['level'];
 
 $rows = [];
 if ($level === 'admin') {
-    $rows[] = ['icon' => 'bi-people-fill',      'label' => 'Tổng truy cập',  'value' => $stats['total'],                   'color' => '#6366f1'];
-    $rows[] = ['icon' => 'bi-mortarboard-fill', 'label' => 'Sinh viên',       'value' => $stats['by_role']['student'],       'color' => '#0ea5e9'];
-    $rows[] = ['icon' => 'bi-person-badge-fill','label' => 'Giảng viên',      'value' => $stats['by_role']['teacher'],       'color' => '#10b981'];
-    $rows[] = ['icon' => 'bi-person-gear',      'label' => 'Nhân viên',       'value' => $stats['by_role']['staff'],         'color' => '#f59e0b'];
-    $rows[] = ['icon' => 'bi-calendar-day',     'label' => 'Hôm nay',         'value' => $stats['today'],                   'color' => '#ec4899'];
-    $rows[] = ['icon' => 'bi-calendar-week',    'label' => 'Tuần này',        'value' => $stats['this_week'],               'color' => '#8b5cf6'];
+    $rows[] = ['icon' => 'bi-people-fill',      'label' => 'Đang trực tuyến', 'value' => $stats['total'],             'color' => '#6366f1'];
+    $rows[] = ['icon' => 'bi-mortarboard-fill', 'label' => 'Sinh viên',        'value' => $stats['by_role']['student'], 'color' => '#0ea5e9'];
+    $rows[] = ['icon' => 'bi-person-badge-fill','label' => 'Giảng viên',       'value' => $stats['by_role']['teacher'], 'color' => '#10b981'];
+    $rows[] = ['icon' => 'bi-person-gear',      'label' => 'Nhân viên',        'value' => $stats['by_role']['staff'],   'color' => '#f59e0b'];
+    $rows[] = ['icon' => 'bi-shield-fill',      'label' => 'Quản trị',         'value' => $stats['by_role']['admin'],   'color' => '#8b5cf6'];
 } elseif ($level === 'staff') {
-    $rows[] = ['icon' => 'bi-people-fill',      'label' => 'Tổng truy cập',  'value' => $stats['total'],    'color' => '#6366f1'];
-    $rows[] = ['icon' => 'bi-mortarboard-fill', 'label' => 'Sinh viên',       'value' => $stats['students'], 'color' => '#0ea5e9'];
-    $rows[] = ['icon' => 'bi-person-badge-fill','label' => 'Giảng viên',      'value' => $stats['teachers'], 'color' => '#10b981'];
-    $rows[] = ['icon' => 'bi-calendar-day',     'label' => 'Hôm nay',         'value' => $stats['today'],    'color' => '#ec4899'];
+    $rows[] = ['icon' => 'bi-people-fill',      'label' => 'Đang trực tuyến', 'value' => $stats['total'],    'color' => '#6366f1'];
+    $rows[] = ['icon' => 'bi-mortarboard-fill', 'label' => 'Sinh viên',        'value' => $stats['students'], 'color' => '#0ea5e9'];
+    $rows[] = ['icon' => 'bi-person-badge-fill','label' => 'Giảng viên',       'value' => $stats['teachers'], 'color' => '#10b981'];
 } else {
-    $rows[] = ['icon' => 'bi-people-fill',      'label' => 'Tổng truy cập',  'value' => $stats['total'],    'color' => '#6366f1'];
-    $rows[] = ['icon' => 'bi-mortarboard-fill', 'label' => 'Sinh viên',       'value' => $stats['students'], 'color' => '#0ea5e9'];
-    $rows[] = ['icon' => 'bi-person-badge-fill','label' => 'Giảng viên',      'value' => $stats['teachers'], 'color' => '#10b981'];
+    $rows[] = ['icon' => 'bi-people-fill',      'label' => 'Đang trực tuyến', 'value' => $stats['total'],    'color' => '#6366f1'];
+    $rows[] = ['icon' => 'bi-mortarboard-fill', 'label' => 'Sinh viên',        'value' => $stats['students'], 'color' => '#0ea5e9'];
+    $rows[] = ['icon' => 'bi-person-badge-fill','label' => 'Giảng viên',       'value' => $stats['teachers'], 'color' => '#10b981'];
 }
 
 // Số online để hiển thị trên nút toggle
@@ -239,7 +237,7 @@ $onlineCount = $stats['total'] ?? 0;
     </div>
     <div class="aw-foot">
         <span class="aw-dot-sm"></span>
-        Dữ liệu theo phiên đăng nhập
+        Phiên hoạt động trong 15 phút gần nhất
     </div>
 </div>
 

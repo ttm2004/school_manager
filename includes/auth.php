@@ -161,33 +161,33 @@ function logVisit($conn): void {
 }
 
 /**
- * Lấy thống kê truy cập theo phân quyền của user hiện tại
- * Trả về array với các key tùy role
+ * Lấy thống kê truy cập theo phân quyền của user hiện tại.
+ * Chỉ đếm session có last_seen trong vòng ONLINE_MINUTES phút gần nhất
+ * (= trình duyệt/thiết bị đang thực sự sử dụng hệ thống).
  */
 function getVisitStats($conn): array {
     if (!isLoggedIn()) return [];
 
-    $role      = $_SESSION['role'] ?? '';
-    $userId    = (int)$_SESSION['user_id'];
-    $today     = date('Y-m-d');
-    $thisMonth = date('Y-m');
-    $thisWeek  = date('Y-m-d', strtotime('monday this week'));
+    // Ngưỡng "đang online" — session active trong 15 phút gần nhất
+    $ONLINE_MINUTES = 15;
+    $onlineCond     = "last_seen >= NOW() - INTERVAL $ONLINE_MINUTES MINUTE";
 
-    // Hàm helper đếm
-    $count = function(string $where) use ($conn): int {
+    $role   = $_SESSION['role'] ?? '';
+    $userId = (int)$_SESSION['user_id'];
+
+    // Helper: đếm session online với điều kiện bổ sung
+    $count = function(string $extra = '') use ($conn, $onlineCond): int {
+        $where = $extra ? "$onlineCond AND ($extra)" : $onlineCond;
         $r = $conn->query("SELECT COUNT(*) c FROM visit_logs WHERE $where");
         return $r ? (int)$r->fetch_assoc()['c'] : 0;
     };
 
-    // Admin chung — xem tất cả
+    // ── Admin chung — xem tất cả role ──────────────────────
     if ($role === 'admin') {
         return [
-            'level'       => 'admin',
-            'total'       => $count('1=1'),
-            'today'       => $count("DATE(login_at)='$today'"),
-            'this_week'   => $count("DATE(login_at)>='$thisWeek'"),
-            'this_month'  => $count("DATE_FORMAT(login_at,'%Y-%m')='$thisMonth'"),
-            'by_role'     => [
+            'level'   => 'admin',
+            'total'   => $count(),
+            'by_role' => [
                 'admin'   => $count("role='admin'"),
                 'teacher' => $count("role='teacher'"),
                 'student' => $count("role='student'"),
@@ -196,55 +196,23 @@ function getVisitStats($conn): array {
         ];
     }
 
-    // Staff (nhân viên phòng ban) — xem SV + GV + staff cùng phòng
+    // ── Staff — xem tổng + SV + GV (không xem admin) ───────
     if ($role === 'staff') {
-        // Lấy department của user này
-        $deptRes = $conn->query("SELECT r.department FROM user_roles ur JOIN roles r ON ur.role_id=r.id WHERE ur.user_id=$userId LIMIT 1");
-        $dept = $deptRes ? ($deptRes->fetch_assoc()['department'] ?? '') : '';
-
-        // Staff cùng phòng ban
-        $staffInDept = $conn->query("
-            SELECT COUNT(DISTINCT vl.id) c FROM visit_logs vl
-            JOIN user_roles ur ON vl.user_id = ur.user_id
-            JOIN roles r ON ur.role_id = r.id
-            WHERE r.department = '" . $conn->real_escape_string($dept) . "'
-        ");
-        $staffCount = $staffInDept ? (int)$staffInDept->fetch_assoc()['c'] : 0;
-
         return [
-            'level'      => 'staff',
-            'department' => $dept,
-            'total'      => $count("role IN ('student','teacher','staff')"),
-            'today'      => $count("DATE(login_at)='$today' AND role IN ('student','teacher','staff')"),
-            'students'   => $count("role='student'"),
-            'teachers'   => $count("role='teacher'"),
-            'staff_dept' => $staffCount,
-        ];
-    }
-
-    // Teacher — chỉ xem tổng + SV + GV
-    if ($role === 'teacher') {
-        return [
-            'level'    => 'teacher',
-            'total'    => $count("role IN ('student','teacher')"),
-            'today'    => $count("DATE(login_at)='$today' AND role IN ('student','teacher')"),
+            'level'    => 'staff',
+            'total'    => $count("role IN ('student','teacher','staff')"),
             'students' => $count("role='student'"),
             'teachers' => $count("role='teacher'"),
         ];
     }
 
-    // Student — chỉ xem tổng + SV + GV
-    if ($role === 'student') {
-        return [
-            'level'    => 'student',
-            'total'    => $count("role IN ('student','teacher')"),
-            'today'    => $count("DATE(login_at)='$today' AND role IN ('student','teacher')"),
-            'students' => $count("role='student'"),
-            'teachers' => $count("role='teacher'"),
-        ];
-    }
-
-    return [];
+    // ── Teacher / Student — chỉ xem tổng + SV + GV ─────────
+    return [
+        'level'    => $role,
+        'total'    => $count("role IN ('student','teacher')"),
+        'students' => $count("role='student'"),
+        'teachers' => $count("role='teacher'"),
+    ];
 }
 function cacheUserRoles(): void {
     if (!isLoggedIn() || isset($_SESSION['_roles_cached'])) return;
