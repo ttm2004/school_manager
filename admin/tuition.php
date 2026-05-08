@@ -3,10 +3,28 @@ require_once '../config/database.php';
 require_once '../includes/auth.php';
 requireRole('admin');
 $pageTitle = 'Quản lý Học phí';
+// TUITION_V3
 
-// ── Tự động tạo bảng ─────────────────────────────────────────────────────────
+// ── Auto-create tables ────────────────────────────────────────────────────────
+$conn->query("CREATE TABLE IF NOT EXISTS `tuition_periods` (
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `semester_id` INT NOT NULL,
+    `title` VARCHAR(255) NOT NULL,
+    `open_date` DATE NOT NULL,
+    `due_date` DATE NOT NULL,
+    `status` ENUM('draft','published','closed') NOT NULL DEFAULT 'draft',
+    `note` TEXT NULL,
+    `created_by` INT NULL,
+    `published_at` TIMESTAMP NULL,
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY `uq_semester` (`semester_id`),
+    INDEX(`status`), INDEX(`due_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
 $conn->query("CREATE TABLE IF NOT EXISTS `tuition_invoices` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `period_id` INT NOT NULL,
     `student_id` INT NOT NULL,
     `semester_id` INT NOT NULL,
     `total_credits` INT NOT NULL DEFAULT 0,
@@ -15,15 +33,37 @@ $conn->query("CREATE TABLE IF NOT EXISTS `tuition_invoices` (
     `discount` DECIMAL(14,2) NOT NULL DEFAULT 0,
     `net_amount` DECIMAL(14,2) NOT NULL DEFAULT 0,
     `paid_amount` DECIMAL(14,2) NOT NULL DEFAULT 0,
-    `due_date` DATE NULL,
-    `status` ENUM('unpaid','partial','paid','overdue','waived') NOT NULL DEFAULT 'unpaid',
+    `status` ENUM('draft','unpaid','partial','paid','overdue','waived') NOT NULL DEFAULT 'draft',
     `note` TEXT NULL,
     `created_by` INT NULL,
     `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY `uq_ss` (`student_id`,`semester_id`),
-    INDEX(`semester_id`), INDEX(`status`), INDEX(`due_date`)
+    UNIQUE KEY `uq_ps` (`period_id`,`student_id`),
+    INDEX(`semester_id`), INDEX(`student_id`), INDEX(`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+// ── Migrate bảng cũ nếu thiếu cột ───────────────────────────────────────────
+// Thêm period_id nếu chưa có (schema cũ không có cột này)
+$chkCol = $conn->query("SHOW COLUMNS FROM `tuition_invoices` LIKE 'period_id'");
+if ($chkCol && $chkCol->num_rows === 0) {
+    $conn->query("ALTER TABLE `tuition_invoices`
+        ADD COLUMN `period_id` INT NOT NULL DEFAULT 0 AFTER `id`,
+        ADD COLUMN `status_new` ENUM('draft','unpaid','partial','paid','overdue','waived') NOT NULL DEFAULT 'draft'");
+    // Đổi tên cột status cũ nếu cần (bỏ qua nếu đã có enum đúng)
+    $conn->query("ALTER TABLE `tuition_invoices` MODIFY COLUMN `status`
+        ENUM('draft','unpaid','partial','paid','overdue','waived') NOT NULL DEFAULT 'draft'");
+    $conn->query("ALTER TABLE `tuition_invoices` DROP COLUMN IF EXISTS `status_new`");
+    // Xóa UNIQUE KEY cũ nếu có
+    $conn->query("ALTER TABLE `tuition_invoices` DROP INDEX IF EXISTS `uq_student_semester`");
+    // Xóa dữ liệu cũ không có period_id (không thể dùng được)
+    $conn->query("DELETE FROM `tuition_invoices` WHERE period_id = 0");
+    $conn->query("DELETE FROM `tuition_payments` WHERE invoice_id NOT IN (SELECT id FROM tuition_invoices)");
+}
+// Thêm UNIQUE KEY mới nếu chưa có
+$chkIdx = $conn->query("SHOW INDEX FROM `tuition_invoices` WHERE Key_name='uq_ps'");
+if ($chkIdx && $chkIdx->num_rows === 0) {
+    $conn->query("ALTER TABLE `tuition_invoices` ADD UNIQUE KEY `uq_ps` (`period_id`,`student_id`)");
+}
 
 $conn->query("CREATE TABLE IF NOT EXISTS `tuition_payments` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
@@ -37,205 +77,306 @@ $conn->query("CREATE TABLE IF NOT EXISTS `tuition_payments` (
     INDEX(`invoice_id`), INDEX(`paid_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
-// ── AJAX: lịch sử thanh toán ──────────────────────────────────────────────────
-if (isset($_GET['action']) && $_GET['action'] === 'view_payments') {
+// ── AJAX ──────────────────────────────────────────────────────────────────────
+if (isset($_GET['ajax'])) {
     header('Content-Type: application/json; charset=utf-8');
-    $iid = intval($_GET['invoice_id'] ?? 0);
-    $pays = [];
-    if ($iid) {
-        $r = $conn->prepare("SELECT tp.*, u.full_name AS paid_by_name
-            FROM tuition_payments tp LEFT JOIN users u ON tp.paid_by=u.id
-            WHERE tp.invoice_id=? ORDER BY tp.paid_at DESC");
-        $r->bind_param('i', $iid); $r->execute();
-        $res = $r->get_result();
-        while ($row = $res->fetch_assoc()) $pays[] = $row;
-        $r->close();
+    $ajaxAction = $_GET['ajax'];
+
+    if ($ajaxAction === 'view_payments') {
+        $iid = intval($_GET['invoice_id'] ?? 0);
+        $pays = [];
+        if ($iid) {
+            $r = $conn->prepare("SELECT tp.*, u.full_name AS paid_by_name
+                FROM tuition_payments tp LEFT JOIN users u ON tp.paid_by=u.id
+                WHERE tp.invoice_id=? ORDER BY tp.paid_at DESC");
+            $r->bind_param('i', $iid); $r->execute();
+            $res = $r->get_result();
+            while ($row = $res->fetch_assoc()) $pays[] = $row;
+            $r->close();
+        }
+        echo json_encode(['payments' => $pays]); exit();
     }
-    echo json_encode(['payments' => $pays]); exit();
+
+    if ($ajaxAction === 'preview_invoices') {
+        $pid = intval($_GET['period_id'] ?? 0);
+        if (!$pid) { echo json_encode(['error' => 'Thiếu period_id']); exit(); }
+        $period = $conn->query("SELECT * FROM tuition_periods WHERE id=$pid")->fetch_assoc();
+        if (!$period) { echo json_encode(['error' => 'Không tìm thấy đợt thu']); exit(); }
+        $semId = (int)$period['semester_id'];
+        $res = $conn->query("
+            SELECT ss.student_id, u.full_name, st.student_code,
+                SUM(sub.credits) AS total_credits,
+                m.tuition_per_credit AS unit_price,
+                SUM(sub.credits) * m.tuition_per_credit AS gross_amount
+            FROM student_subjects ss
+            JOIN course_sections cs ON ss.course_section_id=cs.id
+            JOIN subjects sub ON cs.subject_id=sub.id
+            JOIN students st ON ss.student_id=st.id
+            JOIN users u ON st.user_id=u.id
+            JOIN classes cl ON st.class_id=cl.id
+            JOIN majors m ON cl.major_id=m.id
+            WHERE cs.semester_id=$semId AND ss.status!='cancelled'
+            GROUP BY ss.student_id, m.tuition_per_credit
+            ORDER BY u.full_name
+        ");
+        $rows = [];
+        if ($res) while ($r = $res->fetch_assoc()) $rows[] = $r;
+        echo json_encode(['students' => $rows, 'count' => count($rows)]); exit();
+    }
+
+    echo json_encode(['error' => 'Unknown action']); exit();
 }
 
 // ── POST ──────────────────────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
+    $aid = (int)($_SESSION['user_id'] ?? 0);
 
-    if ($action === 'generate_invoices') {
-        $sem_id   = intval($_POST['semester_id'] ?? 0);
-        $due_date = trim($_POST['due_date'] ?? '');
-        $created = $skipped = 0;
-        if ($sem_id) {
-            $stmt = $conn->prepare("
-                SELECT ss.student_id,
-                    SUM(sub.credits) AS total_credits,
-                    m.tuition_per_credit AS unit_price
-                FROM student_subjects ss
-                JOIN course_sections cs ON ss.course_section_id=cs.id
-                JOIN subjects sub ON cs.subject_id=sub.id
-                JOIN students st ON ss.student_id=st.id
-                JOIN classes cl ON st.class_id=cl.id
-                JOIN majors m ON cl.major_id=m.id
-                WHERE cs.semester_id=? AND ss.status!='cancelled'
-                GROUP BY ss.student_id, m.tuition_per_credit");
-            $stmt->bind_param('i', $sem_id); $stmt->execute();
-            $rows = $stmt->get_result(); $stmt->close();
-            $aid = (int)($_SESSION['user_id'] ?? 0);
-            while ($row = $rows->fetch_assoc()) {
-                $sid = (int)$row['student_id'];
-                $tc  = (int)$row['total_credits'];
-                $up  = (float)$row['unit_price'];
-                $gross = $tc * $up;
-                $chk = $conn->prepare("SELECT id FROM tuition_invoices WHERE student_id=? AND semester_id=?");
-                $chk->bind_param('ii', $sid, $sem_id); $chk->execute();
-                if ($chk->get_result()->num_rows > 0) { $chk->close(); $skipped++; continue; }
-                $chk->close();
-                $due = $due_date ?: null;
-                $ins = $conn->prepare("INSERT INTO tuition_invoices
-                    (student_id,semester_id,total_credits,unit_price,gross_amount,discount,net_amount,paid_amount,due_date,status,created_by)
-                    VALUES (?,?,?,?,?,0,?,0,?,'unpaid',?)");
-                $ins->bind_param('iiidddsi', $sid, $sem_id, $tc, $up, $gross, $gross, $due, $aid);
-                if ($ins->execute()) $created++;
+    // 1. Tạo đợt thu học phí (draft)
+    if ($action === 'create_period') {
+        $semId    = intval($_POST['semester_id'] ?? 0);
+        $title    = trim($_POST['title'] ?? '');
+        $openDate = trim($_POST['open_date'] ?? '');
+        $dueDate  = trim($_POST['due_date'] ?? '');
+        $note     = trim($_POST['note'] ?? '');
+        if (!$semId || !$title || !$openDate || !$dueDate) {
+            $_SESSION['_flash'] = ['type'=>'danger','message'=>'Vui lòng điền đầy đủ thông tin.'];
+        } else {
+            $chk = $conn->query("SELECT id FROM tuition_periods WHERE semester_id=$semId");
+            if ($chk && $chk->num_rows > 0) {
+                $_SESSION['_flash'] = ['type'=>'danger','message'=>'Học kỳ này đã có đợt thu học phí.'];
+            } else {
+                $ins = $conn->prepare("INSERT INTO tuition_periods (semester_id,title,open_date,due_date,note,created_by) VALUES (?,?,?,?,?,?)");
+                $ins->bind_param('issssi', $semId, $title, $openDate, $dueDate, $note, $aid);
+                if ($ins->execute()) {
+                    $pid = $conn->insert_id;
+                    // Tự động tạo hóa đơn draft
+                    $res = $conn->query("
+                        SELECT ss.student_id, SUM(sub.credits) AS tc, m.tuition_per_credit AS up
+                        FROM student_subjects ss
+                        JOIN course_sections cs ON ss.course_section_id=cs.id
+                        JOIN subjects sub ON cs.subject_id=sub.id
+                        JOIN students st ON ss.student_id=st.id
+                        JOIN classes cl ON st.class_id=cl.id
+                        JOIN majors m ON cl.major_id=m.id
+                        WHERE cs.semester_id=$semId AND ss.status!='cancelled'
+                        GROUP BY ss.student_id, m.tuition_per_credit");
+                    $created = 0;
+                    if ($res) while ($row = $res->fetch_assoc()) {
+                        $sid = (int)$row['student_id'];
+                        $tc  = (int)$row['tc'];
+                        $up  = (float)$row['up'];
+                        $gross = $tc * $up;
+                        $ins2 = $conn->prepare("INSERT IGNORE INTO tuition_invoices (period_id,student_id,semester_id,total_credits,unit_price,gross_amount,discount,net_amount,paid_amount,status,created_by) VALUES (?,?,?,?,?,?,0,?,0,'draft',?)");
+                        $ins2->bind_param('iiiidddi', $pid, $sid, $semId, $tc, $up, $gross, $gross, $aid);
+                        if ($ins2->execute()) $created++;
+                        $ins2->close();
+                    }
+                    $_SESSION['_flash'] = ['type'=>'success','message'=>"Tạo đợt thu thành công! Đã tạo $created hóa đơn nháp. Xem xét và xác nhận công bố."];
+                } else {
+                    $_SESSION['_flash'] = ['type'=>'danger','message'=>'Lỗi: '.$conn->error];
+                }
                 $ins->close();
             }
-            $_SESSION['_flash'] = ['type'=>'success','message'=>"Đã tạo $created hóa đơn. Bỏ qua $skipped (đã tồn tại)."];
-        } else {
-            $_SESSION['_flash'] = ['type'=>'danger','message'=>'Vui lòng chọn học kỳ.'];
         }
-        header('Location: tuition.php' . ($sem_id ? "?semester_id=$sem_id" : '')); exit();
+        header('Location: tuition.php'); exit();
     }
 
+    // 2. Cập nhật đợt thu
+    if ($action === 'update_period') {
+        $pid      = intval($_POST['period_id'] ?? 0);
+        $title    = trim($_POST['title'] ?? '');
+        $openDate = trim($_POST['open_date'] ?? '');
+        $dueDate  = trim($_POST['due_date'] ?? '');
+        $note     = trim($_POST['note'] ?? '');
+        if ($pid && $title && $openDate && $dueDate) {
+            $upd = $conn->prepare("UPDATE tuition_periods SET title=?,open_date=?,due_date=?,note=?,updated_at=NOW() WHERE id=? AND status='draft'");
+            $upd->bind_param('ssssi', $title, $openDate, $dueDate, $note, $pid);
+            $upd->execute(); $upd->close();
+            $_SESSION['_flash'] = ['type'=>'success','message'=>'Cập nhật đợt thu thành công!'];
+        }
+        header('Location: tuition.php?period_id='.$pid); exit();
+    }
+
+    // 3. Tái tạo hóa đơn (khi SV đăng ký thêm môn sau khi tạo đợt)
+    if ($action === 'regenerate_invoices') {
+        $pid = intval($_POST['period_id'] ?? 0);
+        if ($pid) {
+            $period = $conn->query("SELECT * FROM tuition_periods WHERE id=$pid AND status='draft'")->fetch_assoc();
+            if ($period) {
+                $semId = (int)$period['semester_id'];
+                $res = $conn->query("
+                    SELECT ss.student_id, SUM(sub.credits) AS tc, m.tuition_per_credit AS up
+                    FROM student_subjects ss
+                    JOIN course_sections cs ON ss.course_section_id=cs.id
+                    JOIN subjects sub ON cs.subject_id=sub.id
+                    JOIN students st ON ss.student_id=st.id
+                    JOIN classes cl ON st.class_id=cl.id
+                    JOIN majors m ON cl.major_id=m.id
+                    WHERE cs.semester_id=$semId AND ss.status!='cancelled'
+                    GROUP BY ss.student_id, m.tuition_per_credit");
+                $updated = $created = 0;
+                if ($res) while ($row = $res->fetch_assoc()) {
+                    $sid = (int)$row['student_id'];
+                    $tc  = (int)$row['tc'];
+                    $up  = (float)$row['up'];
+                    $gross = $tc * $up;
+                    $chk = $conn->query("SELECT id FROM tuition_invoices WHERE period_id=$pid AND student_id=$sid");
+                    if ($chk && $chk->num_rows > 0) {
+                        $conn->query("UPDATE tuition_invoices SET total_credits=$tc,unit_price=$up,gross_amount=$gross,net_amount=$gross,updated_at=NOW() WHERE period_id=$pid AND student_id=$sid AND status='draft'");
+                        $updated++;
+                    } else {
+                        $ins2 = $conn->prepare("INSERT INTO tuition_invoices (period_id,student_id,semester_id,total_credits,unit_price,gross_amount,discount,net_amount,paid_amount,status,created_by) VALUES (?,?,?,?,?,?,0,?,0,'draft',?)");
+                        $ins2->bind_param('iiiidddi', $pid, $sid, $semId, $tc, $up, $gross, $gross, $aid);
+                        if ($ins2->execute()) $created++;
+                        $ins2->close();
+                    }
+                }
+                $_SESSION['_flash'] = ['type'=>'success','message'=>"Đã cập nhật $updated, tạo mới $created hóa đơn nháp."];
+            }
+        }
+        header('Location: tuition.php?period_id='.$pid); exit();
+    }
+
+    // 4. Xác nhận công bố đợt thu
+    if ($action === 'publish_period') {
+        $pid = intval($_POST['period_id'] ?? 0);
+        if ($pid) {
+            $conn->query("UPDATE tuition_periods SET status='published',published_at=NOW(),updated_at=NOW() WHERE id=$pid AND status='draft'");
+            // Chuyển tất cả hóa đơn draft → unpaid
+            $conn->query("UPDATE tuition_invoices SET status='unpaid',updated_at=NOW() WHERE period_id=$pid AND status='draft'");
+            $_SESSION['_flash'] = ['type'=>'success','message'=>'Đã công bố đợt thu học phí! Sinh viên có thể xem hóa đơn.'];
+        }
+        header('Location: tuition.php?period_id='.$pid); exit();
+    }
+
+    // 5. Đóng đợt thu
+    if ($action === 'close_period') {
+        $pid = intval($_POST['period_id'] ?? 0);
+        if ($pid) {
+            $conn->query("UPDATE tuition_periods SET status='closed',updated_at=NOW() WHERE id=$pid");
+            // Đánh dấu quá hạn
+            $conn->query("UPDATE tuition_invoices SET status='overdue',updated_at=NOW() WHERE period_id=$pid AND status IN ('unpaid','partial')");
+            $_SESSION['_flash'] = ['type'=>'success','message'=>'Đã đóng đợt thu. Hóa đơn chưa đóng được đánh dấu quá hạn.'];
+        }
+        header('Location: tuition.php?period_id='.$pid); exit();
+    }
+
+    // 6. Ghi nhận thanh toán
     if ($action === 'record_payment') {
         $iid    = intval($_POST['invoice_id'] ?? 0);
         $amount = floatval($_POST['amount'] ?? 0);
         $method = trim($_POST['method'] ?? 'cash');
         $ref    = trim($_POST['reference'] ?? '');
         $note   = trim($_POST['note'] ?? '');
-        $aid    = (int)($_SESSION['user_id'] ?? 0);
+        $pid    = intval($_POST['period_id'] ?? 0);
         if ($iid && $amount > 0) {
-            $inv = $conn->prepare("SELECT * FROM tuition_invoices WHERE id=?");
-            $inv->bind_param('i', $iid); $inv->execute();
-            $invoice = $inv->get_result()->fetch_assoc(); $inv->close();
-            if ($invoice) {
+            $inv = $conn->query("SELECT * FROM tuition_invoices WHERE id=$iid")->fetch_assoc();
+            if ($inv) {
                 $pay = $conn->prepare("INSERT INTO tuition_payments (invoice_id,amount,method,reference,note,paid_by) VALUES (?,?,?,?,?,?)");
                 $pay->bind_param('idsssi', $iid, $amount, $method, $ref, $note, $aid);
                 $pay->execute(); $pay->close();
-                $new_paid = $invoice['paid_amount'] + $amount;
-                $net = $invoice['net_amount'];
-                $st = $invoice['status'] === 'waived' ? 'waived' : ($new_paid >= $net ? 'paid' : ($new_paid > 0 ? 'partial' : 'unpaid'));
-                $upd = $conn->prepare("UPDATE tuition_invoices SET paid_amount=?,status=?,updated_at=NOW() WHERE id=?");
-                $upd->bind_param('dsi', $new_paid, $st, $iid); $upd->execute(); $upd->close();
+                $newPaid = $inv['paid_amount'] + $amount;
+                $net = $inv['net_amount'];
+                $st = $inv['status']==='waived' ? 'waived' : ($newPaid>=$net ? 'paid' : ($newPaid>0 ? 'partial' : 'unpaid'));
+                $conn->query("UPDATE tuition_invoices SET paid_amount=$newPaid,status='$st',updated_at=NOW() WHERE id=$iid");
                 $_SESSION['_flash'] = ['type'=>'success','message'=>'Ghi nhận thanh toán thành công!'];
-            } else { $_SESSION['_flash'] = ['type'=>'danger','message'=>'Không tìm thấy hóa đơn.']; }
-        } else { $_SESSION['_flash'] = ['type'=>'danger','message'=>'Số tiền không hợp lệ.']; }
-        $qs = http_build_query(array_filter(['semester_id'=>$_GET['semester_id']??'','status'=>$_GET['status']??'','search'=>$_GET['search']??'']));
-        header('Location: tuition.php' . ($qs ? "?$qs" : '')); exit();
+            }
+        }
+        header('Location: tuition.php?period_id='.$pid); exit();
     }
 
+    // 7. Cập nhật miễn giảm
     if ($action === 'update_discount') {
         $iid      = intval($_POST['invoice_id'] ?? 0);
         $discount = floatval($_POST['discount'] ?? 0);
         $note     = trim($_POST['note'] ?? '');
+        $pid      = intval($_POST['period_id'] ?? 0);
         if ($iid) {
-            $inv = $conn->prepare("SELECT gross_amount,paid_amount,status FROM tuition_invoices WHERE id=?");
-            $inv->bind_param('i', $iid); $inv->execute();
-            $invoice = $inv->get_result()->fetch_assoc(); $inv->close();
-            if ($invoice) {
-                $net = max(0, $invoice['gross_amount'] - $discount);
-                $st  = $invoice['status'] === 'waived' ? 'waived' : ($invoice['paid_amount'] >= $net && $net > 0 ? 'paid' : ($invoice['paid_amount'] > 0 ? 'partial' : 'unpaid'));
+            $inv = $conn->query("SELECT gross_amount,paid_amount,status FROM tuition_invoices WHERE id=$iid")->fetch_assoc();
+            if ($inv) {
+                $net = max(0, $inv['gross_amount'] - $discount);
+                $st  = $inv['status']==='waived' ? 'waived' : ($inv['paid_amount']>=$net&&$net>0 ? 'paid' : ($inv['paid_amount']>0 ? 'partial' : ($inv['status']==='draft'?'draft':'unpaid')));
                 $upd = $conn->prepare("UPDATE tuition_invoices SET discount=?,net_amount=?,note=?,status=?,updated_at=NOW() WHERE id=?");
-                $upd->bind_param('ddssi', $discount, $net, $note, $st, $iid); $upd->execute(); $upd->close();
+                $upd->bind_param('ddssi', $discount, $net, $note, $st, $iid);
+                $upd->execute(); $upd->close();
                 $_SESSION['_flash'] = ['type'=>'success','message'=>'Cập nhật miễn giảm thành công!'];
             }
         }
-        $qs = http_build_query(array_filter(['semester_id'=>$_GET['semester_id']??'','status'=>$_GET['status']??'','search'=>$_GET['search']??'']));
-        header('Location: tuition.php' . ($qs ? "?$qs" : '')); exit();
+        header('Location: tuition.php?period_id='.$pid); exit();
     }
 
-    if ($action === 'update_due_date') {
-        $iid = intval($_POST['invoice_id'] ?? 0);
-        $due = trim($_POST['due_date'] ?? '');
-        if ($iid) {
-            $upd = $conn->prepare("UPDATE tuition_invoices SET due_date=?,updated_at=NOW() WHERE id=?");
-            $upd->bind_param('si', $due, $iid); $upd->execute(); $upd->close();
-            $_SESSION['_flash'] = ['type'=>'success','message'=>'Cập nhật hạn đóng thành công!'];
-        }
-        $qs = http_build_query(array_filter(['semester_id'=>$_GET['semester_id']??'','status'=>$_GET['status']??'','search'=>$_GET['search']??'']));
-        header('Location: tuition.php' . ($qs ? "?$qs" : '')); exit();
-    }
-
+    // 8. Đánh dấu quá hạn thủ công
     if ($action === 'mark_overdue') {
-        $conn->query("UPDATE tuition_invoices SET status='overdue',updated_at=NOW() WHERE status IN ('unpaid','partial') AND due_date IS NOT NULL AND due_date < CURDATE()");
+        $pid = intval($_POST['period_id'] ?? 0);
+        $conn->query("UPDATE tuition_invoices SET status='overdue',updated_at=NOW()
+            WHERE period_id=$pid AND status IN ('unpaid','partial')");
         $n = $conn->affected_rows;
         $_SESSION['_flash'] = ['type'=>'success','message'=>"Đã đánh dấu $n hóa đơn quá hạn."];
-        $qs = http_build_query(array_filter(['semester_id'=>$_GET['semester_id']??'','status'=>$_GET['status']??'','search'=>$_GET['search']??'']));
-        header('Location: tuition.php' . ($qs ? "?$qs" : '')); exit();
+        header('Location: tuition.php?period_id='.$pid); exit();
     }
 }
 
-// ── FILTERS ───────────────────────────────────────────────────────────────────
-$filter_sem    = intval($_GET['semester_id'] ?? 0);
-$filter_status = trim($_GET['status'] ?? '');
-$search        = trim($_GET['search'] ?? '');
-$perPage       = 20;
-$page          = max(1, intval($_GET['page'] ?? 1));
-$offset        = ($page - 1) * $perPage;
-
+// ── LOAD DATA ─────────────────────────────────────────────────────────────────
 $semesters = $conn->query("SELECT * FROM semesters ORDER BY school_year DESC, semester_name DESC");
+$periods   = $conn->query("SELECT tp.*, sm.semester_name, sm.school_year,
+    (SELECT COUNT(*) FROM tuition_invoices WHERE period_id=tp.id) AS invoice_count,
+    (SELECT COUNT(*) FROM tuition_invoices WHERE period_id=tp.id AND status='paid') AS paid_count,
+    (SELECT COALESCE(SUM(net_amount),0) FROM tuition_invoices WHERE period_id=tp.id AND status!='draft') AS sum_net,
+    (SELECT COALESCE(SUM(paid_amount),0) FROM tuition_invoices WHERE period_id=tp.id) AS sum_paid
+    FROM tuition_periods tp
+    JOIN semesters sm ON tp.semester_id=sm.id
+    ORDER BY tp.created_at DESC");
 
-// ── STATS ─────────────────────────────────────────────────────────────────────
-$_sw = $filter_sem ? "WHERE semester_id=$filter_sem" : '';
-$_sr = $conn->query("SELECT COUNT(*) total_invoices,
-    COALESCE(SUM(status='paid'),0) total_paid,
-    COALESCE(SUM(status='unpaid'),0) total_unpaid,
-    COALESCE(SUM(status='partial'),0) total_partial,
-    COALESCE(SUM(status='overdue'),0) total_overdue,
-    COALESCE(SUM(status='waived'),0) total_waived,
-    COALESCE(SUM(net_amount),0) sum_net,
-    COALESCE(SUM(paid_amount),0) sum_paid,
-    COALESCE(SUM(net_amount-paid_amount),0) sum_remaining
-    FROM tuition_invoices $_sw");
-$_tuitionStats = array_merge(
-    ['total_invoices'=>0,'total_paid'=>0,'total_unpaid'=>0,'total_partial'=>0,'total_overdue'=>0,'total_waived'=>0,'sum_net'=>0,'sum_paid'=>0,'sum_remaining'=>0],
-    ($_sr instanceof mysqli_result ? ($_sr->fetch_assoc() ?? []) : [])
-);
+// Đợt thu đang xem
+$currentPeriodId = intval($_GET['period_id'] ?? 0);
+$currentPeriod   = null;
+$invoices        = null;
+$periodStats     = [];
 
-// ── INVOICE LIST ──────────────────────────────────────────────────────────────
-$conds = []; $params = []; $types = '';
-if ($filter_sem)    { $conds[] = 'ti.semester_id=?'; $params[] = $filter_sem;    $types .= 'i'; }
-if ($filter_status) { $conds[] = 'ti.status=?';      $params[] = $filter_status; $types .= 's'; }
-if ($search) {
-    $like = "%$search%";
-    $conds[] = '(u.full_name LIKE ? OR st.student_code LIKE ? OR u.email LIKE ?)';
-    $params[] = $like; $params[] = $like; $params[] = $like; $types .= 'sss';
-}
-$where = $conds ? 'WHERE '.implode(' AND ',$conds) : '';
-$base  = "FROM tuition_invoices ti
-    JOIN students st ON ti.student_id=st.id
-    JOIN users u ON st.user_id=u.id
-    JOIN semesters sm ON ti.semester_id=sm.id
-    LEFT JOIN classes cl ON st.class_id=cl.id
-    LEFT JOIN majors m ON cl.major_id=m.id
-    $where";
+if ($currentPeriodId) {
+    $currentPeriod = $conn->query("SELECT tp.*, sm.semester_name, sm.school_year
+        FROM tuition_periods tp JOIN semesters sm ON tp.semester_id=sm.id
+        WHERE tp.id=$currentPeriodId")->fetch_assoc();
 
-$total = 0;
-$cs = $conn->prepare("SELECT COUNT(*) c $base");
-if ($cs) {
-    if ($types) $cs->bind_param($types, ...$params);
-    $cs->execute(); $total = (int)($cs->get_result()->fetch_assoc()['c'] ?? 0); $cs->close();
-}
-$totalPages = max(1, (int)ceil($total / $perPage));
+    if ($currentPeriod) {
+        // Stats
+        $sr = $conn->query("SELECT
+            COUNT(*) total, COALESCE(SUM(status='draft'),0) draft,
+            COALESCE(SUM(status='unpaid'),0) unpaid, COALESCE(SUM(status='partial'),0) partial,
+            COALESCE(SUM(status='paid'),0) paid, COALESCE(SUM(status='overdue'),0) overdue,
+            COALESCE(SUM(status='waived'),0) waived,
+            COALESCE(SUM(net_amount),0) sum_net, COALESCE(SUM(paid_amount),0) sum_paid,
+            COALESCE(SUM(net_amount-paid_amount),0) sum_remaining
+            FROM tuition_invoices WHERE period_id=$currentPeriodId");
+        $periodStats = $sr ? ($sr->fetch_assoc() ?? []) : [];
 
-$invoices = null;
-$ds = $conn->prepare("SELECT ti.*,u.full_name,u.email,st.student_code,sm.semester_name,sm.school_year,cl.class_name,m.major_name $base ORDER BY sm.school_year DESC,sm.semester_name DESC,u.full_name LIMIT ? OFFSET ?");
-if ($ds) {
-    $dp = $params; $dt = $types.'ii'; $dp[] = $perPage; $dp[] = $offset;
-    $ds->bind_param($dt, ...$dp); $ds->execute(); $invoices = $ds->get_result(); $ds->close();
+        // Filter
+        $fStatus = trim($_GET['status'] ?? '');
+        $fSearch = trim($_GET['q'] ?? '');
+        $perPage = 25; $page = max(1,intval($_GET['page']??1)); $offset = ($page-1)*$perPage;
+        $conds = ["ti.period_id=$currentPeriodId"];
+        if ($fStatus) $conds[] = "ti.status='".addslashes($fStatus)."'";
+        if ($fSearch) {
+            $like = addslashes($fSearch);
+            $conds[] = "(u.full_name LIKE '%$like%' OR st.student_code LIKE '%$like%')";
+        }
+        $where = 'WHERE '.implode(' AND ',$conds);
+        $total = (int)($conn->query("SELECT COUNT(*) c FROM tuition_invoices ti JOIN students st ON ti.student_id=st.id JOIN users u ON st.user_id=u.id $where")->fetch_assoc()['c'] ?? 0);
+        $totalPages = max(1,(int)ceil($total/$perPage));
+        $invoices = $conn->query("SELECT ti.*,u.full_name,st.student_code,cl.class_name,m.major_name
+            FROM tuition_invoices ti
+            JOIN students st ON ti.student_id=st.id
+            JOIN users u ON st.user_id=u.id
+            LEFT JOIN classes cl ON st.class_id=cl.id
+            LEFT JOIN majors m ON cl.major_id=m.id
+            $where ORDER BY u.full_name LIMIT $perPage OFFSET $offset");
+    }
 }
 
 if (!function_exists('fmtVND')) { function fmtVND($n) { return number_format(floatval($n),0,',','.') . ' ₫'; } }
-function tBadge($s) {
-    $m = ['unpaid'=>['warning','Chưa đóng'],'partial'=>['info','Đóng một phần'],'paid'=>['success','Đã đóng'],'overdue'=>['danger','Quá hạn'],'waived'=>['secondary','Miễn học phí']];
-    $v = $m[$s] ?? ['secondary',$s];
-    return '<span class="badge bg-'.$v[0].'">'.$v[1].'</span>';
-}
+$statusLabels = ['draft'=>['secondary','Nháp'],'unpaid'=>['warning','Chưa đóng'],'partial'=>['info','Đóng một phần'],'paid'=>['success','Đã đóng'],'overdue'=>['danger','Quá hạn'],'waived'=>['secondary','Miễn']];
+$periodStatusLabels = ['draft'=>['secondary','Nháp — chưa công bố'],'published'=>['success','Đã công bố'],'closed'=>['dark','Đã đóng']];
 
 include 'includes/header.php';
 include 'includes/sidebar.php';
@@ -246,15 +387,7 @@ include 'includes/sidebar.php';
         <button class="btn btn-sm btn-outline-secondary d-lg-none" id="sidebarToggle"><i class="bi bi-list fs-5"></i></button>
         <span class="admin-topbar-title"><i class="bi bi-cash-coin me-2 text-gold"></i>Quản lý Học phí</span>
     </div>
-    <div class="d-flex gap-2 align-items-center">
-        <form method="POST" class="d-inline">
-            <input type="hidden" name="action" value="mark_overdue">
-            <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Đánh dấu tất cả hóa đơn quá hạn?')">
-                <i class="bi bi-exclamation-triangle-fill me-1"></i>Đánh dấu quá hạn
-            </button>
-        </form>
-        <span class="text-muted small"><?php echo htmlspecialchars($_SESSION['full_name'] ?? ''); ?></span>
-    </div>
+    <span class="text-muted small"><?php echo htmlspecialchars($_SESSION['full_name']??''); ?></span>
 </div>
 <div class="admin-content">
 
@@ -265,142 +398,197 @@ include 'includes/sidebar.php';
     <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
 </div>
 <?php endif; ?>
-
-<!-- STATS -->
-<div class="row g-3 mb-4">
-    <?php
-    $statCards = [
-        ['bi-receipt','text-navy','var(--navy)','Tổng hóa đơn', number_format($_tuitionStats['total_invoices'])],
-        ['bi-check-circle-fill','text-success','#28a745','Đã đóng', number_format($_tuitionStats['total_paid'])],
-        ['bi-hourglass-split','text-warning','#ffc107','Chưa đóng', number_format($_tuitionStats['total_unpaid'])],
-        ['bi-exclamation-triangle-fill','text-danger','#dc3545','Quá hạn', number_format($_tuitionStats['total_overdue'])],
-        ['bi-cash-stack','text-gold','var(--gold)','Đã thu', fmtVND($_tuitionStats['sum_paid'])],
-        ['bi-wallet2','','#6f42c1','Còn lại', fmtVND($_tuitionStats['sum_remaining'])],
-    ];
-    foreach ($statCards as [$icon,$cls,$color,$lbl,$val]): ?>
-    <div class="col-6 col-md-4 col-xl-2">
-        <div class="card h-100 border-0 shadow-sm" style="border-left:4px solid <?php echo $color; ?> !important;">
-            <div class="card-body py-3 px-3">
-                <div class="d-flex align-items-center gap-2 mb-1">
-                    <i class="bi <?php echo $icon; ?> fs-4 <?php echo $cls; ?>" style="<?php echo $cls?'':'color:'.$color; ?>"></i>
-                    <span class="text-muted small"><?php echo $lbl; ?></span>
+<div class="row g-4">
+<!-- LEFT: Danh sach dot thu -->
+<div class="col-lg-4">
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-calendar-range me-2"></i>Đợt thu học phí</span>
+        <button class="btn btn-gold btn-sm" data-bs-toggle="modal" data-bs-target="#createPeriodModal">
+            <i class="bi bi-plus-lg me-1"></i>Tạo đợt thu
+        </button>
+    </div>
+    <div class="card-body p-0">
+        <?php if ($periods && $periods->num_rows > 0): while ($p = $periods->fetch_assoc()):
+            $psl = $periodStatusLabels[$p['status']] ?? ['secondary',$p['status']];
+            $isActive = $currentPeriodId == $p['id'];
+        ?>
+        <a href="tuition.php?period_id=<?php echo $p['id']; ?>"
+           class="d-block p-3 border-bottom text-decoration-none <?php echo $isActive?'bg-navy text-white':''; ?>"
+           style="transition:background .15s;">
+            <div class="d-flex justify-content-between align-items-start">
+                <div>
+                    <div class="fw-bold <?php echo $isActive?'text-white':'text-navy'; ?>" style="font-size:.88rem;">
+                        <?php echo htmlspecialchars($p['title']); ?>
+                    </div>
+                    <div class="<?php echo $isActive?'text-white-50':'text-muted'; ?>" style="font-size:.75rem;">
+                        <?php echo htmlspecialchars($p['semester_name'].' '.$p['school_year']); ?>
+                        &bull; Hạn: <?php echo date('d/m/Y',strtotime($p['due_date'])); ?>
+                    </div>
                 </div>
-                <div class="fw-bold" style="font-size:1.1rem;<?php echo $cls?'':'color:'.$color; ?>"><?php echo $val; ?></div>
+                <span class="badge bg-<?php echo $psl[0]; ?> ms-2 flex-shrink-0"><?php echo $psl[1]; ?></span>
+            </div>
+            <?php if ($p['invoice_count'] > 0): ?>
+            <div class="mt-1 d-flex gap-2 flex-wrap" style="font-size:.72rem;">
+                <span class="<?php echo $isActive?'text-white-50':'text-muted'; ?>">
+                    <?php echo $p['invoice_count']; ?> HĐ &bull;
+                    <?php echo $p['paid_count']; ?> đã đóng
+                </span>
+            </div>
+            <?php endif; ?>
+        </a>
+        <?php endwhile; else: ?>
+        <div class="text-center text-muted py-4 small">Chưa có đợt thu nào</div>
+        <?php endif; ?>
+    </div>
+</div>
+</div>
+
+<!-- RIGHT: Chi tiet dot thu -->
+<div class="col-lg-8">
+<?php if ($currentPeriod): ?>
+
+<!-- Period header -->
+<?php $psl = $periodStatusLabels[$currentPeriod['status']] ?? ['secondary',$currentPeriod['status']]; ?>
+<div class="card mb-3">
+    <div class="card-body">
+        <div class="d-flex align-items-start justify-content-between flex-wrap gap-2">
+            <div>
+                <h5 class="fw-bold text-navy mb-1"><?php echo htmlspecialchars($currentPeriod['title']); ?></h5>
+                <div class="text-muted small">
+                    Học kỳ: <strong><?php echo htmlspecialchars($currentPeriod['semester_name'].' '.$currentPeriod['school_year']); ?></strong>
+                    &bull; Mở: <strong><?php echo date('d/m/Y',strtotime($currentPeriod['open_date'])); ?></strong>
+                    &bull; Hạn: <strong><?php echo date('d/m/Y',strtotime($currentPeriod['due_date'])); ?></strong>
+                </div>
+                <?php if ($currentPeriod['note']): ?>
+                <div class="text-muted small mt-1"><?php echo htmlspecialchars($currentPeriod['note']); ?></div>
+                <?php endif; ?>
+            </div>
+            <div class="d-flex gap-2 flex-wrap align-items-center">
+                <span class="badge bg-<?php echo $psl[0]; ?> fs-6"><?php echo $psl[1]; ?></span>
+                <?php if ($currentPeriod['status'] === 'draft'): ?>
+                <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#editPeriodModal">
+                    <i class="bi bi-pencil me-1"></i>Sửa
+                </button>
+                <form method="POST" class="d-inline" onsubmit="return confirm('Tái tạo hóa đơn từ dữ liệu đăng ký môn hiện tại?')">
+                    <input type="hidden" name="action" value="regenerate_invoices">
+                    <input type="hidden" name="period_id" value="<?php echo $currentPeriodId; ?>">
+                    <button type="submit" class="btn btn-sm btn-outline-info"><i class="bi bi-arrow-clockwise me-1"></i>Tái tạo HĐ</button>
+                </form>
+                <form method="POST" class="d-inline" onsubmit="return confirm('Xác nhận công bố đợt thu? Sinh viên sẽ thấy hóa đơn ngay sau khi công bố.')">
+                    <input type="hidden" name="action" value="publish_period">
+                    <input type="hidden" name="period_id" value="<?php echo $currentPeriodId; ?>">
+                    <button type="submit" class="btn btn-sm btn-success"><i class="bi bi-megaphone-fill me-1"></i>Công bố</button>
+                </form>
+                <?php elseif ($currentPeriod['status'] === 'published'): ?>
+                <form method="POST" class="d-inline" onsubmit="return confirm('Đóng đợt thu? Hóa đơn chưa đóng sẽ bị đánh dấu quá hạn.')">
+                    <input type="hidden" name="action" value="close_period">
+                    <input type="hidden" name="period_id" value="<?php echo $currentPeriodId; ?>">
+                    <button type="submit" class="btn btn-sm btn-danger"><i class="bi bi-lock-fill me-1"></i>Đóng đợt thu</button>
+                </form>
+                <form method="POST" class="d-inline">
+                    <input type="hidden" name="action" value="mark_overdue">
+                    <input type="hidden" name="period_id" value="<?php echo $currentPeriodId; ?>">
+                    <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Đánh dấu quá hạn?')">
+                        <i class="bi bi-exclamation-triangle me-1"></i>Đánh dấu quá hạn
+                    </button>
+                </form>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Stats -->
+<?php if (!empty($periodStats)): ?>
+<div class="row g-2 mb-3">
+    <?php
+    $cards = [
+        ['bi-receipt','var(--navy)','Tổng HĐ', number_format($periodStats['total']??0)],
+        ['bi-check-circle-fill','#28a745','Đã đóng', number_format($periodStats['paid']??0)],
+        ['bi-hourglass-split','#ffc107','Chưa đóng', number_format(($periodStats['unpaid']??0)+($periodStats['partial']??0))],
+        ['bi-exclamation-triangle-fill','#dc3545','Quá hạn', number_format($periodStats['overdue']??0)],
+        ['bi-cash-stack','var(--gold)','Đã thu', fmtVND($periodStats['sum_paid']??0)],
+        ['bi-wallet2','#6f42c1','Còn lại', fmtVND($periodStats['sum_remaining']??0)],
+    ];
+    foreach ($cards as [$icon,$color,$lbl,$val]): ?>
+    <div class="col-4 col-md-2">
+        <div class="card border-0 shadow-sm h-100" style="border-left:3px solid <?php echo $color; ?> !important;">
+            <div class="card-body py-2 px-2 text-center">
+                <div class="fw-bold" style="font-size:.9rem;color:<?php echo $color; ?>;"><?php echo $val; ?></div>
+                <div class="text-muted" style="font-size:.68rem;"><?php echo $lbl; ?></div>
             </div>
         </div>
     </div>
     <?php endforeach; ?>
 </div>
+<?php endif; ?>
 
-<!-- FILTER -->
-<div class="card mb-4">
-    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
-        <span><i class="bi bi-funnel me-2"></i>Lọc danh sách</span>
-        <button class="btn btn-gold btn-sm" data-bs-toggle="modal" data-bs-target="#generateModal">
-            <i class="bi bi-lightning-fill me-1"></i>Tạo hóa đơn hàng loạt
-        </button>
-    </div>
-    <div class="card-body">
-        <form method="GET" class="row g-3 align-items-end">
-            <div class="col-md-4">
-                <label class="form-label">Học kỳ</label>
-                <select name="semester_id" class="form-select">
-                    <option value="">-- Tất cả học kỳ --</option>
-                    <?php if ($semesters) { $semesters->data_seek(0); while ($sem = $semesters->fetch_assoc()): ?>
-                    <option value="<?php echo $sem['id']; ?>" <?php echo $filter_sem==$sem['id']?'selected':''; ?>>
-                        <?php echo htmlspecialchars($sem['semester_name'].' '.$sem['school_year']); ?>
-                    </option>
-                    <?php endwhile; } ?>
-                </select>
-            </div>
-            <div class="col-md-3">
-                <label class="form-label">Trạng thái</label>
-                <select name="status" class="form-select">
-                    <option value="">-- Tất cả --</option>
-                    <?php foreach (['unpaid'=>'Chưa đóng','partial'=>'Đóng một phần','paid'=>'Đã đóng','overdue'=>'Quá hạn','waived'=>'Miễn học phí'] as $v=>$l): ?>
-                    <option value="<?php echo $v; ?>" <?php echo $filter_status===$v?'selected':''; ?>><?php echo $l; ?></option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-            <div class="col-md-3">
-                <label class="form-label">Tìm kiếm</label>
-                <input type="text" name="search" class="form-control" placeholder="Tên, mã SV, email..." value="<?php echo htmlspecialchars($search); ?>">
-            </div>
-            <div class="col-md-2 d-flex gap-2">
-                <button type="submit" class="btn btn-navy flex-fill"><i class="bi bi-search me-1"></i>Lọc</button>
-                <?php if ($filter_sem||$filter_status||$search): ?>
-                <a href="tuition.php" class="btn btn-outline-secondary"><i class="bi bi-x-lg"></i></a>
-                <?php endif; ?>
-            </div>
-        </form>
-    </div>
-</div>
-
-<!-- TABLE -->
+<!-- Filter + Table -->
 <div class="card">
-    <div class="card-header d-flex justify-content-between align-items-center">
-        <span><i class="bi bi-table me-2"></i>Danh sách hóa đơn học phí
-            <span class="badge bg-gold text-dark ms-2"><?php echo number_format($total); ?></span>
-        </span>
+    <div class="card-header">
+        <form method="GET" class="d-flex gap-2 flex-wrap align-items-center">
+            <input type="hidden" name="period_id" value="<?php echo $currentPeriodId; ?>">
+            <input type="text" name="q" class="form-control form-control-sm" placeholder="Tìm tên, mã SV..." value="<?php echo htmlspecialchars($fSearch??''); ?>" style="width:180px;">
+            <select name="status" class="form-select form-select-sm" style="width:150px;">
+                <option value="">Tất cả</option>
+                <?php foreach ($statusLabels as $v=>[$c,$l]): ?>
+                <option value="<?php echo $v; ?>" <?php echo ($fStatus??'')===$v?'selected':''; ?>><?php echo $l; ?></option>
+                <?php endforeach; ?>
+            </select>
+            <button type="submit" class="btn btn-sm btn-navy"><i class="bi bi-search"></i></button>
+            <?php if (($fStatus??'')||($fSearch??'')): ?>
+            <a href="tuition.php?period_id=<?php echo $currentPeriodId; ?>" class="btn btn-sm btn-outline-secondary"><i class="bi bi-x-lg"></i></a>
+            <?php endif; ?>
+        </form>
     </div>
     <div class="card-body p-0">
         <div class="table-responsive">
-            <table class="table table-hover mb-0 align-middle" style="font-size:.85rem;">
+            <table class="table table-hover mb-0 align-middle" style="font-size:.83rem;">
                 <thead><tr>
-                    <th>#</th><th>Sinh viên</th><th>Học kỳ</th>
+                    <th>Sinh viên</th>
                     <th class="text-center">TC</th>
-                    <th class="text-end">Học phí gốc</th>
-                    <th class="text-end">Miễn giảm</th>
                     <th class="text-end">Phải đóng</th>
                     <th class="text-end">Đã đóng</th>
                     <th class="text-end text-danger">Còn nợ</th>
-                    <th class="text-center">Hạn đóng</th>
                     <th class="text-center">Trạng thái</th>
-                    <th class="text-center" style="width:160px;">Thao tác</th>
+                    <th class="text-center" style="width:120px;">Thao tác</th>
                 </tr></thead>
                 <tbody>
                 <?php if ($invoices && $invoices->num_rows > 0):
-                    $idx = $offset + 1;
                     while ($inv = $invoices->fetch_assoc()):
-                        $remaining = max(0, $inv['net_amount'] - $inv['paid_amount']);
+                        $sl = $statusLabels[$inv['status']] ?? ['secondary',$inv['status']];
+                        $rem = max(0, $inv['net_amount'] - $inv['paid_amount']);
                 ?>
                 <tr class="<?php echo $inv['status']==='overdue'?'table-danger':''; ?>">
-                    <td class="text-muted"><?php echo $idx++; ?></td>
                     <td>
                         <div class="fw-bold text-navy"><?php echo htmlspecialchars($inv['student_code']); ?></div>
                         <div><?php echo htmlspecialchars($inv['full_name']); ?></div>
-                        <div class="text-muted" style="font-size:.75rem;"><?php echo htmlspecialchars($inv['class_name']??''); ?> &bull; <?php echo htmlspecialchars($inv['major_name']??''); ?></div>
+                        <div class="text-muted" style="font-size:.72rem;"><?php echo htmlspecialchars($inv['class_name']??''); ?></div>
                     </td>
-                    <td><?php echo htmlspecialchars($inv['semester_name'].' '.$inv['school_year']); ?></td>
                     <td class="text-center fw-bold"><?php echo $inv['total_credits']; ?></td>
-                    <td class="text-end"><?php echo fmtVND($inv['gross_amount']); ?></td>
-                    <td class="text-end text-success"><?php echo $inv['discount']>0 ? '-'.fmtVND($inv['discount']) : '<span class="text-muted">—</span>'; ?></td>
-                    <td class="text-end fw-bold"><?php echo fmtVND($inv['net_amount']); ?></td>
+                    <td class="text-end"><?php echo fmtVND($inv['net_amount']); ?></td>
                     <td class="text-end text-success"><?php echo fmtVND($inv['paid_amount']); ?></td>
-                    <td class="text-end fw-bold text-danger"><?php echo $remaining > 0 ? fmtVND($remaining) : '<span class="text-success">—</span>'; ?></td>
-                    <td class="text-center">
-                        <?php if ($inv['due_date']): ?>
-                        <span class="<?php echo $inv['status']==='overdue'?'text-danger fw-bold':''; ?>">
-                            <?php echo date('d/m/Y', strtotime($inv['due_date'])); ?>
-                        </span>
-                        <?php else: ?><span class="text-muted">—</span><?php endif; ?>
+                    <td class="text-end fw-bold <?php echo $rem>0?'text-danger':'text-success'; ?>">
+                        <?php echo $rem>0 ? fmtVND($rem) : '—'; ?>
                     </td>
-                    <td class="text-center"><?php echo tBadge($inv['status']); ?></td>
+                    <td class="text-center"><span class="badge bg-<?php echo $sl[0]; ?>"><?php echo $sl[1]; ?></span></td>
                     <td class="text-center">
-                        <div class="d-flex gap-1 justify-content-center flex-wrap">
-                            <?php if (!in_array($inv['status'],['paid','waived'])): ?>
-                            <button class="btn btn-sm btn-gold" title="Ghi nhận thanh toán"
+                        <div class="d-flex gap-1 justify-content-center">
+                            <?php if (!in_array($inv['status'],['paid','waived','draft'])): ?>
+                            <button class="btn btn-xs btn-gold" title="Ghi nhận thanh toán"
+                                style="padding:2px 7px;font-size:.75rem;"
                                 data-bs-toggle="modal" data-bs-target="#payModal"
                                 data-id="<?php echo $inv['id']; ?>"
                                 data-name="<?php echo htmlspecialchars($inv['full_name'],ENT_QUOTES); ?>"
-                                data-code="<?php echo htmlspecialchars($inv['student_code'],ENT_QUOTES); ?>"
                                 data-net="<?php echo $inv['net_amount']; ?>"
                                 data-paid="<?php echo $inv['paid_amount']; ?>"
-                                data-remaining="<?php echo $remaining; ?>">
+                                data-rem="<?php echo $rem; ?>">
                                 <i class="bi bi-cash-coin"></i>
                             </button>
                             <?php endif; ?>
-                            <button class="btn btn-sm btn-outline-primary" title="Miễn giảm"
+                            <button class="btn btn-xs btn-outline-primary" title="Miễn giảm"
+                                style="padding:2px 7px;font-size:.75rem;"
                                 data-bs-toggle="modal" data-bs-target="#discModal"
                                 data-id="<?php echo $inv['id']; ?>"
                                 data-name="<?php echo htmlspecialchars($inv['full_name'],ENT_QUOTES); ?>"
@@ -409,14 +597,8 @@ include 'includes/sidebar.php';
                                 data-note="<?php echo htmlspecialchars($inv['note']??'',ENT_QUOTES); ?>">
                                 <i class="bi bi-percent"></i>
                             </button>
-                            <button class="btn btn-sm btn-outline-secondary" title="Hạn đóng"
-                                data-bs-toggle="modal" data-bs-target="#dueModal"
-                                data-id="<?php echo $inv['id']; ?>"
-                                data-name="<?php echo htmlspecialchars($inv['full_name'],ENT_QUOTES); ?>"
-                                data-due="<?php echo $inv['due_date']??''; ?>">
-                                <i class="bi bi-calendar-event"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-info" title="Lịch sử thanh toán"
+                            <button class="btn btn-xs btn-outline-info" title="Lịch sử"
+                                style="padding:2px 7px;font-size:.75rem;"
                                 onclick="viewPayments(<?php echo $inv['id']; ?>,'<?php echo htmlspecialchars($inv['full_name'],ENT_QUOTES); ?>')">
                                 <i class="bi bi-clock-history"></i>
                             </button>
@@ -424,18 +606,18 @@ include 'includes/sidebar.php';
                     </td>
                 </tr>
                 <?php endwhile; else: ?>
-                <tr><td colspan="12" class="text-center text-muted py-5">
-                    <i class="bi bi-inbox fs-2 d-block mb-2"></i>Chưa có hóa đơn nào
+                <tr><td colspan="7" class="text-center text-muted py-5">
+                    <i class="bi bi-inbox fs-2 d-block mb-2"></i>Không có hóa đơn nào
                 </td></tr>
                 <?php endif; ?>
                 </tbody>
             </table>
         </div>
-        <?php if ($totalPages > 1): ?>
+        <?php if (($totalPages??1) > 1): ?>
         <div class="px-3 py-2 border-top">
-            <nav><ul class="pagination justify-content-center mb-0 pagination-sm">
-                <?php for ($p = max(1,$page-2); $p <= min($totalPages,$page+2); $p++): ?>
-                <li class="page-item <?php echo $p===$page?'active':''; ?>">
+            <nav><ul class="pagination pagination-sm justify-content-center mb-0">
+                <?php for ($p=max(1,($page??1)-2);$p<=min($totalPages,($page??1)+2);$p++): ?>
+                <li class="page-item <?php echo $p===($page??1)?'active':''; ?>">
                     <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET,['page'=>$p])); ?>"><?php echo $p; ?></a>
                 </li>
                 <?php endfor; ?>
@@ -445,208 +627,15 @@ include 'includes/sidebar.php';
     </div>
 </div>
 
+<?php else: ?>
+<div class="card"><div class="card-body text-center text-muted py-5">
+    <i class="bi bi-arrow-left-circle fs-2 d-block mb-2"></i>
+    Chọn một đợt thu học phí để xem chi tiết
+</div></div>
+<?php endif; ?>
+</div><!-- /.col-lg-8 -->
+</div><!-- /.row -->
+
 </div><!-- /.admin-content -->
 <div class="admin-footer">&copy; <?php echo date('Y'); ?> TDMU</div>
 </div><!-- /.admin-main -->
-
-<!-- MODAL: Tạo hóa đơn -->
-<div class="modal fade" id="generateModal" tabindex="-1">
-    <div class="modal-dialog"><div class="modal-content">
-        <div class="modal-header"><h5 class="modal-title"><i class="bi bi-lightning-fill me-2"></i>Tạo hóa đơn hàng loạt</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
-        <form method="POST">
-            <input type="hidden" name="action" value="generate_invoices">
-            <div class="modal-body">
-                <div class="alert alert-info small"><i class="bi bi-info-circle me-1"></i>Tự động tính học phí = tín chỉ đã đăng ký × đơn giá/TC của ngành. Bỏ qua sinh viên đã có hóa đơn.</div>
-                <div class="mb-3">
-                    <label class="form-label fw-bold">Học kỳ <span class="text-danger">*</span></label>
-                    <select name="semester_id" class="form-select" required>
-                        <option value="">-- Chọn học kỳ --</option>
-                        <?php if ($semesters) { $semesters->data_seek(0); while ($sem = $semesters->fetch_assoc()): ?>
-                        <option value="<?php echo $sem['id']; ?>" <?php echo $filter_sem==$sem['id']?'selected':''; ?>>
-                            <?php echo htmlspecialchars($sem['semester_name'].' '.$sem['school_year']); ?>
-                        </option>
-                        <?php endwhile; } ?>
-                    </select>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label fw-bold">Hạn đóng học phí</label>
-                    <input type="date" name="due_date" class="form-control">
-                    <div class="form-text">Để trống nếu chưa xác định.</div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
-                <button type="submit" class="btn btn-gold"><i class="bi bi-lightning-fill me-1"></i>Tạo hóa đơn</button>
-            </div>
-        </form>
-    </div></div>
-</div>
-
-<!-- MODAL: Ghi nhận thanh toán -->
-<div class="modal fade" id="payModal" tabindex="-1">
-    <div class="modal-dialog"><div class="modal-content">
-        <div class="modal-header"><h5 class="modal-title"><i class="bi bi-cash-coin me-2"></i>Ghi nhận Thanh toán</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
-        <form method="POST">
-            <input type="hidden" name="action" value="record_payment">
-            <input type="hidden" name="invoice_id" id="payId">
-            <div class="modal-body">
-                <div class="alert alert-light border py-2 px-3 mb-3">
-                    <div class="fw-bold" id="payName"></div>
-                    <div class="small text-muted" id="payCode"></div>
-                </div>
-                <div class="row g-2 mb-3">
-                    <div class="col-4"><div class="text-muted small">Phải đóng</div><div class="fw-bold text-navy" id="payNet"></div></div>
-                    <div class="col-4"><div class="text-muted small">Đã đóng</div><div class="fw-bold text-success" id="payPaid"></div></div>
-                    <div class="col-4"><div class="text-muted small">Còn lại</div><div class="fw-bold text-danger" id="payRem"></div></div>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label fw-bold">Số tiền thanh toán <span class="text-danger">*</span></label>
-                    <input type="number" name="amount" id="payAmount" class="form-control" min="1000" step="1000" required>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label fw-bold">Hình thức</label>
-                    <select name="method" class="form-select">
-                        <option value="cash">Tiền mặt</option>
-                        <option value="bank_transfer">Chuyển khoản</option>
-                        <option value="online">Online</option>
-                        <option value="other">Khác</option>
-                    </select>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label fw-bold">Mã giao dịch / Biên lai</label>
-                    <input type="text" name="reference" class="form-control" placeholder="VD: TT20260101001">
-                </div>
-                <div class="mb-3">
-                    <label class="form-label fw-bold">Ghi chú</label>
-                    <textarea name="note" class="form-control" rows="2"></textarea>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
-                <button type="submit" class="btn btn-gold"><i class="bi bi-save me-1"></i>Lưu thanh toán</button>
-            </div>
-        </form>
-    </div></div>
-</div>
-
-<!-- MODAL: Miễn giảm -->
-<div class="modal fade" id="discModal" tabindex="-1">
-    <div class="modal-dialog"><div class="modal-content">
-        <div class="modal-header"><h5 class="modal-title"><i class="bi bi-percent me-2"></i>Cập nhật Miễn giảm</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
-        <form method="POST">
-            <input type="hidden" name="action" value="update_discount">
-            <input type="hidden" name="invoice_id" id="discId">
-            <div class="modal-body">
-                <div class="fw-bold mb-1" id="discName"></div>
-                <div class="text-muted small mb-3">Học phí gốc: <span class="fw-bold text-navy" id="discGross"></span></div>
-                <div class="mb-3">
-                    <label class="form-label fw-bold">Số tiền miễn giảm (₫)</label>
-                    <input type="number" name="discount" id="discDiscount" class="form-control" min="0" step="1000" required>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label fw-bold">Lý do miễn giảm</label>
-                    <textarea name="note" id="discNote" class="form-control" rows="2" placeholder="VD: Học bổng khuyến khích học tập..."></textarea>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
-                <button type="submit" class="btn btn-navy"><i class="bi bi-save me-1"></i>Cập nhật</button>
-            </div>
-        </form>
-    </div></div>
-</div>
-
-<!-- MODAL: Hạn đóng -->
-<div class="modal fade" id="dueModal" tabindex="-1">
-    <div class="modal-dialog modal-sm"><div class="modal-content">
-        <div class="modal-header"><h5 class="modal-title"><i class="bi bi-calendar-event me-2"></i>Hạn đóng học phí</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
-        <form method="POST">
-            <input type="hidden" name="action" value="update_due_date">
-            <input type="hidden" name="invoice_id" id="dueId">
-            <div class="modal-body">
-                <div class="fw-bold mb-3" id="dueName"></div>
-                <input type="date" name="due_date" id="dueDate" class="form-control">
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Hủy</button>
-                <button type="submit" class="btn btn-navy btn-sm"><i class="bi bi-save me-1"></i>Lưu</button>
-            </div>
-        </form>
-    </div></div>
-</div>
-
-<!-- MODAL: Lịch sử thanh toán -->
-<div class="modal fade" id="histModal" tabindex="-1">
-    <div class="modal-dialog modal-lg"><div class="modal-content">
-        <div class="modal-header"><h5 class="modal-title"><i class="bi bi-clock-history me-2"></i>Lịch sử thanh toán — <span id="histName"></span></h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
-        <div class="modal-body" id="histBody">
-            <div class="text-center py-4"><div class="spinner-border text-navy"></div></div>
-        </div>
-    </div></div>
-</div>
-
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-<script src="/university/assets/js/main.js"></script>
-<script>
-function fmtVND(n) { return new Intl.NumberFormat('vi-VN',{style:'currency',currency:'VND'}).format(n); }
-
-document.getElementById('payModal').addEventListener('show.bs.modal', function(e) {
-    const b = e.relatedTarget;
-    document.getElementById('payId').value    = b.dataset.id;
-    document.getElementById('payName').textContent = b.dataset.name;
-    document.getElementById('payCode').textContent = b.dataset.code;
-    const net = parseFloat(b.dataset.net)||0, paid = parseFloat(b.dataset.paid)||0, rem = parseFloat(b.dataset.remaining)||0;
-    document.getElementById('payNet').textContent  = fmtVND(net);
-    document.getElementById('payPaid').textContent = fmtVND(paid);
-    document.getElementById('payRem').textContent  = fmtVND(rem);
-    document.getElementById('payAmount').value = rem > 0 ? rem : '';
-    document.getElementById('payAmount').max   = rem > 0 ? rem : '';
-});
-
-document.getElementById('discModal').addEventListener('show.bs.modal', function(e) {
-    const b = e.relatedTarget;
-    document.getElementById('discId').value       = b.dataset.id;
-    document.getElementById('discName').textContent = b.dataset.name;
-    document.getElementById('discGross').textContent = fmtVND(parseFloat(b.dataset.gross)||0);
-    document.getElementById('discDiscount').value  = b.dataset.discount || 0;
-    document.getElementById('discNote').value      = b.dataset.note || '';
-});
-
-document.getElementById('dueModal').addEventListener('show.bs.modal', function(e) {
-    const b = e.relatedTarget;
-    document.getElementById('dueId').value   = b.dataset.id;
-    document.getElementById('dueName').textContent = b.dataset.name;
-    document.getElementById('dueDate').value = b.dataset.due || '';
-});
-
-function viewPayments(invoiceId, name) {
-    document.getElementById('histName').textContent = name;
-    document.getElementById('histBody').innerHTML = '<div class="text-center py-4"><div class="spinner-border text-navy"></div></div>';
-    new bootstrap.Modal(document.getElementById('histModal')).show();
-    fetch('tuition.php?action=view_payments&invoice_id=' + invoiceId, {credentials:'same-origin'})
-        .then(r => r.json())
-        .then(data => {
-            const pays = data.payments || [];
-            if (!pays.length) {
-                document.getElementById('histBody').innerHTML = '<div class="text-center text-muted py-4"><i class="bi bi-inbox fs-2 d-block mb-2"></i>Chưa có lịch sử thanh toán</div>';
-                return;
-            }
-            const methodMap = {cash:'Tiền mặt',bank_transfer:'Chuyển khoản',online:'Online',other:'Khác'};
-            let html = '<div class="table-responsive"><table class="table table-sm table-bordered mb-0"><thead><tr><th>Thời gian</th><th class="text-end">Số tiền</th><th>Hình thức</th><th>Mã giao dịch</th><th>Người ghi</th><th>Ghi chú</th></tr></thead><tbody>';
-            pays.forEach(p => {
-                html += `<tr>
-                    <td class="small">${new Date(p.paid_at).toLocaleString('vi-VN')}</td>
-                    <td class="text-end fw-bold text-success">${fmtVND(parseFloat(p.amount))}</td>
-                    <td class="small">${methodMap[p.method]||p.method}</td>
-                    <td class="small text-muted">${p.reference||'—'}</td>
-                    <td class="small">${p.paid_by_name||'—'}</td>
-                    <td class="small text-muted">${p.note||'—'}</td>
-                </tr>`;
-            });
-            html += '</tbody></table></div>';
-            document.getElementById('histBody').innerHTML = html;
-        })
-        .catch(() => { document.getElementById('histBody').innerHTML = '<div class="alert alert-danger">Lỗi tải dữ liệu.</div>'; });
-}
-</script>
-</body></html>

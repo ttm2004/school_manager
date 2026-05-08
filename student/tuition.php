@@ -5,23 +5,9 @@ requireRole('student');
 $pageTitle = 'Hoc phi cua toi';
 // PLACEHOLDER_STUDENT_TUITION
 
-// ── Auto-create tables ────────────────────────────────────────────────────────
-$conn->query("CREATE TABLE IF NOT EXISTS `tuition_invoices` (
-    `id` INT AUTO_INCREMENT PRIMARY KEY, `student_id` INT NOT NULL, `semester_id` INT NOT NULL,
-    `total_credits` INT NOT NULL DEFAULT 0, `unit_price` DECIMAL(12,2) NOT NULL DEFAULT 0,
-    `gross_amount` DECIMAL(14,2) NOT NULL DEFAULT 0, `discount` DECIMAL(14,2) NOT NULL DEFAULT 0,
-    `net_amount` DECIMAL(14,2) NOT NULL DEFAULT 0, `paid_amount` DECIMAL(14,2) NOT NULL DEFAULT 0,
-    `due_date` DATE NULL, `status` ENUM('unpaid','partial','paid','overdue','waived') NOT NULL DEFAULT 'unpaid',
-    `note` TEXT NULL, `created_by` INT NULL,
-    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP, `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY `uq_ss` (`student_id`,`semester_id`), INDEX(`semester_id`), INDEX(`status`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-$conn->query("CREATE TABLE IF NOT EXISTS `tuition_payments` (
-    `id` INT AUTO_INCREMENT PRIMARY KEY, `invoice_id` INT NOT NULL,
-    `amount` DECIMAL(14,2) NOT NULL, `method` ENUM('cash','bank_transfer','online','other') NOT NULL DEFAULT 'cash',
-    `reference` VARCHAR(100) NULL, `note` VARCHAR(255) NULL, `paid_by` INT NULL,
-    `paid_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP, INDEX(`invoice_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+// ── Auto-create tables (schema mới) ──────────────────────────────────────────
+// Không tạo lại ở đây — admin/tuition.php đã handle migration
+// Chỉ kiểm tra bảng tồn tại
 
 // ── Thông tin sinh viên ───────────────────────────────────────────────────────
 $uid = (int)$_SESSION['user_id'];
@@ -32,6 +18,14 @@ $student = $stRes ? $stRes->fetch_assoc() : null;
 if (!$student) { header('Location: /university/student/index.php'); exit(); }
 $sid = (int)$student['id'];
 $unitPrice = (float)($student['tuition_per_credit'] ?? 0);
+
+// ── Kiểm tra bảng tuition_invoices có cột period_id chưa ─────────────────────
+$hasPeriodCol = false;
+$chkTbl = $conn->query("SHOW TABLES LIKE 'tuition_invoices'");
+if ($chkTbl && $chkTbl->num_rows > 0) {
+    $chkCol = $conn->query("SHOW COLUMNS FROM `tuition_invoices` LIKE 'period_id'");
+    $hasPeriodCol = ($chkCol && $chkCol->num_rows > 0);
+}
 
 // ── Học kỳ đã đăng ký ────────────────────────────────────────────────────────
 $semRes = $conn->query("SELECT DISTINCT sm.id, sm.semester_name, sm.school_year
@@ -47,15 +41,37 @@ $semData = [];
 $grandNet = $grandPaid = 0;
 foreach ($semList as $sem) {
     $semId = (int)$sem['id'];
+
+    // Tín chỉ đã đăng ký
     $tcRes = $conn->query("SELECT SUM(sub.credits) AS tc
         FROM student_subjects ss JOIN course_sections cs ON ss.course_section_id=cs.id
         JOIN subjects sub ON cs.subject_id=sub.id
         WHERE ss.student_id=$sid AND cs.semester_id=$semId AND ss.status!='cancelled'");
     $tc    = (int)(($tcRes ? $tcRes->fetch_assoc()['tc'] : 0) ?? 0);
     $gross = $tc * $unitPrice;
-    $invRes = $conn->query("SELECT * FROM tuition_invoices WHERE student_id=$sid AND semester_id=$semId LIMIT 1");
-    $invoice = $invRes ? $invRes->fetch_assoc() : null;
+
+    // Hóa đơn — ưu tiên schema mới (có period_id), fallback schema cũ
+    $invoice  = null;
+    $period   = null;
     $payments = [];
+
+    if ($hasPeriodCol) {
+        // Schema mới: lấy hóa đơn đã published
+        $invRes = $conn->query("
+            SELECT ti.*, tp.title AS period_title, tp.open_date, tp.due_date AS period_due, tp.status AS period_status
+            FROM tuition_invoices ti
+            JOIN tuition_periods tp ON ti.period_id=tp.id
+            WHERE ti.student_id=$sid AND ti.semester_id=$semId
+              AND tp.status IN ('published','closed')
+              AND ti.status != 'draft'
+            ORDER BY ti.created_at DESC LIMIT 1");
+        $invoice = $invRes ? $invRes->fetch_assoc() : null;
+    } else {
+        // Schema cũ
+        $invRes = $conn->query("SELECT * FROM tuition_invoices WHERE student_id=$sid AND semester_id=$semId LIMIT 1");
+        $invoice = $invRes ? $invRes->fetch_assoc() : null;
+    }
+
     if ($invoice) {
         $iid  = (int)$invoice['id'];
         $pRes = $conn->query("SELECT tp.*, u.full_name AS paid_by_name
@@ -63,11 +79,22 @@ foreach ($semList as $sem) {
             WHERE tp.invoice_id=$iid ORDER BY tp.paid_at DESC");
         if ($pRes) while ($p = $pRes->fetch_assoc()) $payments[] = $p;
     }
+
     $net  = $invoice ? (float)$invoice['net_amount']  : $gross;
     $paid = $invoice ? (float)$invoice['paid_amount'] : 0;
-    $grandNet  += $net;
+    $grandNet  += ($invoice ? $net : 0); // Chỉ tính nếu đã có hóa đơn published
     $grandPaid += $paid;
-    $semData[] = ['sem'=>$sem,'credits'=>$tc,'gross'=>$gross,'invoice'=>$invoice,'net'=>$net,'paid'=>$paid,'remaining'=>max(0,$net-$paid),'payments'=>$payments];
+    $semData[] = [
+        'sem'      => $sem,
+        'credits'  => $tc,
+        'gross'    => $gross,
+        'invoice'  => $invoice,
+        'net'      => $net,
+        'paid'     => $paid,
+        'remaining'=> max(0, $net - $paid),
+        'payments' => $payments,
+        'published'=> $invoice !== null,
+    ];
 }
 $grandRemaining = max(0, $grandNet - $grandPaid);
 $hasDebt = $grandRemaining > 0;

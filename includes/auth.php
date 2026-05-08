@@ -232,12 +232,59 @@ function getFlash(): ?array {
 }
 
 /**
- * Kiểm tra sinh viên có nợ học phí không
- * Trả về true nếu có hóa đơn unpaid/partial/overdue
+ * Kiểm tra sinh viên có bị khóa chức năng do nợ học phí không.
+ * Điều kiện khóa: có hóa đơn đã published + quá hạn + chưa đóng đủ
+ * Trả về ['locked'=>bool, 'message'=>string, 'period_title'=>string]
+ */
+function getTuitionLockStatus(int $studentId): array {
+    global $conn;
+    $tbl = $conn->query("SHOW TABLES LIKE 'tuition_invoices'");
+    if (!$tbl || $tbl->num_rows === 0) return ['locked' => false, 'message' => '', 'period_title' => ''];
+
+    // Kiểm tra schema mới có period_id không
+    $chkCol = $conn->query("SHOW COLUMNS FROM `tuition_invoices` LIKE 'period_id'");
+    if (!$chkCol || $chkCol->num_rows === 0) return ['locked' => false, 'message' => '', 'period_title' => ''];
+
+    // Hóa đơn đã published (status=unpaid/partial/overdue) + đợt thu đã quá hạn
+    $res = $conn->prepare("
+        SELECT ti.id, tp.title, tp.due_date, ti.net_amount, ti.paid_amount
+        FROM tuition_invoices ti
+        JOIN tuition_periods tp ON ti.period_id = tp.id
+        WHERE ti.student_id = ?
+          AND ti.status IN ('unpaid','partial','overdue')
+          AND tp.status IN ('published','closed')
+          AND tp.due_date < CURDATE()
+        LIMIT 1
+    ");
+    if (!$res) return ['locked' => false, 'message' => '', 'period_title' => ''];
+    $res->bind_param('i', $studentId);
+    $res->execute();
+    $row = $res->get_result()->fetch_assoc();
+    $res->close();
+
+    if ($row) {
+        $remaining = number_format($row['net_amount'] - $row['paid_amount'], 0, ',', '.');
+        return [
+            'locked'       => true,
+            'message'      => "Bạn đang nợ học phí {$remaining} ₫ ({$row['title']}). Vui lòng đóng học phí để tiếp tục sử dụng hệ thống.",
+            'period_title' => $row['title'],
+        ];
+    }
+    return ['locked' => false, 'message' => '', 'period_title' => ''];
+}
+
+/**
+ * Kiểm tra nhanh sinh viên có bị khóa không (dùng trong register_subject, grades, timetable)
+ */
+function isTuitionLocked(int $studentId): bool {
+    return getTuitionLockStatus($studentId)['locked'];
+}
+
+/**
+ * Kiểm tra sinh viên có nợ học phí không (bao gồm cả chưa quá hạn)
  */
 function hasTuitionDebt(int $studentId): bool {
     global $conn;
-    // Kiểm tra bảng tồn tại trước
     $tbl = $conn->query("SHOW TABLES LIKE 'tuition_invoices'");
     if (!$tbl || $tbl->num_rows === 0) return false;
     $res = $conn->prepare("SELECT id FROM tuition_invoices WHERE student_id=? AND status IN ('unpaid','partial','overdue') LIMIT 1");
