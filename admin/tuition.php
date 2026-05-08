@@ -639,3 +639,227 @@ include 'includes/sidebar.php';
 </div><!-- /.admin-content -->
 <div class="admin-footer">&copy; <?php echo date('Y'); ?> TDMU</div>
 </div><!-- /.admin-main -->
+
+<!-- ══ MODAL: Tạo đợt thu ══════════════════════════════════════════════════ -->
+<div class="modal fade" id="createPeriodModal" tabindex="-1">
+    <div class="modal-dialog modal-lg"><div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title"><i class="bi bi-plus-lg me-2"></i>Tạo đợt thu học phí</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <form method="POST">
+            <input type="hidden" name="action" value="create_period">
+            <div class="modal-body">
+                <div class="alert alert-info small mb-3">
+                    <i class="bi bi-info-circle me-1"></i>
+                    Hệ thống sẽ tự động tính học phí = tín chỉ đã đăng ký × đơn giá/TC cho từng sinh viên.
+                    Hóa đơn sẽ ở trạng thái <strong>Nháp</strong> cho đến khi bạn xác nhận công bố.
+                </div>
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label fw-bold">Học kỳ <span class="text-danger">*</span></label>
+                        <select name="semester_id" class="form-select" required>
+                            <option value="">-- Chọn học kỳ --</option>
+                            <?php if ($semesters) { $semesters->data_seek(0); while ($sem = $semesters->fetch_assoc()): ?>
+                            <option value="<?php echo $sem['id']; ?>"><?php echo htmlspecialchars($sem['semester_name'].' '.$sem['school_year']); ?></option>
+                            <?php endwhile; } ?>
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-bold">Tiêu đề đợt thu <span class="text-danger">*</span></label>
+                        <input type="text" name="title" class="form-control" required placeholder="VD: Thu học phí HK1 2025-2026">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-bold">Ngày bắt đầu thu (công bố) <span class="text-danger">*</span></label>
+                        <input type="date" name="open_date" class="form-control" required>
+                        <div class="form-text">Ngày sinh viên bắt đầu thấy hóa đơn.</div>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-bold">Hạn đóng học phí <span class="text-danger">*</span></label>
+                        <input type="date" name="due_date" class="form-control" required>
+                        <div class="form-text">Quá hạn này → khóa chức năng sinh viên.</div>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label fw-bold">Ghi chú</label>
+                        <textarea name="note" class="form-control" rows="2" placeholder="Ghi chú thêm (nếu có)..."></textarea>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
+                <button type="submit" class="btn btn-gold"><i class="bi bi-lightning-fill me-1"></i>Tạo & tính hóa đơn nháp</button>
+            </div>
+        </form>
+    </div></div>
+</div>
+
+<!-- ══ MODAL: Sửa đợt thu ══════════════════════════════════════════════════ -->
+<div class="modal fade" id="editPeriodModal" tabindex="-1">
+    <div class="modal-dialog modal-lg"><div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title"><i class="bi bi-pencil me-2"></i>Sửa đợt thu học phí</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <form method="POST">
+            <input type="hidden" name="action" value="update_period">
+            <input type="hidden" name="period_id" value="<?php echo $currentPeriodId; ?>">
+            <div class="modal-body">
+                <div class="row g-3">
+                    <div class="col-12">
+                        <label class="form-label fw-bold">Tiêu đề <span class="text-danger">*</span></label>
+                        <input type="text" name="title" class="form-control" required value="<?php echo htmlspecialchars($currentPeriod['title'] ?? ''); ?>">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-bold">Ngày bắt đầu thu</label>
+                        <input type="date" name="open_date" class="form-control" value="<?php echo $currentPeriod['open_date'] ?? ''; ?>">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-bold">Hạn đóng học phí</label>
+                        <input type="date" name="due_date" class="form-control" value="<?php echo $currentPeriod['due_date'] ?? ''; ?>">
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label fw-bold">Ghi chú</label>
+                        <textarea name="note" class="form-control" rows="2"><?php echo htmlspecialchars($currentPeriod['note'] ?? ''); ?></textarea>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
+                <button type="submit" class="btn btn-navy"><i class="bi bi-save me-1"></i>Lưu thay đổi</button>
+            </div>
+        </form>
+    </div></div>
+</div>
+
+<!-- ══ MODAL: Ghi nhận thanh toán ══════════════════════════════════════════ -->
+<div class="modal fade" id="payModal" tabindex="-1">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title"><i class="bi bi-cash-coin me-2"></i>Ghi nhận Thanh toán</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <form method="POST">
+            <input type="hidden" name="action" value="record_payment">
+            <input type="hidden" name="invoice_id" id="payId">
+            <input type="hidden" name="period_id" value="<?php echo $currentPeriodId; ?>">
+            <div class="modal-body">
+                <div class="alert alert-light border py-2 px-3 mb-3">
+                    <div class="fw-bold" id="payName"></div>
+                    <div class="small text-muted" id="payCode"></div>
+                </div>
+                <div class="row g-2 mb-3">
+                    <div class="col-4"><div class="text-muted small">Phải đóng</div><div class="fw-bold text-navy" id="payNet"></div></div>
+                    <div class="col-4"><div class="text-muted small">Đã đóng</div><div class="fw-bold text-success" id="payPaid"></div></div>
+                    <div class="col-4"><div class="text-muted small">Còn lại</div><div class="fw-bold text-danger" id="payRem"></div></div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Số tiền <span class="text-danger">*</span></label>
+                    <input type="number" name="amount" id="payAmount" class="form-control" min="1000" step="1000" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Hình thức</label>
+                    <select name="method" class="form-select">
+                        <option value="cash">Tiền mặt</option>
+                        <option value="bank_transfer">Chuyển khoản</option>
+                        <option value="online">Online</option>
+                        <option value="other">Khác</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Mã giao dịch / Biên lai</label>
+                    <input type="text" name="reference" class="form-control" placeholder="VD: TT20260601001">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Ghi chú</label>
+                    <textarea name="note" class="form-control" rows="2"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
+                <button type="submit" class="btn btn-gold"><i class="bi bi-save me-1"></i>Lưu thanh toán</button>
+            </div>
+        </form>
+    </div></div>
+</div>
+
+<!-- ══ MODAL: Miễn giảm ════════════════════════════════════════════════════ -->
+<div class="modal fade" id="discModal" tabindex="-1">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title"><i class="bi bi-percent me-2"></i>Cập nhật Miễn giảm</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <form method="POST">
+            <input type="hidden" name="action" value="update_discount">
+            <input type="hidden" name="invoice_id" id="discId">
+            <input type="hidden" name="period_id" value="<?php echo $currentPeriodId; ?>">
+            <div class="modal-body">
+                <div class="fw-bold mb-1" id="discName"></div>
+                <div class="text-muted small mb-3">Học phí gốc: <span class="fw-bold text-navy" id="discGross"></span></div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Số tiền miễn giảm (₫)</label>
+                    <input type="number" name="discount" id="discDiscount" class="form-control" min="0" step="1000" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Lý do</label>
+                    <textarea name="note" id="discNote" class="form-control" rows="2" placeholder="VD: Học bổng khuyến khích học tập..."></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
+                <button type="submit" class="btn btn-navy"><i class="bi bi-save me-1"></i>Cập nhật</button>
+            </div>
+        </form>
+    </div></div>
+</div>
+
+<!-- ══ MODAL: Lịch sử thanh toán ══════════════════════════════════════════ -->
+<div class="modal fade" id="histModal" tabindex="-1">
+    <div class="modal-dialog modal-lg"><div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title"><i class="bi bi-clock-history me-2"></i>Lịch sử thanh toán — <span id="histName"></span></h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body" id="histBody"><div class="text-center py-4"><div class="spinner-border text-navy"></div></div></div>
+    </div></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="/university/assets/js/main.js"></script>
+<script>
+function fmtVND(n) { return new Intl.NumberFormat('vi-VN',{style:'currency',currency:'VND'}).format(n); }
+
+// Payment modal
+document.getElementById('payModal')?.addEventListener('show.bs.modal', function(e) {
+    const b = e.relatedTarget;
+    document.getElementById('payId').value = b.dataset.id;
+    document.getElementById('payName').textContent = b.dataset.name;
+    document.getElementById('payCode').textContent = b.dataset.code || '';
+    const net = parseFloat(b.dataset.net)||0, paid = parseFloat(b.dataset.paid)||0, rem = parseFloat(b.dataset.remaining)||0;
+    document.getElementById('payNet').textContent  = fmtVND(net);
+    document.getElementById('payPaid').textContent = fmtVND(paid);
+    document.getElementById('payRem').textContent  = fmtVND(rem);
+    document.getElementById('payAmount').value = rem > 0 ? rem : '';
+    document.getElementById('payAmount').max   = rem > 0 ? rem : '';
+});
+
+// Discount modal
+document.getElementById('discModal')?.addEventListener('show.bs.modal', function(e) {
+    const b = e.relatedTarget;
+    document.getElementById('discId').value = b.dataset.id;
+    document.getElementById('discName').textContent = b.dataset.name;
+    document.getElementById('discGross').textContent = fmtVND(parseFloat(b.dataset.gross)||0);
+    document.getElementById('discDiscount').value = b.dataset.discount || 0;
+    document.getElementById('discNote').value = b.dataset.note || '';
+});
+
+// History modal
+function viewPayments(invoiceId, name) {
+    document.getElementById('histName').textContent = name;
+    document.getElementById('histBody').innerHTML = '<div class="text-center py-4"><div class="spinner-border text-navy"></div></div>';
+    new bootstrap.Modal(document.getElementById('histModal')).show();
+    fetch('tuition.php?ajax=view_payments&invoice_id=' + invoiceId, {credentials:'same-origin'})
+        .then(r => r.json())
+        .then(data => {
+            const pays = data.payments || [];
+            if (!pays.length) {
+                document.getElementById('histBody').innerHTML = '<div class="text-center text-muted py-4"><i class="bi bi-inbox fs-2 d-block mb-2"></i>Chưa có lịch sử thanh toán</div>';
+                return;
+            }
+            const mMap = {cash:'Tiền mặt',bank_transfer:'Chuyển khoản',online:'Online',other:'Khác'};
+            let html = '<div class="table-responsive"><table class="table table-sm table-bordered mb-0"><thead><tr><th>Thời gian</th><th class="text-end">Số tiền</th><th>Hình thức</th><th>Mã GD</th><th>Người ghi</th><th>Ghi chú</th></tr></thead><tbody>';
+            pays.forEach(p => {
+                html += `<tr><td class="small">${new Date(p.paid_at).toLocaleString('vi-VN')}</td><td class="text-end fw-bold text-success">${fmtVND(parseFloat(p.amount))}</td><td class="small">${mMap[p.method]||p.method}</td><td class="small text-muted">${p.reference||'—'}</td><td class="small">${p.paid_by_name||'—'}</td><td class="small text-muted">${p.note||'—'}</td></tr>`;
+            });
+            html += '</tbody></table></div>';
+            document.getElementById('histBody').innerHTML = html;
+        })
+        .catch(() => { document.getElementById('histBody').innerHTML = '<div class="alert alert-danger">Lỗi tải dữ liệu.</div>'; });
+}
+</script>
+</body></html>
