@@ -130,7 +130,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $created = 0; $failed = 0;
                     foreach ($students as $i => $sv) {
                         $cid = $class_ids[$i % $numClasses];
-                        $year = $sv['enroll_year'];
+                        $classInfo = $conn->query("SELECT c.enrollment_year, c.cohort_id, tc.program_id, tc.duration_years
+                                                   FROM classes c
+                                                   LEFT JOIN training_cohorts tc ON c.cohort_id = tc.id
+                                                   WHERE c.id=$cid LIMIT 1")->fetch_assoc();
+                        $year = (int)($classInfo['enrollment_year'] ?? $sv['enroll_year']);
+                        $cohortId = (int)($classInfo['cohort_id'] ?? 0);
+                        $programId = (int)($classInfo['program_id'] ?? 0);
+                        $expectedGradYear = $year + (int)ceil((float)($classInfo['duration_years'] ?? 4));
                         $majorCode = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $sv['major_code'] ?? 'SV'));
 
                         // Sinh mã SV unique
@@ -151,8 +158,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $us->close();
 
                         // Tạo student
-                        $ss = $conn->prepare("INSERT INTO students (user_id,student_code,class_id,address,birthday,gender) VALUES (?,?,?,?,?,?)");
-                        $ss->bind_param('isisss', $userId, $studentCode, $cid, $sv['address'], $sv['birthday'], $sv['gender']);
+                        $ss = $conn->prepare(
+                            "INSERT INTO students
+                             (user_id, student_code, class_id, enrollment_year, cohort_id, training_program_id,
+                              expected_grad_year, academic_status, address, birthday, gender)
+                             VALUES (?,?,?,?,?,?,?,'Đang học',?,?,?)"
+                        );
+                        $ss->bind_param('isiiiiisss', $userId, $studentCode, $cid, $year, $cohortId, $programId, $expectedGradYear, $sv['address'], $sv['birthday'], $sv['gender']);
                         if (!$ss->execute()) { $failed++; $ss->close(); continue; }
                         $ss->close();
                         $created++;

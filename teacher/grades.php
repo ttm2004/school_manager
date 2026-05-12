@@ -1,6 +1,7 @@
 ﻿<?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
+require_once '../includes/grade_windows.php';
 requireRole('teacher');
 
 $stmt = $conn->prepare("SELECT t.*, u.full_name FROM teachers t JOIN users u ON t.user_id=u.id WHERE t.user_id=?");
@@ -20,34 +21,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $final   = $_POST['final_score'] !== '' ? floatval($_POST['final_score']) : null;
         $note    = trim($_POST['note'] ?? '');
 
-        $total = null; $letter = null;
-        if ($process !== null && $midterm !== null && $final !== null) {
-            $total = round($process * 0.2 + $midterm * 0.3 + $final * 0.5, 2);
-            if ($total >= 8.5) $letter = 'A';
-            elseif ($total >= 8.0) $letter = 'B+';
-            elseif ($total >= 7.0) $letter = 'B';
-            elseif ($total >= 6.0) $letter = 'C+';
-            elseif ($total >= 5.0) $letter = 'C';
-            elseif ($total >= 4.0) $letter = 'D+';
-            elseif ($total >= 3.5) $letter = 'D';
-            else $letter = 'F';
-        }
-
-        $chk = $conn->prepare("SELECT id FROM grades WHERE student_subject_id=?");
-        $chk->bind_param('i', $ss_id);
-        $chk->execute();
-        $exists = $chk->get_result()->fetch_assoc();
-        $chk->close();
-
-        if ($exists) {
-            $stmt = $conn->prepare("UPDATE grades SET process_score=?, midterm_score=?, final_score=?, total_score=?, letter_grade=?, note=? WHERE student_subject_id=?");
-            $stmt->bind_param('ddddssi', $process, $midterm, $final, $total, $letter, $note, $ss_id);
+        $window = getGradeInputWindowForStudentSubject($conn, $ss_id);
+        if (!$window || (int)$window['teacher_id'] !== (int)$teacher['id']) {
+            $error = 'Ban khong co quyen nhap diem lop hoc phan nay.';
+        } elseif (!$window['is_grade_window_open']) {
+            $error = $window['grade_window_message'];
         } else {
-            $stmt = $conn->prepare("INSERT INTO grades (student_subject_id, process_score, midterm_score, final_score, total_score, letter_grade, note) VALUES (?,?,?,?,?,?,?)");
-            $stmt->bind_param('iddddss', $ss_id, $process, $midterm, $final, $total, $letter, $note);
+            $lockChk = $conn->query("SHOW TABLES LIKE 'grade_locks'");
+            if ($lockChk && $lockChk->num_rows > 0) {
+                $sectionId = (int)$window['id'];
+                $locked = $conn->query("SELECT id FROM grade_locks WHERE course_section_id=$sectionId LIMIT 1");
+                if ($locked && $locked->num_rows > 0) {
+                    $error = 'Diem lop hoc phan nay da bi khoa. Vui long lien he Phong Dao tao neu can mo khoa.';
+                }
+            }
         }
-        $stmt->execute() ? $success = 'Luu diem thanh cong!' : $error = 'Loi: ' . $conn->error;
-        $stmt->close();
+
+        if (empty($error)) {
+            $total = null; $letter = null;
+            if ($process !== null && $midterm !== null && $final !== null) {
+                $total = round($process * 0.2 + $midterm * 0.3 + $final * 0.5, 2);
+                if ($total >= 8.5) $letter = 'A';
+                elseif ($total >= 8.0) $letter = 'B+';
+                elseif ($total >= 7.0) $letter = 'B';
+                elseif ($total >= 6.0) $letter = 'C+';
+                elseif ($total >= 5.0) $letter = 'C';
+                elseif ($total >= 4.0) $letter = 'D+';
+                elseif ($total >= 3.5) $letter = 'D';
+                else $letter = 'F';
+            }
+
+            $chk = $conn->prepare("SELECT id FROM grades WHERE student_subject_id=?");
+            $chk->bind_param('i', $ss_id);
+            $chk->execute();
+            $exists = $chk->get_result()->fetch_assoc();
+            $chk->close();
+
+            if ($exists) {
+                $stmt = $conn->prepare("UPDATE grades SET process_score=?, midterm_score=?, final_score=?, total_score=?, letter_grade=?, note=? WHERE student_subject_id=?");
+                $stmt->bind_param('ddddssi', $process, $midterm, $final, $total, $letter, $note, $ss_id);
+            } else {
+                $stmt = $conn->prepare("INSERT INTO grades (student_subject_id, process_score, midterm_score, final_score, total_score, letter_grade, note) VALUES (?,?,?,?,?,?,?)");
+                $stmt->bind_param('iddddss', $ss_id, $process, $midterm, $final, $total, $letter, $note);
+            }
+            $stmt->execute() ? $success = 'Luu diem thanh cong!' : $error = 'Loi: ' . $conn->error;
+            $stmt->close();
+        }
     }
 
     // ── PRG: redirect sau POST để tránh F5 gửi lại form ──
@@ -64,29 +83,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $filter_section = intval($_GET['section_id'] ?? 0);
 
-// Lay danh sach lop hoc phan cua giang vien
-$mySections = $conn->prepare("
-    SELECT cs.id, cs.section_code, s.subject_name, sm.semester_name, sm.school_year
-    FROM course_sections cs
-    JOIN subjects s ON cs.subject_id = s.id
-    JOIN semesters sm ON cs.semester_id = sm.id
-    WHERE cs.teacher_id = ?
-    ORDER BY sm.school_year DESC, sm.semester_name, cs.section_code
-");
-$mySections->bind_param('i', $teacher['id']);
-$mySections->execute();
-$mySections = $mySections->get_result();
+// Chi hien cac lop da ket thuc va dang trong han nhap diem do Phong Dao tao mo.
+$mySections = getTeacherOpenGradeSections($conn, (int)$teacher['id']);
+$openSectionIds = array_map('intval', array_column($mySections, 'id'));
 
 $grades = null;
+$selectedWindow = null;
 if ($filter_section > 0) {
     // Kiem tra section thuoc giang vien nay
-    $chkSec = $conn->prepare("SELECT id FROM course_sections WHERE id=? AND teacher_id=?");
-    $chkSec->bind_param('ii', $filter_section, $teacher['id']);
-    $chkSec->execute();
-    $validSec = $chkSec->get_result()->fetch_assoc();
-    $chkSec->close();
+    $selectedWindow = getGradeInputWindowForSection($conn, $filter_section, (int)$teacher['id']);
 
-    if ($validSec) {
+    if ($selectedWindow && $selectedWindow['is_grade_window_open']) {
         $stmt = $conn->prepare("
             SELECT ss.id as ss_id, u.full_name, st.student_code,
                    g.id as grade_id, g.process_score, g.midterm_score, g.final_score, g.total_score, g.letter_grade, g.note
@@ -102,7 +109,7 @@ if ($filter_section > 0) {
         $grades = $stmt->get_result();
         $stmt->close();
     } else {
-        $error = 'Ban khong co quyen truy cap lop hoc phan nay.';
+        $error = $selectedWindow ? $selectedWindow['grade_window_message'] : 'Ban khong co quyen truy cap lop hoc phan nay.';
         $filter_section = 0;
     }
 }
@@ -112,6 +119,7 @@ if ($filter_section > 0) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
     <title>Nhap diem - Giang vien</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
@@ -119,22 +127,7 @@ if ($filter_section > 0) {
 </head>
 <body>
 <div class="student-wrapper">
-    <div class="student-sidebar">
-        <div class="sidebar-brand">
-            <div class="sidebar-brand-icon"><i class="bi bi-person-badge-fill"></i></div>
-            <div class="sidebar-brand-text"><div>Cong Giang vien</div><small><?php echo htmlspecialchars($teacher['teacher_code']); ?></small></div>
-        </div>
-        <nav class="sidebar-nav">
-            <a href="/university/teacher/index.php" class="sidebar-link"><i class="bi bi-speedometer2"></i> Tong quan</a>
-            <a href="/university/teacher/profile.php" class="sidebar-link"><i class="bi bi-person-fill"></i> Ho so ca nhan</a>
-            <a href="/university/teacher/my_courses.php" class="sidebar-link"><i class="bi bi-journal-text"></i> Lop hoc phan</a>
-            <a href="/university/teacher/grades.php" class="sidebar-link active"><i class="bi bi-bar-chart-fill"></i> Nhap diem</a>
-            <a href="/university/teacher/evaluation.php" class="sidebar-link"><i class="bi bi-star-fill"></i> Ket qua danh gia</a>
-            <hr class="my-2">
-            <a href="/university/index.php" class="sidebar-link"><i class="bi bi-globe"></i> Trang chu</a>
-            <a href="/university/login.php?logout=1" class="sidebar-link text-danger"><i class="bi bi-box-arrow-right"></i> Dang xuat</a>
-        </nav>
-    </div>
+    <?php include __DIR__ . '/includes/sidebar.php'; ?>
     <div class="student-main">
         <div class="student-topbar">
             <span class="fw-bold text-navy">Nhap diem sinh vien</span>
@@ -142,26 +135,46 @@ if ($filter_section > 0) {
         </div>
         <div class="student-content">
             <?php $flash = getFlash(); if ($flash): ?><div class="alert alert-<?php echo $flash['type']; ?> auto-dismiss alert-dismissible fade show"><i class="bi bi-<?php echo $flash['type']=='success'?'check-circle-fill':'exclamation-circle-fill'; ?> me-2"></i><?php echo htmlspecialchars($flash['message']); ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div><?php endif; ?>
+            <?php if (!empty($error)): ?>
+            <div class="alert alert-warning alert-dismissible fade show">
+                <i class="bi bi-info-circle-fill me-2"></i><?php echo htmlspecialchars($error); ?>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+            <?php endif; ?>
+            <?php if (!empty($mySections)): ?>
+            <div class="alert alert-success">
+                <i class="bi bi-unlock-fill me-2"></i>
+                Phong Dao tao dang mo nhap diem cho <?php echo count($mySections); ?> lop hoc phan da ket thuc.
+                Vui long hoan tat truoc han nop diem cua tung hoc ky.
+            </div>
+            <?php endif; ?>
 
             <div class="card mb-4">
                 <div class="card-header"><i class="bi bi-funnel me-2"></i>Chon lop hoc phan</div>
                 <div class="card-body">
+                    <?php if (empty($mySections)): ?>
+                    <div class="text-center text-muted py-4">
+                        <i class="bi bi-eye-slash fs-3 d-block mb-2"></i>
+                        Chua co lop hoc phan nao trong thoi gian nhap diem. Bang nhap diem chi hien sau khi mon hoc ket thuc va Phong Dao tao mo han nop diem.
+                    </div>
+                    <?php else: ?>
                     <form method="GET" class="row g-3 align-items-end">
                         <div class="col-md-8">
                             <label class="form-label">Lop hoc phan</label>
                             <select name="section_id" class="form-select">
                                 <option value="">-- Chon lop hoc phan --</option>
-                                <?php if ($mySections && $mySections->num_rows > 0): while ($sec = $mySections->fetch_assoc()): ?>
+                                <?php foreach ($mySections as $sec): ?>
                                 <option value="<?php echo $sec['id']; ?>" <?php echo $filter_section==$sec['id']?'selected':''; ?>>
-                                    <?php echo htmlspecialchars($sec['section_code'] . ' - ' . $sec['subject_name'] . ' (' . $sec['semester_name'] . ' ' . $sec['school_year'] . ')'); ?>
+                                    <?php echo htmlspecialchars($sec['section_code'] . ' - ' . $sec['subject_name'] . ' (' . $sec['semester_name'] . ' ' . $sec['school_year'] . ') - han ' . date('d/m/Y', strtotime($sec['grade_submit_deadline']))); ?>
                                 </option>
-                                <?php endwhile; endif; ?>
+                                <?php endforeach; ?>
                             </select>
                         </div>
                         <div class="col-md-4">
                             <button type="submit" class="btn btn-navy w-100"><i class="bi bi-search me-1"></i>Xem danh sach</button>
                         </div>
                     </form>
+                    <?php endif; ?>
                 </div>
             </div>
 
@@ -191,6 +204,7 @@ if ($filter_section > 0) {
                                     <td class="fw-bold text-navy"><?php echo htmlspecialchars($g['student_code']); ?></td>
                                     <td><?php echo htmlspecialchars($g['full_name']); ?></td>
                                     <form method="POST">
+                                        <?php echo csrfField(); ?>
                                         <input type="hidden" name="action" value="save_grade">
                                         <input type="hidden" name="student_subject_id" value="<?php echo $g['ss_id']; ?>">
                                         <input type="hidden" name="section_id" value="<?php echo $filter_section; ?>">

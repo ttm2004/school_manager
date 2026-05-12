@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
 requireAnyRole(['admissions_manager', 'admissions_staff']);
@@ -89,10 +89,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
 
                     // Tìm major_id trong DB
-                    $mc  = $conn->real_escape_string($majorCode);
-                    $res = $conn->query("SELECT id, major_name FROM majors WHERE major_code='$mc' LIMIT 1");
+                    $mcStmt = $conn->prepare("SELECT id, major_name FROM majors WHERE major_code=? LIMIT 1");
+                    $mcStmt->bind_param('s', $majorCode);
+                    $mcStmt->execute();
+                    $res = $mcStmt->get_result();
+                    $mcStmt->close();
                     if (!$res || $res->num_rows === 0) {
-                        $importErrors[] = "Dòng $lineNo: Mã ngành <strong>$majorCode</strong> không tồn tại trong hệ thống.";
+                        $importErrors[] = "Dòng $lineNo: Mã ngành <strong>" . htmlspecialchars($majorCode) . "</strong> không tồn tại trong hệ thống.";
                         continue;
                     }
                     $maj = $res->fetch_assoc();
@@ -124,101 +127,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'clear_import') {
         unset($_SESSION['import_rows']);
         $importRows = [];
-        $success = 'Đã xóa dữ liệu import.';
+        $_SESSION['_flash'] = ['type' => 'success', 'message' => 'Đã xóa dữ liệu import.'];
+        header('Location: auto_review.php');
+        exit();
     }
 
-    // ── 3. CHẠY XÉT TUYỂN TỰ ĐỘNG (từ import hoặc nhập tay) ─
-    if ($action === 'run_auto_review') {
-        if (!$isManager) {
-            $error = 'Chỉ Trưởng phòng mới có quyền chạy xét tuyển tự động.';
-        } elseif ($reviewLocked) {
-            $error = 'Chức năng chỉ khả dụng trong giai đoạn xét tuyển.';
-        } else {
-            $source = $_POST['source'] ?? 'manual'; // 'import' hoặc 'manual'
-
-            $jobs = [];
-            if ($source === 'import' && !empty($importRows)) {
-                $jobs = $importRows;
-            } else {
-                // Nhập tay
-                $major_id  = intval($_POST['major_id'] ?? 0);
-                $threshold = floatval($_POST['threshold'] ?? 0);
-                $quota     = intval($_POST['quota'] ?? 0);
-                if (!$major_id || $threshold <= 0) {
-                    $error = 'Vui lòng chọn ngành và nhập điểm chuẩn hợp lệ.';
-                } else {
-                    $mRes = $conn->query("SELECT major_code, major_name FROM majors WHERE id=$major_id LIMIT 1");
-                    $mRow = $mRes ? $mRes->fetch_assoc() : [];
-                    $jobs[] = [
-                        'major_id'   => $major_id,
-                        'major_code' => $mRow['major_code'] ?? '',
-                        'major_name' => $mRow['major_name'] ?? '',
-                        'quota'      => $quota,
-                        'threshold'  => $threshold,
-                        'year'       => $activeRound['year'] ?? date('Y'),
-                    ];
-                }
-            }
-
-            if ($jobs && !$error) {
-                foreach ($jobs as $job) {
-                    $mid  = intval($job['major_id']);
-                    $thr  = floatval($job['threshold']);
-                    $qta  = intval($job['quota']);
-
-                    // Lấy hồ sơ chờ xét của ngành này
-                    $stmt = $conn->prepare("
-                        SELECT id, full_name, email,
-                               (math_score + literature_score + english_score) AS total_score
-                        FROM admission_applications
-                        WHERE major_id = ? AND status IN ('new','checking')
-                        ORDER BY total_score DESC
-                    ");
-                    $stmt->bind_param('i', $mid);
-                    $stmt->execute();
-                    $candidates = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-                    $stmt->close();
-
-                    $approved = $rejected = $rank = 0;
-                    $approvedList = $rejectedList = [];
-
-                    foreach ($candidates as $c) {
-                        $rank++;
-                        $pass = ($c['total_score'] >= $thr) && ($qta === 0 || $rank <= $qta);
-                        $newStatus = $pass ? 'approved' : 'rejected';
-
-                        $upd = $conn->prepare("UPDATE admission_applications SET status=? WHERE id=?");
-                        $upd->bind_param('si', $newStatus, $c['id']);
-                        $upd->execute();
-                        $upd->close();
-
-                        if ($pass) {
-                            $approved++;
-                            $approvedList[] = ['name' => $c['full_name'], 'score' => $c['total_score']];
-                        } else {
-                            $rejected++;
-                            $rejectedList[] = ['name' => $c['full_name'], 'score' => $c['total_score']];
-                        }
-                    }
-
-                    $reviewResults[] = [
-                        'major_code'   => $job['major_code'],
-                        'major_name'   => $job['major_name'],
-                        'threshold'    => $thr,
-                        'quota'        => $qta,
-                        'total'        => count($candidates),
-                        'approved'     => $approved,
-                        'rejected'     => $rejected,
-                        'approved_list'=> $approvedList,
-                        'rejected_list'=> $rejectedList,
-                    ];
-                }
-                $totalApproved = array_sum(array_column($reviewResults, 'approved'));
-                $totalRejected = array_sum(array_column($reviewResults, 'rejected'));
-                $success = "Xét tuyển hoàn tất: <strong>$totalApproved</strong> đậu, <strong>$totalRejected</strong> rớt trên " . count($jobs) . " ngành.";
-            }
-        }
-    }
+    // ── 3. CHẠY XÉT TUYỂN TỰ ĐỘNG — xử lý qua api/actions.php (fetch) ──
+    // run_auto_review được gọi từ JS fetch, không xử lý ở đây nữa
 
     // ── 4. DUYỆT / TỪ CHỐI THỦ CÔNG ────────────────────────
     if ($action === 'bulk_approve' || $action === 'bulk_reject') {
@@ -508,12 +423,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 <div class="mt-3">
                     <div class="d-flex align-items-center justify-content-between mb-1">
                         <span class="fw-semibold small text-success"><i class="bi bi-check-circle me-1"></i><?php echo count($importRows); ?> ngành đã import</span>
-                        <form method="POST" class="d-inline">
-                            <input type="hidden" name="action" value="clear_import">
-                            <button type="submit" class="btn btn-xs btn-outline-danger" style="font-size:.72rem;padding:2px 8px;">
-                                <i class="bi bi-trash me-1"></i>Xóa
-                            </button>
-                        </form>
+                        <button type="button" class="btn btn-xs btn-outline-danger" style="font-size:.72rem;padding:2px 8px;"
+                            onclick="clearImport(this)">
+                            <i class="bi bi-trash me-1"></i>Xóa
+                        </button>
                     </div>
                     <div class="table-responsive">
                         <table class="table table-sm table-bordered mb-0" style="font-size:.78rem;">
@@ -549,23 +462,17 @@ document.addEventListener('DOMContentLoaded', function() {
                     <i class="bi bi-info-circle me-1"></i>
                     Đã có <strong><?php echo count($importRows); ?></strong> ngành từ file import. Nhấn bên dưới để chạy tất cả.
                 </div>
-                <form method="POST" onsubmit="return confirm('Xác nhận chạy xét tuyển tự động cho <?php echo count($importRows); ?> ngành?')">
-                    <input type="hidden" name="action" value="run_auto_review">
-                    <input type="hidden" name="source" value="import">
-                    <button type="submit" class="btn btn-navy w-100 mb-3">
-                        <i class="bi bi-play-circle-fill me-2"></i>Chạy xét tuyển từ file import (<?php echo count($importRows); ?> ngành)
-                    </button>
-                </form>
+                <button type="button" class="btn btn-navy w-100 mb-3" id="btnRunImport">
+                    <i class="bi bi-play-circle-fill me-2"></i>Chạy xét tuyển từ file import (<?php echo count($importRows); ?> ngành)
+                </button>
                 <hr class="my-2"><p class="text-muted small text-center mb-2">— hoặc nhập tay từng ngành —</p>
                 <?php endif; ?>
 
                 <!-- Nhập tay -->
-                <form method="POST" <?php echo (!$isManager || $reviewLocked) ? '' : ''; ?>>
-                    <input type="hidden" name="action" value="run_auto_review">
-                    <input type="hidden" name="source" value="manual">
+                <div>
                     <div class="mb-3">
                         <label class="form-label fw-bold small">Ngành xét tuyển <span class="text-danger">*</span></label>
-                        <select name="major_id" class="form-select form-select-sm" <?php echo (!$isManager || $reviewLocked) ? 'disabled' : 'required'; ?>>
+                        <select id="manual_major_id" class="form-select form-select-sm" <?php echo (!$isManager || $reviewLocked) ? 'disabled' : ''; ?>>
                             <option value="">-- Chọn ngành --</option>
                             <?php if ($majors): while ($m = $majors->fetch_assoc()): ?>
                             <option value="<?php echo $m['id']; ?>"><?php echo htmlspecialchars($m['major_name']); ?> (<?php echo $m['major_code']; ?>)</option>
@@ -575,12 +482,12 @@ document.addEventListener('DOMContentLoaded', function() {
                     <div class="row g-2 mb-3">
                         <div class="col-6">
                             <label class="form-label fw-bold small">Điểm chuẩn <span class="text-danger">*</span></label>
-                            <input type="number" name="threshold" class="form-control form-control-sm" step="0.25" min="0" max="30" placeholder="VD: 18.5"
-                                <?php echo (!$isManager || $reviewLocked) ? 'disabled' : 'required'; ?>>
+                            <input type="number" id="manual_threshold" class="form-control form-control-sm" step="0.25" min="0" max="30" placeholder="VD: 18.5"
+                                <?php echo (!$isManager || $reviewLocked) ? 'disabled' : ''; ?>>
                         </div>
                         <div class="col-6">
                             <label class="form-label fw-bold small">Chỉ tiêu</label>
-                            <input type="number" name="quota" class="form-control form-control-sm" min="0" placeholder="0 = không giới hạn"
+                            <input type="number" id="manual_quota" class="form-control form-control-sm" min="0" placeholder="0 = không giới hạn"
                                 <?php echo (!$isManager || $reviewLocked) ? 'disabled' : ''; ?>>
                         </div>
                     </div>
@@ -588,9 +495,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         <i class="bi bi-exclamation-triangle-fill me-1"></i>
                         Thao tác này cập nhật trạng thái tất cả hồ sơ đang chờ. Không thể hoàn tác.
                     </div>
-                    <button type="submit" class="btn btn-navy w-100"
-                        <?php echo (!$isManager || $reviewLocked) ? 'disabled' : ''; ?>
-                        onclick="return confirm('Xác nhận chạy xét tuyển tự động?')">
+                    <button type="button" class="btn btn-navy w-100" id="btnRunManual"
+                        <?php echo (!$isManager || $reviewLocked) ? 'disabled' : ''; ?>>
                         <i class="bi bi-play-circle-fill me-2"></i>Chạy xét tuyển (nhập tay)
                     </button>
                     <?php if (!$isManager): ?>
@@ -598,7 +504,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     <?php elseif ($reviewLocked): ?>
                     <div class="text-muted small mt-2"><i class="bi bi-lock me-1"></i>Chỉ khả dụng khi đợt tuyển sinh ở trạng thái <strong>Đang xét tuyển</strong>.</div>
                     <?php endif; ?>
-                </form>
+                </div>
             </div>
         </div>
     </div>
@@ -622,13 +528,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 </form>
             </div>
             <div class="card-body p-0">
-                <form method="POST" id="bulkForm">
+                <div id="bulkWrapper">
                     <div class="p-2 border-bottom d-flex gap-2 flex-wrap align-items-center">
                         <?php if (hasPermission('admissions','approve_application') && !$reviewLocked): ?>
-                        <button type="submit" name="action" value="bulk_approve" class="btn btn-sm btn-success" onclick="return confirmBulk('duyệt')">
+                        <button type="button" class="btn btn-sm btn-success" onclick="bulkAction('bulk_approve')">
                             <i class="bi bi-check-all me-1"></i>Duyệt đã chọn
                         </button>
-                        <button type="submit" name="action" value="bulk_reject" class="btn btn-sm btn-danger" onclick="return confirmBulk('từ chối')">
+                        <button type="button" class="btn btn-sm btn-danger" onclick="bulkAction('bulk_reject')">
                             <i class="bi bi-x-lg me-1"></i>Từ chối đã chọn
                         </button>
                         <?php elseif ($reviewLocked): ?>
@@ -682,13 +588,153 @@ document.addEventListener('DOMContentLoaded', function() {
                             </tbody>
                         </table>
                     </div>
-                </form>
+                </div>
             </div>
         </div>
     </div>
 </div>
 
 <script>
+const CSRF = document.querySelector('meta[name="csrf-token"]')?.content || '';
+
+function admFetch(data) {
+    const fd = new FormData();
+    fd.append('_csrf_token', CSRF);
+    fd.append('module', 'auto_review');
+    Object.entries(data).forEach(([k, v]) => fd.append(k, v));
+    return fetch('/university/admissions/api/actions.php', {
+        method: 'POST', body: fd, credentials: 'same-origin'
+    }).then(r => r.json());
+}
+
+function showToast(type, msg) {
+    const el = document.createElement('div');
+    el.className = `alert alert-${type==='success'?'success':'danger'} alert-dismissible fade show position-fixed shadow`;
+    el.style.cssText = 'top:1rem;right:1rem;z-index:9999;min-width:320px;max-width:480px;';
+    el.innerHTML = `<i class="bi bi-${type==='success'?'check-circle-fill':'exclamation-circle-fill'} me-2"></i>${msg}<button type="button" class="btn-close" data-bs-dismiss="alert"></button>`;
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 6000);
+}
+
+function setLoading(btn, loading) {
+    if (loading) {
+        btn.disabled = true;
+        btn._orig = btn.innerHTML;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Đang xử lý...';
+    } else {
+        btn.disabled = false;
+        btn.innerHTML = btn._orig || btn.innerHTML;
+    }
+}
+
+function showResults(results) {
+    let html = `<div class="card mb-4 border-0 shadow-sm">
+        <div class="card-header d-flex align-items-center gap-2" style="background:linear-gradient(135deg,#0d2d6b,#1a4fa0);">
+            <i class="bi bi-clipboard2-data-fill fs-5"></i>
+            <span class="fw-bold">Kết quả xét tuyển tự động</span>
+        </div><div class="card-body p-0">`;
+    results.forEach(r => {
+        html += `<div class="border-bottom p-3">
+            <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-1">
+                <div>
+                    <span class="fw-bold text-navy">${r.major_name}</span>
+                    <span class="badge bg-secondary ms-2">Điểm chuẩn: ${parseFloat(r.threshold).toFixed(2)}</span>
+                    ${r.quota ? `<span class="badge bg-info ms-1">Chỉ tiêu: ${r.quota}</span>` : ''}
+                </div>
+                <div class="d-flex gap-2">
+                    <span class="badge bg-success fs-6 px-3"><i class="bi bi-check-circle me-1"></i>${r.approved} Đậu</span>
+                    <span class="badge bg-danger fs-6 px-3"><i class="bi bi-x-circle me-1"></i>${r.rejected} Rớt</span>
+                    <span class="badge bg-secondary fs-6 px-3"><i class="bi bi-people me-1"></i>${r.total} Tổng</span>
+                </div>
+            </div>
+        </div>`;
+    });
+    html += '</div></div>';
+    // Chèn vào đầu trang
+    const content = document.querySelector('.adm-content');
+    if (content) content.insertAdjacentHTML('afterbegin', html);
+}
+
+// Chạy từ import
+const btnRunImport = document.getElementById('btnRunImport');
+if (btnRunImport) {
+    btnRunImport.addEventListener('click', function() {
+        if (!confirm('Xác nhận chạy xét tuyển tự động từ file import?')) return;
+        setLoading(this, true);
+        const btn = this;
+        admFetch({ action: 'run_auto_review', source: 'import' })
+            .then(res => {
+                setLoading(btn, false);
+                if (res.success) {
+                    showToast('success', res.message);
+                    if (res.data?.results) showResults(res.data.results);
+                } else { showToast('error', res.message); }
+            })
+            .catch(() => { setLoading(btn, false); showToast('error', 'Lỗi kết nối.'); });
+    });
+}
+
+// Chạy nhập tay
+const btnRunManual = document.getElementById('btnRunManual');
+if (btnRunManual) {
+    btnRunManual.addEventListener('click', function() {
+        const major_id  = document.getElementById('manual_major_id')?.value;
+        const threshold = document.getElementById('manual_threshold')?.value;
+        const quota     = document.getElementById('manual_quota')?.value || '0';
+        if (!major_id || !threshold) { showToast('error', 'Vui lòng chọn ngành và nhập điểm chuẩn.'); return; }
+        if (!confirm('Xác nhận chạy xét tuyển tự động?')) return;
+        setLoading(this, true);
+        const btn = this;
+        admFetch({ action: 'run_auto_review', source: 'manual', major_id, threshold, quota })
+            .then(res => {
+                setLoading(btn, false);
+                if (res.success) {
+                    showToast('success', res.message);
+                    if (res.data?.results) showResults(res.data.results);
+                } else { showToast('error', res.message); }
+            })
+            .catch(() => { setLoading(btn, false); showToast('error', 'Lỗi kết nối.'); });
+    });
+}
+
+// Xóa import
+function clearImport(btn) {
+    if (!confirm('Xóa dữ liệu import?')) return;
+    btn.disabled = true;
+    const fd = new FormData();
+    fd.append('action', 'clear_import');
+    fetch('auto_review.php', { method: 'POST', body: fd, credentials: 'same-origin' })
+        .then(() => location.reload())
+        .catch(() => { btn.disabled = false; showToast('error', 'Lỗi kết nối.'); });
+}
+
+// Bulk approve/reject
+function bulkAction(action) {
+    const checked = [...document.querySelectorAll('.app-check:checked')].map(c => c.value);
+    if (!checked.length) { showToast('error', 'Vui lòng chọn ít nhất một hồ sơ.'); return; }
+    const label = action === 'bulk_approve' ? 'duyệt' : 'từ chối';
+    if (!confirm(`Xác nhận ${label} ${checked.length} hồ sơ đã chọn?`)) return;
+
+    const fd = new FormData();
+    fd.append('_csrf_token', CSRF);
+    fd.append('module', 'applications');
+    fd.append('action', action === 'bulk_approve' ? 'bulk_approve' : 'bulk_reject');
+    checked.forEach(id => fd.append('ids[]', id));
+
+    fetch('/university/admissions/api/actions.php', {
+        method: 'POST', body: fd, credentials: 'same-origin'
+    }).then(r => r.json()).then(res => {
+        if (res.success) {
+            showToast('success', res.message);
+            // Xóa các dòng đã xử lý khỏi bảng
+            checked.forEach(id => {
+                const cb = document.querySelector(`.app-check[value="${id}"]`);
+                if (cb) cb.closest('tr')?.remove();
+            });
+        } else { showToast('error', res.message); }
+    }).catch(() => showToast('error', 'Lỗi kết nối.'));
+}
+
 function toggleAll() {
     const checks = document.querySelectorAll('.app-check');
     const allChecked = [...checks].every(c => c.checked);
@@ -697,10 +743,5 @@ function toggleAll() {
 document.getElementById('checkAll')?.addEventListener('change', function() {
     document.querySelectorAll('.app-check').forEach(c => c.checked = this.checked);
 });
-function confirmBulk(action) {
-    const checked = document.querySelectorAll('.app-check:checked').length;
-    if (checked === 0) { alert('Vui lòng chọn ít nhất một hồ sơ.'); return false; }
-    return confirm(`Xác nhận ${action} ${checked} hồ sơ đã chọn?`);
-}
 </script>
 <?php include __DIR__ . '/includes/footer.php'; ?>

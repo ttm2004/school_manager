@@ -52,6 +52,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
     <title>Ho so - Giang vien</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
@@ -59,22 +60,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 </head>
 <body>
 <div class="student-wrapper">
-    <div class="student-sidebar">
-        <div class="sidebar-brand">
-            <div class="sidebar-brand-icon"><i class="bi bi-person-badge-fill"></i></div>
-            <div class="sidebar-brand-text"><div>Cong Giang vien</div><small><?php echo htmlspecialchars($teacher['teacher_code']); ?></small></div>
-        </div>
-        <nav class="sidebar-nav">
-            <a href="/university/teacher/index.php" class="sidebar-link"><i class="bi bi-speedometer2"></i> Tong quan</a>
-            <a href="/university/teacher/profile.php" class="sidebar-link active"><i class="bi bi-person-fill"></i> Ho so ca nhan</a>
-            <a href="/university/teacher/my_courses.php" class="sidebar-link"><i class="bi bi-journal-text"></i> Lop hoc phan</a>
-            <a href="/university/teacher/grades.php" class="sidebar-link"><i class="bi bi-bar-chart-fill"></i> Nhap diem</a>
-            <a href="/university/teacher/evaluation.php" class="sidebar-link"><i class="bi bi-star-fill"></i> Ket qua danh gia</a>
-            <hr class="my-2">
-            <a href="/university/index.php" class="sidebar-link"><i class="bi bi-globe"></i> Trang chu</a>
-            <a href="/university/login.php?logout=1" class="sidebar-link text-danger"><i class="bi bi-box-arrow-right"></i> Dang xuat</a>
-        </nav>
-    </div>
+    <?php include __DIR__ . '/includes/sidebar.php'; ?>
     <div class="student-main">
         <div class="student-topbar">
             <span class="fw-bold text-navy">Ho so ca nhan</span>

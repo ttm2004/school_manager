@@ -64,9 +64,6 @@ $currentDir = basename(dirname($_SERVER['PHP_SELF']));
         <a href="/university/admin/tuition.php" class="sidebar-link <?php echo $currentFile=='tuition.php'?'active':''; ?>">
             <i class="bi bi-cash-coin"></i> Học phí
         </a>
-        <a href="/university/admin/tuition.php" class="sidebar-link <?php echo $currentFile=='tuition.php'?'active':''; ?>">
-            <i class="bi bi-cash-coin"></i> Học phí
-        </a>
 
         <div class="sidebar-section-title">Tuyển sinh</div>
         <a href="/university/admissions/" class="sidebar-link <?php echo $currentDir==='admissions'?'active':''; ?>" style="background:rgba(245,166,35,.08);border-left:3px solid var(--gold);">

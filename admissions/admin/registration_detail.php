@@ -43,10 +43,10 @@ include __DIR__ . '/../includes/header.php';
 ?>
 
 <?php if (isset($_SESSION['adm_success'])): ?>
-<div class="alert alert-success auto-dismiss"><?php echo $_SESSION['adm_success']; unset($_SESSION['adm_success']); ?></div>
+<div class="alert alert-success auto-dismiss"><?php echo htmlspecialchars($_SESSION['adm_success']); unset($_SESSION['adm_success']); ?></div>
 <?php endif; ?>
 <?php if (isset($_SESSION['adm_error'])): ?>
-<div class="alert alert-danger auto-dismiss"><?php echo $_SESSION['adm_error']; unset($_SESSION['adm_error']); ?></div>
+<div class="alert alert-danger auto-dismiss"><?php echo htmlspecialchars($_SESSION['adm_error']); unset($_SESSION['adm_error']); ?></div>
 <?php endif; ?>
 
 <div class="d-flex justify-content-between align-items-center mb-3">

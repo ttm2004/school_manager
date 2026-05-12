@@ -1,6 +1,7 @@
 ﻿<?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
+require_once '../includes/grade_windows.php';
 requireRole('teacher');
 
 $stmt = $conn->prepare("
@@ -31,7 +32,7 @@ $stuCount = $stuCount->get_result()->fetch_assoc()['c'];
 
 // Lớp học phần học kỳ hiện tại
 $currentCourses = $conn->prepare("
-    SELECT cs.*, s.subject_name, s.credits, sm.semester_name, sm.school_year
+    SELECT cs.*, s.subject_name, s.credits, sm.semester_name, sm.school_year, sm.grade_submit_deadline
     FROM course_sections cs
     JOIN subjects s ON cs.subject_id = s.id
     JOIN semesters sm ON cs.semester_id = sm.id
@@ -41,12 +42,15 @@ $currentCourses = $conn->prepare("
 $currentCourses->bind_param('i', $teacher['id']);
 $currentCourses->execute();
 $currentCourses = $currentCourses->get_result();
+
+$openGradeSections = getTeacherOpenGradeSections($conn, (int)$teacher['id']);
 ?>
 <!DOCTYPE html>
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
     <title>Cổng Giảng viên - TDMU</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
@@ -54,22 +58,7 @@ $currentCourses = $currentCourses->get_result();
 </head>
 <body>
 <div class="student-wrapper">
-    <div class="student-sidebar">
-        <div class="sidebar-brand">
-            <div class="sidebar-brand-icon"><i class="bi bi-person-badge-fill"></i></div>
-            <div class="sidebar-brand-text"><div>Cổng Giảng viên</div><small><?php echo htmlspecialchars($teacher['teacher_code']); ?></small></div>
-        </div>
-        <nav class="sidebar-nav">
-            <a href="/university/teacher/index.php" class="sidebar-link active"><i class="bi bi-speedometer2"></i> Tổng quan</a>
-            <a href="/university/teacher/profile.php" class="sidebar-link"><i class="bi bi-person-fill"></i> Hồ sơ cá nhân</a>
-            <a href="/university/teacher/my_courses.php" class="sidebar-link"><i class="bi bi-journal-text"></i> Lớp học phần</a>
-            <a href="/university/teacher/grades.php" class="sidebar-link"><i class="bi bi-bar-chart-fill"></i> Nhập điểm</a>
-            <a href="/university/teacher/evaluation.php" class="sidebar-link"><i class="bi bi-star-fill"></i> Kết quả đánh giá</a>
-            <hr class="my-2">
-            <a href="/university/index.php" class="sidebar-link"><i class="bi bi-globe"></i> Trang chủ</a>
-            <a href="/university/login.php?logout=1" class="sidebar-link text-danger"><i class="bi bi-box-arrow-right"></i> Đăng xuất</a>
-        </nav>
-    </div>
+    <?php include __DIR__ . '/includes/sidebar.php'; ?>
     <div class="student-main">
         <div class="student-topbar">
             <div class="d-flex align-items-center gap-3">
@@ -82,6 +71,17 @@ $currentCourses = $currentCourses->get_result();
             </div>
         </div>
         <div class="student-content">
+            <?php if (!empty($openGradeSections)): ?>
+            <div class="alert alert-success d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <div>
+                    <i class="bi bi-unlock-fill me-2"></i>
+                    Phong Dao tao dang mo nhap diem cho <?php echo count($openGradeSections); ?> lop hoc phan da ket thuc.
+                </div>
+                <a href="/university/teacher/grades.php" class="btn btn-sm btn-success">
+                    <i class="bi bi-pencil-square me-1"></i>Nhap diem
+                </a>
+            </div>
+            <?php endif; ?>
             <!-- Thông tin giảng viên -->
             <div class="row g-4 mb-4">
                 <div class="col-lg-8">
@@ -150,9 +150,13 @@ $currentCourses = $currentCourses->get_result();
                                     <td class="small"><?php echo htmlspecialchars($c['room']); ?></td>
                                     <td><span class="badge bg-<?php echo $c['current_students']>=$c['max_students']?'danger':'success'; ?>"><?php echo $c['current_students']; ?>/<?php echo $c['max_students']; ?></span></td>
                                     <td>
+                                        <?php if (isGradeInputWindowOpen($c['end_date'] ?? null, $c['grade_submit_deadline'] ?? null)): ?>
                                         <a href="/university/teacher/grades.php?section_id=<?php echo $c['id']; ?>" class="btn btn-sm btn-gold">
                                             <i class="bi bi-pencil-square me-1"></i>Nhập điểm
                                         </a>
+                                        <?php else: ?>
+                                        <span class="text-muted small">Chua mo nhap diem</span>
+                                        <?php endif; ?>
                                     </td>
                                 </tr>
                                 <?php endwhile; else: ?>

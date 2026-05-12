@@ -12,8 +12,9 @@ if (session_status() === PHP_SESSION_NONE) {
 
 // Helper functions
 function adm_sanitize($input) {
-    global $conn;
-    return $conn->real_escape_string(trim(htmlspecialchars($input, ENT_QUOTES, 'UTF-8')));
+    // Chỉ dùng để làm sạch output HTML, KHÔNG dùng để escape SQL
+    // Cho SQL: luôn dùng prepared statements
+    return trim(htmlspecialchars($input, ENT_QUOTES, 'UTF-8'));
 }
 
 function adm_redirect($url) {

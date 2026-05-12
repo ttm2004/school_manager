@@ -5,6 +5,7 @@
  */
 require_once '../config/database.php';
 require_once '../includes/auth.php';
+require_once '../includes/AcademicPolicy.php';
 requireAnyRole(['admissions_manager', 'admissions_staff']);
 
 header('Content-Type: application/json; charset=utf-8');
@@ -95,7 +96,15 @@ if ($action === 'create_account') {
     if ($chk->get_result()->num_rows > 0) { $chk->close(); jsonErr('Email này đã có tài khoản sinh viên.'); }
     $chk->close();
 
-    $year      = date('Y', strtotime($app['created_at']));
+    $classStmt = $conn->prepare("SELECT c.id, c.major_id, c.enrollment_year, c.cohort_id FROM classes c WHERE c.id = ? LIMIT 1");
+    $classStmt->bind_param('i', $class_id);
+    $classStmt->execute();
+    $classRow = $classStmt->get_result()->fetch_assoc();
+    $classStmt->close();
+    if (!$classRow) jsonErr('Lớp hành chính không hợp lệ.');
+    if ((int)$classRow['major_id'] !== (int)$app['major_id']) jsonErr('Lớp hành chính không thuộc ngành trúng tuyển.');
+
+    $year      = (int)($classRow['enrollment_year'] ?: date('Y', strtotime($app['created_at'])));
     $majorCode = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $app['major_code'] ?? 'SV'));
     $attempts  = 0;
     do {
@@ -111,14 +120,31 @@ if ($action === 'create_account') {
 
     $conn->begin_transaction();
     try {
+        $cohortId = (int)($classRow['cohort_id'] ?? 0);
+        $programId = 0;
+        $expectedGradYear = $year + 4;
+        if ($cohortId > 0) {
+            $cohort = $conn->query("SELECT program_id, enrollment_year, duration_years FROM training_cohorts WHERE id=$cohortId LIMIT 1")->fetch_assoc();
+            if ($cohort) {
+                $programId = (int)$cohort['program_id'];
+                $year = (int)$cohort['enrollment_year'];
+                $expectedGradYear = $year + (int)ceil((float)$cohort['duration_years']);
+            }
+        }
+
         $us = $conn->prepare("INSERT INTO users (username,password,full_name,email,phone,role,status) VALUES (?,?,?,?,?,'student',1)");
         $us->bind_param('sssss', $username, $hashed, $app['full_name'], $app['email'], $app['phone']);
         if (!$us->execute()) throw new Exception($conn->error);
         $userId = $conn->insert_id;
         $us->close();
 
-        $ss = $conn->prepare('INSERT INTO students (user_id,student_code,class_id,address,birthday,gender) VALUES (?,?,?,?,?,?)');
-        $ss->bind_param('isisss', $userId, $studentCode, $class_id, $app['address'], $app['birthday'], $app['gender']);
+        $ss = $conn->prepare(
+            "INSERT INTO students
+             (user_id, student_code, class_id, enrollment_year, cohort_id, training_program_id,
+              expected_grad_year, academic_status, address, birthday, gender)
+             VALUES (?,?,?,?,?,?,?,'Đang học',?,?,?)"
+        );
+        $ss->bind_param('isiiiiisss', $userId, $studentCode, $class_id, $year, $cohortId, $programId, $expectedGradYear, $app['address'], $app['birthday'], $app['gender']);
         if (!$ss->execute()) throw new Exception($conn->error);
         $ss->close();
 

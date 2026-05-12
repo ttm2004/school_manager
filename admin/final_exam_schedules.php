@@ -137,14 +137,24 @@ if (isset($_GET['check_room']) && isset($_GET['exam_date']) && isset($_GET['star
 }
 
 
-$filter_sem  = intval($_GET['semester_id'] ?? 0);
-$filter_date = trim($_GET['exam_date'] ?? '');
+$filter_sem    = intval($_GET['semester_id'] ?? 0);
+$filter_date   = trim($_GET['exam_date'] ?? '');
 $filter_status = trim($_GET['status'] ?? '');
+
+// Validate filter_date format (YYYY-MM-DD) để tránh injection
+if ($filter_date && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $filter_date)) {
+    $filter_date = '';
+}
+// Whitelist filter_status
+$allowedStatuses = ['scheduled', 'completed', 'cancelled', 'postponed'];
+if ($filter_status && !in_array($filter_status, $allowedStatuses, true)) {
+    $filter_status = '';
+}
 
 $whereArr = [];
 if ($filter_sem)    $whereArr[] = "cs.semester_id = " . intval($filter_sem);
-if ($filter_date)   $whereArr[] = "f.exam_date = '" . $conn->real_escape_string($filter_date) . "'";
-if ($filter_status) $whereArr[] = "f.status = '" . $conn->real_escape_string($filter_status) . "'";
+if ($filter_date)   $whereArr[] = "f.exam_date = '" . $filter_date . "'";
+if ($filter_status) $whereArr[] = "f.status = '" . $filter_status . "'";
 $whereSQL = $whereArr ? 'WHERE ' . implode(' AND ', $whereArr) : '';
 
 // ===== LẤY DỮ LIỆU =====

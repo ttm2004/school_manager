@@ -1,6 +1,7 @@
 <?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
+require_once '../includes/teacher_assignment_rules.php';
 requireRole('admin');
 $pageTitle = 'Phân công Giảng viên';
 
@@ -14,10 +15,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $section_id = intval($_POST['section_id'] ?? 0);
         $teacher_id = intval($_POST['teacher_id'] ?? 0);
         if ($section_id && $teacher_id) {
+            $assignmentCheck = validateTeacherAssignmentForSection($conn, $teacher_id, $section_id);
+            if (!$assignmentCheck['ok']) {
+                $error = $assignmentCheck['message'];
+            } else {
             $stmt = $conn->prepare("UPDATE course_sections SET teacher_id=? WHERE id=?");
             $stmt->bind_param('ii', $teacher_id, $section_id);
             $stmt->execute() ? $success = 'Phân công giảng viên thành công!' : $error = 'Lỗi: ' . $conn->error;
             $stmt->close();
+            }
         } else {
             $error = 'Vui lòng chọn đầy đủ lớp học phần và giảng viên.';
         }
@@ -39,11 +45,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $section_ids = $_POST['section_ids'] ?? [];
         if ($teacher_id && !empty($section_ids)) {
             $ids = array_map('intval', $section_ids);
+            $invalid = '';
+            foreach ($ids as $sid) {
+                $assignmentCheck = validateTeacherAssignmentForSection($conn, $teacher_id, $sid);
+                if (!$assignmentCheck['ok']) {
+                    $invalid = $assignmentCheck['message'];
+                    break;
+                }
+            }
+            if ($invalid !== '') {
+                $error = $invalid;
+            } else {
             $placeholders = implode(',', $ids);
             $stmt = $conn->prepare("UPDATE course_sections SET teacher_id=? WHERE id IN ($placeholders)");
             $stmt->bind_param('i', $teacher_id);
             $stmt->execute() ? $success = 'Phân công hàng loạt thành công cho ' . count($ids) . ' lớp học phần!' : $error = 'Lỗi: ' . $conn->error;
             $stmt->close();
+            }
         } else {
             $error = 'Vui lòng chọn giảng viên và ít nhất một lớp học phần.';
         }

@@ -1,6 +1,7 @@
 ﻿<?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
+require_once '../includes/grade_windows.php';
 requireRole('teacher');
 
 $stmt = $conn->prepare("SELECT t.*, u.full_name FROM teachers t JOIN users u ON t.user_id=u.id WHERE t.user_id=?");
@@ -17,6 +18,7 @@ $whereSQL = $filter_sem ? "AND cs.semester_id = " . intval($filter_sem) : "";
 $stmt = $conn->prepare("
     SELECT cs.*, s.subject_name, s.credits, s.subject_type, s.subject_code,
            sm.semester_name, sm.school_year, sm.status as sem_status,
+           sm.grade_submit_deadline,
            cs.day_sessions, cs.schedule_data, cs.start_date, cs.end_date
     FROM course_sections cs
     JOIN subjects s ON cs.subject_id = s.id
@@ -34,7 +36,7 @@ $sectionStudents = [];
 $viewSectionInfo = null;
 if ($view_section) {
     // Kiểm tra lớp này có thuộc giảng viên không
-    $chk = $conn->prepare("SELECT cs.*, s.subject_name, s.subject_code, sm.semester_name, sm.school_year
+    $chk = $conn->prepare("SELECT cs.*, s.subject_name, s.subject_code, sm.semester_name, sm.school_year, sm.grade_submit_deadline
         FROM course_sections cs
         JOIN subjects s ON cs.subject_id = s.id
         JOIN semesters sm ON cs.semester_id = sm.id
@@ -71,6 +73,7 @@ if ($view_section) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
     <title>Lớp học phần - Giảng viên</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
@@ -78,27 +81,7 @@ if ($view_section) {
 </head>
 <body>
 <div class="student-wrapper">
-    <div class="student-sidebar">
-        <div class="sidebar-brand">
-            <div class="sidebar-brand-icon"><i class="bi bi-person-badge-fill"></i></div>
-            <div class="sidebar-brand-text">
-                <div>Cổng Giảng viên</div>
-                <small><?php echo htmlspecialchars($teacher['teacher_code']); ?></small>
-            </div>
-        </div>
-        <nav class="sidebar-nav">
-            <a href="/university/teacher/index.php" class="sidebar-link"><i class="bi bi-speedometer2"></i> Tổng quan</a>
-            <a href="/university/teacher/profile.php" class="sidebar-link"><i class="bi bi-person-fill"></i> Hồ sơ cá nhân</a>
-            <a href="/university/teacher/my_courses.php" class="sidebar-link active"><i class="bi bi-journal-text"></i> Lớp học phần</a>
-            <a href="/university/teacher/timetable.php" class="sidebar-link"><i class="bi bi-calendar3-week"></i> Thời khóa biểu</a>
-            <a href="/university/teacher/exam_schedule.php" class="sidebar-link"><i class="bi bi-calendar-event-fill"></i> Lịch thi cuối kỳ</a>
-            <a href="/university/teacher/grades.php" class="sidebar-link"><i class="bi bi-bar-chart-fill"></i> Nhập điểm</a>
-            <a href="/university/teacher/evaluation.php" class="sidebar-link"><i class="bi bi-star-fill"></i> Kết quả đánh giá</a>
-            <hr class="my-2">
-            <a href="/university/index.php" class="sidebar-link"><i class="bi bi-globe"></i> Trang chủ</a>
-            <a href="/university/login.php?logout=1" class="sidebar-link text-danger"><i class="bi bi-box-arrow-right"></i> Đăng xuất</a>
-        </nav>
-    </div>
+    <?php include __DIR__ . '/includes/sidebar.php'; ?>
     <div class="student-main">
         <div class="student-topbar">
             <span class="fw-bold text-navy">Lớp học phần của tôi</span>
@@ -152,7 +135,9 @@ if ($view_section) {
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php if (!empty($courses)): foreach ($courses as $c): ?>
+                                <?php if (!empty($courses)): foreach ($courses as $c):
+                                    $gradeWindowOpen = isGradeInputWindowOpen($c['end_date'] ?? null, $c['grade_submit_deadline'] ?? null);
+                                ?>
                                 <tr class="<?php echo $view_section==$c['id']?'table-primary':''; ?>">
                                     <td class="fw-bold text-navy small"><?php echo htmlspecialchars($c['section_code']); ?></td>
                                     <td>
@@ -230,11 +215,13 @@ if ($view_section) {
                                                 <i class="bi bi-people-fill"></i>
                                                 <span class="d-none d-md-inline ms-1">SV</span>
                                             </a>
-                                            <a href="/university/teacher/grades.php?section_id=<?php echo $c['id']; ?>"
-                                               class="btn btn-sm btn-gold" title="Nhập điểm">
-                                                <i class="bi bi-pencil-square"></i>
-                                                <span class="d-none d-md-inline ms-1">Điểm</span>
-                                            </a>
+                                            <?php if ($gradeWindowOpen): ?>
+                                                <a href="/university/teacher/grades.php?section_id=<?php echo $c['id']; ?>"
+                                                   class="btn btn-sm btn-gold" title="Nhập điểm">
+                                                    <i class="bi bi-pencil-square"></i>
+                                                    <span class="d-none d-md-inline ms-1">Điểm</span>
+                                                </a>
+                                            <?php endif; ?>
                                         </div>
                                     </td>
                                 </tr>
@@ -339,10 +326,12 @@ if ($view_section) {
                         </table>
                     </div>
                     <div class="p-3 border-top d-flex gap-3 flex-wrap">
-                        <a href="/university/teacher/grades.php?section_id=<?php echo $view_section; ?>"
-                           class="btn btn-gold btn-sm">
-                            <i class="bi bi-pencil-square me-1"></i>Nhập điểm cho lớp này
-                        </a>
+                        <?php if (isGradeInputWindowOpen($viewSectionInfo['end_date'] ?? null, $viewSectionInfo['grade_submit_deadline'] ?? null)): ?>
+                            <a href="/university/teacher/grades.php?section_id=<?php echo $view_section; ?>"
+                               class="btn btn-gold btn-sm">
+                                <i class="bi bi-pencil-square me-1"></i>Nhập điểm cho lớp này
+                            </a>
+                        <?php endif; ?>
                         <span class="text-muted small align-self-center">
                             Tổng: <?php echo count($sectionStudents); ?> sinh viên đã đăng ký
                         </span>

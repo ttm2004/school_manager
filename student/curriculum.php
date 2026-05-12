@@ -41,24 +41,63 @@ if (empty($student['major_id'])) {
 }
 
 // Lấy chương trình đào tạo của ngành sinh viên
-// Tự động thêm cột nếu chưa có
-foreach (["subject_type ENUM('required','elective','general') NOT NULL DEFAULT 'required'", "semester_order TINYINT NOT NULL DEFAULT 1"] as $colDef) {
-    $colName = explode(' ', $colDef)[0];
-    $chk = $conn->query("SHOW COLUMNS FROM subjects LIKE '$colName'");
-    if ($chk && $chk->num_rows == 0) {
-        $conn->query("ALTER TABLE subjects ADD COLUMN $colDef");
-    }
-}
+// Ưu tiên lấy từ bảng curriculum (có year_label, semester_label) nếu có dữ liệu
+$hasCurr = 0;
+$chkCurr = $conn->prepare("SELECT COUNT(*) AS c FROM curriculum WHERE major_id = ? AND deleted_at IS NULL");
+$chkCurr->bind_param('i', $student['major_id']);
+$chkCurr->execute();
+$hasCurr = (int)($chkCurr->get_result()->fetch_assoc()['c'] ?? 0);
+$chkCurr->close();
 
-$stmt = $conn->prepare("
-    SELECT * FROM subjects
-    WHERE major_id = ?
-    ORDER BY semester_order ASC, subject_type ASC, subject_name ASC
-");
-$stmt->bind_param('i', $student['major_id']);
-$stmt->execute();
-$allSubjects = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-$stmt->close();
+if ($hasCurr > 0) {
+    // Lấy từ curriculum JOIN subjects — có đầy đủ year_label, semester_label, total_periods, is_mandatory
+    $stmt = $conn->prepare("
+        SELECT s.id, s.subject_code, s.subject_name, s.credits,
+               s.theory_periods, s.practice_periods,
+               COALESCE(s.total_periods, s.theory_periods + s.practice_periods) AS total_periods,
+               s.description,
+               c.suggested_semester AS semester_order,
+               c.semester_label, c.year_label,
+               c.subject_type AS subject_type,
+               CASE c.subject_type
+                   WHEN 'required' THEN 'required'
+                   WHEN 'elective' THEN 'elective'
+                   WHEN 'general'  THEN 'general'
+                   ELSE 'required'
+               END AS subject_type_new,
+               CASE WHEN c.subject_type IN ('required','general') THEN 1 ELSE 0 END AS is_mandatory
+        FROM curriculum c
+        JOIN subjects s ON c.subject_id = s.id
+        WHERE c.major_id = ? AND c.deleted_at IS NULL
+        ORDER BY c.year_label ASC, c.suggested_semester ASC, s.subject_name ASC
+    ");
+    $stmt->bind_param('i', $student['major_id']);
+    $stmt->execute();
+    $allSubjects = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->close();
+} else {
+    // Fallback: lấy từ subjects trực tiếp (dữ liệu cũ chưa có curriculum)
+    // Tự động thêm cột nếu chưa có
+    foreach (["subject_type ENUM('required','elective','general') NOT NULL DEFAULT 'required'", "semester_order TINYINT NOT NULL DEFAULT 1"] as $colDef) {
+        $colName = explode(' ', $colDef)[0];
+        $chk = $conn->query("SHOW COLUMNS FROM subjects LIKE '$colName'");
+        if ($chk && $chk->num_rows == 0) {
+            $conn->query("ALTER TABLE subjects ADD COLUMN $colDef");
+        }
+    }
+    $stmt = $conn->prepare("
+        SELECT *, semester_order, NULL AS semester_label, NULL AS year_label,
+               subject_type AS subject_type_new,
+               COALESCE(total_periods, theory_periods + practice_periods) AS total_periods
+        FROM subjects
+        WHERE major_id = ?
+        ORDER BY semester_order ASC, subject_type ASC, subject_name ASC
+    ");
+    $stmt->bind_param('i', $student['major_id']);
+    $stmt->execute();
+    $allSubjects = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->close();
+}
 
 // Lấy các môn sinh viên đã học (có điểm hoặc đang học)
 $stmt = $conn->prepare("
@@ -80,15 +119,19 @@ foreach ($mySubjectsRaw as $ms) {
     $mySubjectMap[$ms['subject_id']] = $ms;
 }
 
-// Nhóm theo học kỳ
+// Nhóm theo năm học + học kỳ (key: year_label|semOrder|semLabel)
 $bySemester = [];
 foreach ($allSubjects as $s) {
-    $bySemester[$s['semester_order']][] = $s;
+    $yearLabel = $s['year_label'] ?? '';
+    $semLabel  = $s['semester_label'] ?? '';
+    $semOrder  = (int)($s['semester_order'] ?? 1);
+    $key = ($yearLabel ?: '0000') . '|' . sprintf('%02d', $semOrder) . '|' . $semLabel;
+    $bySemester[$key][] = $s;
 }
 ksort($bySemester);
 
 // Thống kê
-$totalRequired  = array_sum(array_column(array_filter($allSubjects, fn($s) => $s['subject_type']==='required'), 'credits'));
+$totalRequired  = array_sum(array_column(array_filter($allSubjects, fn($s) => in_array($s['subject_type_new'] ?? $s['subject_type'], ['required','general'])), 'credits'));
 $completedCredits = 0;
 foreach ($allSubjects as $s) {
     if (isset($mySubjectMap[$s['id']]) && ($mySubjectMap[$s['id']]['total_score'] ?? null) !== null) {
@@ -102,6 +145,7 @@ $progress = $student['total_credits'] > 0 ? round($completedCredits / $student['
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
     <title>Chương trình đào tạo - Sinh viên</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
@@ -115,29 +159,7 @@ $progress = $student['total_credits'] > 0 ? round($completedCredits / $student['
 </head>
 <body>
 <div class="student-wrapper">
-    <div class="student-sidebar">
-        <div class="sidebar-brand">
-            <div class="sidebar-brand-icon"><i class="bi bi-mortarboard-fill"></i></div>
-            <div class="sidebar-brand-text">
-                <div>Cổng Sinh viên</div>
-                <small><?php echo htmlspecialchars($student['student_code']); ?></small>
-            </div>
-        </div>
-        <nav class="sidebar-nav">
-            <a href="/university/student/index.php" class="sidebar-link"><i class="bi bi-speedometer2"></i> Tổng quan</a>
-            <a href="/university/student/profile.php" class="sidebar-link"><i class="bi bi-person-fill"></i> Hồ sơ cá nhân</a>
-            <a href="/university/student/curriculum.php" class="sidebar-link active"><i class="bi bi-journal-bookmark-fill"></i> Chương trình đào tạo</a>
-            <a href="/university/student/register_subject.php" class="sidebar-link"><i class="bi bi-journal-plus"></i> Đăng ký học phần</a>
-            <a href="/university/student/my_subjects.php" class="sidebar-link"><i class="bi bi-journal-check"></i> Học phần của tôi</a>
-            <a href="/university/student/timetable.php" class="sidebar-link"><i class="bi bi-calendar3-week"></i> Thời khóa biểu</a>
-            <a href="/university/student/exam_schedule.php" class="sidebar-link"><i class="bi bi-calendar-event-fill"></i> Lịch thi cuối kỳ</a>
-            <a href="/university/student/grades.php" class="sidebar-link"><i class="bi bi-bar-chart-fill"></i> Kết quả học tập</a>
-            <a href="/university/student/evaluation.php" class="sidebar-link"><i class="bi bi-star-fill"></i> Đánh giá giảng viên</a>
-            <hr class="my-2">
-            <a href="/university/index.php" class="sidebar-link"><i class="bi bi-globe"></i> Trang chủ</a>
-            <a href="/university/login.php?logout=1" class="sidebar-link text-danger"><i class="bi bi-box-arrow-right"></i> Đăng xuất</a>
-        </nav>
-    </div>
+    <?php include __DIR__ . '/includes/sidebar.php'; ?>
 
     <div class="student-main">
         <div class="student-topbar">
@@ -217,18 +239,31 @@ $progress = $student['total_credits'] > 0 ? round($completedCredits / $student['
             <?php
             $typeMap = ['required'=>['Bắt buộc','danger'],'elective'=>['Tự chọn','warning'],'general'=>['Đại cương','info']];
             $gradeColors = ['A'=>'success','B+'=>'primary','B'=>'info','C+'=>'warning','C'=>'warning','D+'=>'secondary','D'=>'secondary','F'=>'danger'];
-            foreach ($bySemester as $semOrder => $semSubjects):
+            $prevYear = null;
+            foreach ($bySemester as $key => $semSubjects):
+                [$yearLabel, $semOrderPad, $semLabel] = explode('|', $key);
+                $semOrder = (int)$semOrderPad;
                 $semCredits = array_sum(array_column($semSubjects, 'credits'));
                 $semDone = 0;
                 foreach ($semSubjects as $s) {
                     if (isset($mySubjectMap[$s['id']]) && ($mySubjectMap[$s['id']]['total_score'] ?? null) !== null && $mySubjectMap[$s['id']]['total_score'] >= 4) $semDone++;
                 }
+                // Header năm học
+                if ($yearLabel && $yearLabel !== $prevYear):
+                    $prevYear = $yearLabel;
             ?>
+            <div class="d-flex align-items-center gap-2 mb-2 mt-3">
+                <i class="bi bi-calendar-range-fill text-navy"></i>
+                <strong class="text-navy">Năm học <?php echo htmlspecialchars($yearLabel); ?></strong>
+                <hr class="flex-grow-1 my-0">
+            </div>
+            <?php endif; ?>
             <div class="card mb-3">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <span>
                         <i class="bi bi-calendar3 me-2"></i>
-                        <strong>Học kỳ <?php echo $semOrder; ?></strong>
+                        <strong><?php echo htmlspecialchars($semLabel ?: 'Học kỳ '.$semOrder); ?></strong>
+                        <?php if($yearLabel): ?><span class="text-muted ms-2 small"><?php echo htmlspecialchars($yearLabel); ?></span><?php endif; ?>
                     </span>
                     <div class="d-flex gap-2 align-items-center">
                         <span class="badge bg-navy"><?php echo $semCredits; ?> TC &nbsp;|&nbsp; <?php echo count($semSubjects); ?> môn</span>
@@ -248,7 +283,11 @@ $progress = $student['total_credits'] > 0 ? round($completedCredits / $student['
                                     <th>Mã môn</th>
                                     <th>Tên môn học</th>
                                     <th class="text-center">TC</th>
+                                    <th class="text-center">LT</th>
+                                    <th class="text-center">TH</th>
+                                    <th class="text-center">Tổng tiết</th>
                                     <th>Loại</th>
+                                    <th class="text-center">Bắt buộc</th>
                                     <th class="text-center">Điểm</th>
                                     <th class="text-center">Trạng thái</th>
                                 </tr>
@@ -259,8 +298,13 @@ $progress = $student['total_credits'] > 0 ? round($completedCredits / $student['
                                     $score    = $myData['total_score'] ?? null;
                                     $letter   = $myData['letter_grade'] ?? null;
                                     $regStat  = $myData['reg_status'] ?? null;
-                                    $type     = $typeMap[$sub['subject_type']] ?? ['Khác','secondary'];
+                                    $typeKey  = $sub['subject_type_new'] ?? $sub['subject_type'] ?? 'required';
+                                    $type     = $typeMap[$typeKey] ?? ['Khác','secondary'];
                                     $lc       = $gradeColors[$letter ?? ''] ?? 'secondary';
+                                    $lt       = (int)($sub['theory_periods'] ?? 0);
+                                    $th       = (int)($sub['practice_periods'] ?? 0);
+                                    $tot      = (int)($sub['total_periods'] ?? ($lt + $th));
+                                    $isMandatory = (bool)($sub['is_mandatory'] ?? ($typeKey !== 'elective'));
 
                                     if ($score !== null && $score >= 4)      $rowClass = 'subject-row done';
                                     elseif ($score !== null && $score < 4)   $rowClass = 'subject-row';
@@ -279,7 +323,17 @@ $progress = $student['total_credits'] > 0 ? round($completedCredits / $student['
                                     <td class="text-center">
                                         <span class="badge bg-gold text-dark fw-bold"><?php echo $sub['credits']; ?></span>
                                     </td>
+                                    <td class="text-center text-muted small"><?php echo $lt ?: '-'; ?></td>
+                                    <td class="text-center text-muted small"><?php echo $th ?: '-'; ?></td>
+                                    <td class="text-center text-muted small"><?php echo $tot ?: '-'; ?></td>
                                     <td><span class="badge bg-<?php echo $type[1]; ?>"><?php echo $type[0]; ?></span></td>
+                                    <td class="text-center">
+                                        <?php if ($isMandatory): ?>
+                                        <span class="badge bg-success">Có</span>
+                                        <?php else: ?>
+                                        <span class="badge bg-secondary">Không</span>
+                                        <?php endif; ?>
+                                    </td>
                                     <td class="text-center">
                                         <?php if ($score !== null): ?>
                                         <div class="fw-bold <?php echo $score>=5?'text-success':'text-danger'; ?>"><?php echo number_format($score,2); ?></div>

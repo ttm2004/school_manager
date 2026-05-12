@@ -471,22 +471,26 @@ include 'includes/sidebar.php';
                     <i class="bi bi-pencil me-1"></i>Sửa
                 </button>
                 <form method="POST" class="d-inline" onsubmit="return confirm('Tái tạo hóa đơn từ dữ liệu đăng ký môn hiện tại?')">
+                    <?php echo csrfField(); ?>
                     <input type="hidden" name="action" value="regenerate_invoices">
                     <input type="hidden" name="period_id" value="<?php echo $currentPeriodId; ?>">
                     <button type="submit" class="btn btn-sm btn-outline-info"><i class="bi bi-arrow-clockwise me-1"></i>Tái tạo HĐ</button>
                 </form>
                 <form method="POST" class="d-inline" onsubmit="return confirm('Xác nhận công bố đợt thu? Sinh viên sẽ thấy hóa đơn ngay sau khi công bố.')">
+                    <?php echo csrfField(); ?>
                     <input type="hidden" name="action" value="publish_period">
                     <input type="hidden" name="period_id" value="<?php echo $currentPeriodId; ?>">
                     <button type="submit" class="btn btn-sm btn-success"><i class="bi bi-megaphone-fill me-1"></i>Công bố</button>
                 </form>
                 <?php elseif ($currentPeriod['status'] === 'published'): ?>
                 <form method="POST" class="d-inline" onsubmit="return confirm('Đóng đợt thu? Hóa đơn chưa đóng sẽ bị đánh dấu quá hạn.')">
+                    <?php echo csrfField(); ?>
                     <input type="hidden" name="action" value="close_period">
                     <input type="hidden" name="period_id" value="<?php echo $currentPeriodId; ?>">
                     <button type="submit" class="btn btn-sm btn-danger"><i class="bi bi-lock-fill me-1"></i>Đóng đợt thu</button>
                 </form>
                 <form method="POST" class="d-inline">
+                    <?php echo csrfField(); ?>
                     <input type="hidden" name="action" value="mark_overdue">
                     <input type="hidden" name="period_id" value="<?php echo $currentPeriodId; ?>">
                     <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Đánh dấu quá hạn?')">
@@ -645,6 +649,7 @@ include 'includes/sidebar.php';
     <div class="modal-dialog modal-lg"><div class="modal-content">
         <div class="modal-header"><h5 class="modal-title"><i class="bi bi-plus-lg me-2"></i>Tạo đợt thu học phí</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
         <form method="POST">
+            <?php echo csrfField(); ?>
             <input type="hidden" name="action" value="create_period">
             <div class="modal-body">
                 <div class="alert alert-info small mb-3">
@@ -695,6 +700,7 @@ include 'includes/sidebar.php';
     <div class="modal-dialog modal-lg"><div class="modal-content">
         <div class="modal-header"><h5 class="modal-title"><i class="bi bi-pencil me-2"></i>Sửa đợt thu học phí</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
         <form method="POST">
+            <?php echo csrfField(); ?>
             <input type="hidden" name="action" value="update_period">
             <input type="hidden" name="period_id" value="<?php echo $currentPeriodId; ?>">
             <div class="modal-body">
@@ -730,6 +736,7 @@ include 'includes/sidebar.php';
     <div class="modal-dialog"><div class="modal-content">
         <div class="modal-header"><h5 class="modal-title"><i class="bi bi-cash-coin me-2"></i>Ghi nhận Thanh toán</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
         <form method="POST">
+            <?php echo csrfField(); ?>
             <input type="hidden" name="action" value="record_payment">
             <input type="hidden" name="invoice_id" id="payId">
             <input type="hidden" name="period_id" value="<?php echo $currentPeriodId; ?>">
@@ -778,6 +785,7 @@ include 'includes/sidebar.php';
     <div class="modal-dialog"><div class="modal-content">
         <div class="modal-header"><h5 class="modal-title"><i class="bi bi-percent me-2"></i>Cập nhật Miễn giảm</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
         <form method="POST">
+            <?php echo csrfField(); ?>
             <input type="hidden" name="action" value="update_discount">
             <input type="hidden" name="invoice_id" id="discId">
             <input type="hidden" name="period_id" value="<?php echo $currentPeriodId; ?>">

@@ -1,6 +1,7 @@
 ﻿<?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
+require_once '../includes/teacher_assignment_rules.php';
 requireRole('admin');
 $pageTitle = 'Quản lý Lớp học phần';
 
@@ -47,10 +48,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $day_sessions  = trim($_POST['day_sessions'] ?? '') ?: null;
         $class_id      = intval($_POST['class_id'] ?? 0) ?: null;
         if ($subject_id && $semester_id && $section_code) {
+            if ($teacher_id > 0) {
+                $assignmentCheck = validateTeacherAssignment($conn, $teacher_id, $subject_id, $semester_id);
+                if (!$assignmentCheck['ok']) {
+                    $error = $assignmentCheck['message'];
+                }
+            }
+            if ($error === '') {
             $stmt = $conn->prepare("INSERT INTO course_sections (subject_id,teacher_id,semester_id,section_code,schedule_text,room,max_students,current_students,tuition_fee,status,start_time,end_time,start_date,end_date,sessions_per_week,study_days,session_type,day_sessions,class_id) VALUES (?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?,?,?,?)");
             $stmt->bind_param('iiisssidsssssisssi', $subject_id,$teacher_id,$semester_id,$section_code,$schedule_text,$room,$max_students,$tuition_fee,$status,$start_time,$end_time,$start_date,$end_date,$sessions_pw,$study_days,$session_type,$day_sessions,$class_id);
             $stmt->execute() ? $success = 'Thêm lớp học phần thành công!' : $error = 'Lỗi: '.$conn->error;
             $stmt->close();
+            }
         } else { $error = 'Vui lòng điền đầy đủ thông tin.'; }
     }
     if ($action === 'edit') {
@@ -74,10 +83,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $day_sessions  = trim($_POST['day_sessions'] ?? '') ?: null;
         $class_id      = intval($_POST['class_id'] ?? 0) ?: null;
         if ($id) {
+            if ($teacher_id > 0) {
+                $assignmentCheck = validateTeacherAssignment($conn, $teacher_id, $subject_id, $semester_id);
+                if (!$assignmentCheck['ok']) {
+                    $error = $assignmentCheck['message'];
+                }
+            }
+            if ($error === '') {
             $stmt = $conn->prepare("UPDATE course_sections SET subject_id=?,teacher_id=?,semester_id=?,section_code=?,schedule_text=?,room=?,max_students=?,tuition_fee=?,status=?,start_time=?,end_time=?,start_date=?,end_date=?,sessions_per_week=?,study_days=?,session_type=?,day_sessions=?,class_id=? WHERE id=?");
             $stmt->bind_param('iiisssidsssssisssii', $subject_id,$teacher_id,$semester_id,$section_code,$schedule_text,$room,$max_students,$tuition_fee,$status,$start_time,$end_time,$start_date,$end_date,$sessions_pw,$study_days,$session_type,$day_sessions,$class_id,$id);
             $stmt->execute() ? $success = 'Cập nhật thành công!' : $error = 'Lỗi: '.$conn->error;
             $stmt->close();
+            }
         }
     }
     if ($action === 'delete') {

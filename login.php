@@ -7,12 +7,27 @@ require_once 'includes/auth.php';
 define('ROLE_MODULE_MAP', [
     'admissions_'  => '/university/admissions/',
     'academic_'    => '/university/academic/',
+    'faculty_'     => '/university/faculty/',
+    'dept_head'    => '/university/faculty/',   // Trưởng Bộ môn → module Khoa/Viện
     'finance_'     => '/university/finance/',
     'hr_'          => '/university/hr/',
     'student_affairs_' => '/university/student_affairs/',
     'exam_'        => '/university/exam/',
     'it_'          => '/university/admin/',
 ]);
+
+/**
+ * Lấy URL redirect dựa trên role code cụ thể
+ */
+function getRedirectByRoleCode(string $roleCode, $conn): string
+{
+    foreach (ROLE_MODULE_MAP as $prefix => $url) {
+        if (str_starts_with($roleCode, $prefix)) {
+            return $url;
+        }
+    }
+    return '/university/teacher/'; // fallback cho GV
+}
 
 /**
  * Lấy URL redirect cho nhân viên dựa trên role phòng ban đầu tiên
@@ -49,6 +64,16 @@ if (isset($_GET['logout'])) {
 }
 
 if (isLoggedIn()) {
+    // Nếu đang chờ chọn role → về trang chọn role
+    if (!empty($_SESSION['_pending_roles'])) {
+        header('Location: /university/role_select.php');
+        exit();
+    }
+    // Nếu đã có active role → redirect theo role đó
+    if (!empty($_SESSION['_active_role'])) {
+        header('Location: ' . getRedirectByRoleCode($_SESSION['_active_role'], $conn));
+        exit();
+    }
     switch ($_SESSION['role']) {
         case 'admin':
             header('Location: /university/admin/');
@@ -60,7 +85,6 @@ if (isLoggedIn()) {
             header('Location: /university/teacher/');
             break;
         case 'staff':
-            // Redirect theo role phòng ban
             header('Location: ' . getStaffRedirectUrl((int)$_SESSION['user_id'], $conn));
             break;
         default:
@@ -78,42 +102,113 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $username = trim($_POST['username'] ?? '');
     $password = trim($_POST['password'] ?? '');
 
-    if (empty($username) || empty($password)) {
+    // Xác minh CSRF token
+    if (!verifyCSRFToken($_POST['_csrf_token'] ?? '')) {
+        $error = 'Yêu cầu không hợp lệ. Vui lòng tải lại trang và thử lại.';
+    } elseif (empty($username) || empty($password)) {
         $error = 'Vui lòng nhập tên đăng nhập và mật khẩu.';
     } else {
-        $stmt = $conn->prepare("SELECT * FROM users WHERE username = ? AND status = 1 LIMIT 1");
-        $stmt->bind_param('s', $username);
-        $stmt->execute();
-        $user = $stmt->get_result()->fetch_assoc();
-        $stmt->close();
-
-        if ($user && password_verify($password, $user['password'])) {
-            session_regenerate_id(true);
-            $_SESSION['user_id']   = $user['id'];
-            $_SESSION['role']      = $user['role'];
-            $_SESSION['full_name'] = $user['full_name'];
-            $_SESSION['username']  = $user['username'];
-
-            switch ($user['role']) {
-                case 'admin':
-                    header('Location: /university/admin/');
-                    break;
-                case 'student':
-                    header('Location: /university/student/');
-                    break;
-                case 'teacher':
-                    header('Location: /university/teacher/');
-                    break;
-                case 'staff':
-                    // Redirect theo role phòng ban được cấp
-                    header('Location: ' . getStaffRedirectUrl((int)$user['id'], $conn));
-                    break;
-                default:
-                    header('Location: /university/index.php');
-            }
-            exit();
+        // Kiểm tra rate limiting theo IP + username
+        $rlKey = 'login_' . ($_SERVER['REMOTE_ADDR'] ?? '') . '_' . $username;
+        if (isRateLimited($rlKey, 5, 300)) {
+            $remaining = getRateLimitRemaining($rlKey, 300);
+            $error = "Quá nhiều lần đăng nhập thất bại. Vui lòng thử lại sau {$remaining} giây.";
         } else {
-            $error = 'Tên đăng nhập hoặc mật khẩu không đúng.';
+            $stmt = $conn->prepare("SELECT * FROM users WHERE username = ? AND status = 1 LIMIT 1");
+            $stmt->bind_param('s', $username);
+            $stmt->execute();
+            $user = $stmt->get_result()->fetch_assoc();
+            $stmt->close();
+
+            if ($user && password_verify($password, $user['password'])) {
+                // Đăng nhập thành công — reset rate limit
+                resetRateLimit($rlKey);
+                session_regenerate_id(true);
+                $_SESSION['user_id']        = $user['id'];
+                $_SESSION['role']           = $user['role'];
+                $_SESSION['full_name']      = $user['full_name'];
+                $_SESSION['username']       = $user['username'];
+                $_SESSION['_last_activity'] = time();
+
+                // Lấy tất cả department roles của user
+                // Loại trừ faculty_lecturer vì đó là role mặc định của GV
+                // faculty_lecturer chỉ dùng để phân biệt quyền, không phải role chọn
+                $deptRoles = [];
+                $stmtRoles = $conn->prepare(
+                    "SELECT r.code, r.name, r.department, r.color
+                     FROM user_roles ur
+                     JOIN roles r ON ur.role_id = r.id
+                     WHERE ur.user_id = ? AND r.is_active = 1
+                       AND r.code != 'faculty_lecturer'
+                       AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
+                     ORDER BY
+                         CASE WHEN r.code LIKE '%_manager%' THEN 0
+                              WHEN r.code LIKE 'faculty_manager%' THEN 0
+                              WHEN r.code LIKE 'dept_head%' THEN 1
+                              ELSE 2 END,
+                         r.department"
+                );
+                $stmtRoles->bind_param('i', $user['id']);
+                $stmtRoles->execute();
+                $deptRoles = $stmtRoles->get_result()->fetch_all(MYSQLI_ASSOC);
+                $stmtRoles->close();
+
+                // Nếu có nhiều hơn 1 role → cho chọn
+                // Nếu chỉ có 1 role → redirect thẳng
+                // Nếu không có role phòng ban → redirect theo role hệ thống
+                if (count($deptRoles) > 1) {
+                    // Lưu danh sách roles vào session để trang chọn dùng
+                    $_SESSION['_pending_roles'] = $deptRoles;
+                    header('Location: /university/role_select.php');
+                    exit();
+                } elseif (count($deptRoles) === 1) {
+                    // Chỉ 1 role → redirect thẳng, pre-cache roles
+                    $_SESSION['_active_role'] = $deptRoles[0]['code'];
+
+                    // Pre-cache tất cả role codes để requireAnyRole hoạt động ngay
+                    $stmtCache = $conn->prepare(
+                        "SELECT r.code FROM user_roles ur
+                         JOIN roles r ON ur.role_id = r.id
+                         WHERE ur.user_id = ? AND r.is_active = 1
+                           AND (ur.expires_at IS NULL OR ur.expires_at > NOW())"
+                    );
+                    $stmtCache->bind_param('i', $user['id']);
+                    $stmtCache->execute();
+                    $cachedCodes = [];
+                    $res = $stmtCache->get_result();
+                    while ($row = $res->fetch_assoc()) $cachedCodes[] = $row['code'];
+                    $stmtCache->close();
+                    $_SESSION['_user_role_codes'] = $cachedCodes;
+                    $_SESSION['_roles_cached']    = true;
+
+                    $redirectUrl = getRedirectByRoleCode($deptRoles[0]['code'], $conn);
+                    header('Location: ' . $redirectUrl);
+                    exit();
+                } else {
+                    // Không có department role → redirect theo role hệ thống
+                    switch ($user['role']) {
+                        case 'admin':
+                            header('Location: /university/admin/');
+                            break;
+                        case 'student':
+                            header('Location: /university/student/');
+                            break;
+                        case 'teacher':
+                            header('Location: /university/teacher/');
+                            break;
+                        case 'staff':
+                            header('Location: ' . getStaffRedirectUrl((int)$user['id'], $conn));
+                            break;
+                        default:
+                            header('Location: /university/index.php');
+                    }
+                    exit();
+                }
+            } else {
+                // Đăng nhập thất bại — tăng bộ đếm
+                incrementRateLimit($rlKey);
+                $error = 'Tên đăng nhập hoặc mật khẩu không đúng.';
+            }
         }
     }
 }
@@ -514,7 +609,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <?php endif; ?>
 
         <form method="POST" id="loginForm">
-            <div class="login-fields-wrap">
+                <input type="hidden" name="_csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
+                <div class="login-fields-wrap">
                 <div class="login-field">
                     <label>Tên đăng nhập</label>
                     <input type="text" name="username" placeholder="Nhập tên đăng nhập"

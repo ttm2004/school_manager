@@ -1,6 +1,7 @@
 ﻿<?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
+require_once '../includes/grade_windows.php';
 requireRole('teacher');
 
 $stmt = $conn->prepare("SELECT t.*, u.full_name FROM teachers t JOIN users u ON t.user_id=u.id WHERE t.user_id=?");
@@ -15,31 +16,14 @@ if ($colCheck->num_rows == 0) {
     $conn->query("ALTER TABLE course_sections ADD COLUMN schedule_data JSON NULL AFTER schedule_text");
 }
 
-// Seed lịch mẫu (đồng bộ với bên sinh viên)
-$seedData = [
-    'CNTT101_01' => '[{"day":2,"session":"sang","period_start":1},{"day":4,"session":"sang","period_start":1},{"day":6,"session":"sang","period_start":1}]',
-    'CNTT102_01' => '[{"day":3,"session":"chieu","period_start":1},{"day":5,"session":"chieu","period_start":1},{"day":7,"session":"chieu","period_start":1}]',
-    'CNTT201_01' => '[{"day":2,"session":"toi","period_start":1},{"day":4,"session":"toi","period_start":1},{"day":6,"session":"toi","period_start":1}]',
-    'CNTT202_01' => '[{"day":3,"session":"sang","period_start":1},{"day":5,"session":"sang","period_start":1},{"day":7,"session":"sang","period_start":1}]',
-    'CNTT203_01' => '[{"day":2,"session":"chieu","period_start":1},{"day":4,"session":"chieu","period_start":1},{"day":6,"session":"chieu","period_start":1}]',
-    'KTPM101_01' => '[{"day":3,"session":"toi","period_start":1},{"day":5,"session":"toi","period_start":1},{"day":7,"session":"toi","period_start":1}]',
-    'KTPM201_01' => '[{"day":8,"session":"sang","period_start":1},{"day":8,"session":"chieu","period_start":1},{"day":8,"session":"toi","period_start":1}]',
-    'QTKD101_01' => '[{"day":2,"session":"sang","period_start":1},{"day":4,"session":"sang","period_start":1},{"day":6,"session":"sang","period_start":1}]',
-    'KT101_01'   => '[{"day":3,"session":"chieu","period_start":1},{"day":5,"session":"chieu","period_start":1},{"day":7,"session":"chieu","period_start":1}]',
-    'NNA101_01'  => '[{"day":2,"session":"toi","period_start":1},{"day":4,"session":"toi","period_start":1},{"day":6,"session":"toi","period_start":1}]',
-];
-foreach ($seedData as $code => $json) {
-    $s = $conn->prepare("UPDATE course_sections SET schedule_data=? WHERE section_code=?");
-    if ($s) { $s->bind_param('ss', $json, $code); $s->execute(); $s->close(); }
-}
-
 // Lấy tất cả lớp học phần được phân công kèm lịch học
 $stmt = $conn->prepare("
     SELECT cs.id as section_id, cs.section_code, cs.schedule_text, cs.schedule_data,
            cs.day_sessions, cs.start_date, cs.end_date,
            cs.room, cs.max_students, cs.current_students, cs.status,
            s.subject_name, s.credits, s.subject_code,
-           sm.semester_name, sm.school_year, sm.id as semester_id, sm.start_date as sem_start
+           sm.semester_name, sm.school_year, sm.id as semester_id, sm.start_date as sem_start,
+           sm.grade_submit_deadline
     FROM course_sections cs
     JOIN subjects s ON cs.subject_id = s.id
     JOIN semesters sm ON cs.semester_id = sm.id
@@ -138,6 +122,17 @@ $currentWeek = max(0, intval($_GET['week'] ?? $nowWeek));
 $weekStartTs = $semStartTs + ($currentWeek * 7 * 86400);
 $weekEndTs   = $weekStartTs + (6 * 86400);
 
+$totalWeeks = 20;
+if ($semEndTs) {
+    $totalWeeks = max(1, (int)ceil(($semEndTs - $semStartTs) / (7 * 86400)));
+}
+$weekOptions = [];
+for ($w = 0; $w <= $totalWeeks; $w++) {
+    $ws = $semStartTs + ($w * 7 * 86400);
+    $we = $ws + (6 * 86400);
+    $weekOptions[$w] = 'Tuần ' . ($w + 1) . ' [từ ngày ' . date('d/m/Y', $ws) . ' đến ngày ' . date('d/m/Y', $we) . ']';
+}
+
 $dayDates = [];
 for ($d = 2; $d <= 7; $d++) $dayDates[$d] = $weekStartTs + (($d-2)*86400);
 $dayDates[8] = $weekStartTs + (6*86400);
@@ -211,6 +206,7 @@ $qString = $qParams ? '&' . http_build_query($qParams) : '';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
     <title>Thời khóa biểu - Giảng viên</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
@@ -250,27 +246,7 @@ $qString = $qParams ? '&' . http_build_query($qParams) : '';
 </head>
 <body>
 <div class="student-wrapper">
-    <div class="student-sidebar">
-        <div class="sidebar-brand">
-            <div class="sidebar-brand-icon"><i class="bi bi-person-badge-fill"></i></div>
-            <div class="sidebar-brand-text">
-                <div>Cổng Giảng viên</div>
-                <small><?php echo htmlspecialchars($teacher['teacher_code']); ?></small>
-            </div>
-        </div>
-        <nav class="sidebar-nav">
-            <a href="/university/teacher/index.php" class="sidebar-link"><i class="bi bi-speedometer2"></i> Tổng quan</a>
-            <a href="/university/teacher/profile.php" class="sidebar-link"><i class="bi bi-person-fill"></i> Hồ sơ cá nhân</a>
-            <a href="/university/teacher/my_courses.php" class="sidebar-link"><i class="bi bi-journal-text"></i> Lớp học phần</a>
-            <a href="/university/teacher/timetable.php" class="sidebar-link active"><i class="bi bi-calendar3-week"></i> Thời khóa biểu</a>
-            <a href="/university/teacher/exam_schedule.php" class="sidebar-link"><i class="bi bi-calendar-event-fill"></i> Lịch thi cuối kỳ</a>
-            <a href="/university/teacher/grades.php" class="sidebar-link"><i class="bi bi-bar-chart-fill"></i> Nhập điểm</a>
-            <a href="/university/teacher/evaluation.php" class="sidebar-link"><i class="bi bi-star-fill"></i> Kết quả đánh giá</a>
-            <hr class="my-2">
-            <a href="/university/index.php" class="sidebar-link"><i class="bi bi-globe"></i> Trang chủ</a>
-            <a href="/university/login.php?logout=1" class="sidebar-link text-danger"><i class="bi bi-box-arrow-right"></i> Đăng xuất</a>
-        </nav>
-    </div>
+    <?php include __DIR__ . '/includes/sidebar.php'; ?>
 
     <div class="student-main">
         <div class="student-topbar">
@@ -297,7 +273,7 @@ $qString = $qParams ? '&' . http_build_query($qParams) : '';
             <?php if (!empty($bySemester)): ?>
             <div class="d-flex gap-2 mb-4 flex-wrap no-print">
                 <?php foreach ($bySemester as $semId => $semData): ?>
-                <a href="?semester_id=<?php echo $semId; ?>"
+                <a href="?semester_id=<?php echo $semId; ?>&week=0"
                    class="btn btn-<?php echo $semId==$selectedSem?'navy':'outline-secondary'; ?> btn-sm">
                     <i class="bi bi-calendar3 me-1"></i><?php echo htmlspecialchars($semData['info']); ?>
                 </a>
@@ -321,7 +297,17 @@ $qString = $qParams ? '&' . http_build_query($qParams) : '';
                     <i class="bi bi-calendar3 me-2"></i><?php echo htmlspecialchars($bySemester[$selectedSem]['info']); ?>
                     &bull; <?php echo count($bySemester[$selectedSem]['courses']); ?> lớp học phần
                 </h6>
-                <div class="d-flex align-items-center gap-2 no-print">
+                <div class="d-flex align-items-center gap-2 no-print flex-wrap justify-content-end">
+                    <select class="form-select form-select-sm"
+                            style="min-width:280px;max-width:100%;"
+                            aria-label="Chọn tuần"
+                            onchange="window.location.href='?semester_id=<?php echo $selectedSem; ?>&week='+this.value">
+                        <?php foreach ($weekOptions as $w => $weekLabel): ?>
+                        <option value="<?php echo $w; ?>" <?php echo $w === $currentWeek ? 'selected' : ''; ?>>
+                            <?php echo htmlspecialchars($weekLabel); ?>
+                        </option>
+                        <?php endforeach; ?>
+                    </select>
                     <?php if ($currentWeek > 0): ?>
                     <a href="?semester_id=<?php echo $selectedSem; ?>&week=<?php echo $currentWeek-1; ?>" class="btn btn-sm btn-navy">
                         <i class="bi bi-chevron-left"></i> Tuần trước
@@ -341,6 +327,11 @@ $qString = $qParams ? '&' . http_build_query($qParams) : '';
                         <?php endif; ?>
                     </div>
 
+                    <a href="?semester_id=<?php echo $selectedSem; ?>&week=<?php echo $nowWeek; ?>"
+                       class="btn btn-sm btn-outline-secondary"
+                       title="Về tuần hiện tại">
+                        <i class="bi bi-calendar-check"></i>
+                    </a>
                     <a href="?semester_id=<?php echo $selectedSem; ?>&week=<?php echo $currentWeek+1; ?>" class="btn btn-sm btn-navy">
                         Tuần sau <i class="bi bi-chevron-right"></i>
                     </a>
@@ -500,10 +491,12 @@ $qString = $qParams ? '&' . http_build_query($qParams) : '';
                                                class="btn btn-sm btn-outline-navy" title="Xem danh sách sinh viên">
                                                 <i class="bi bi-people-fill"></i>
                                             </a>
-                                            <a href="/university/teacher/grades.php?section_id=<?php echo $c['section_id']; ?>"
-                                               class="btn btn-sm btn-gold" title="Nhập điểm">
-                                                <i class="bi bi-pencil-square"></i>
-                                            </a>
+                                            <?php if (isGradeInputWindowOpen($c['end_date'] ?? null, $c['grade_submit_deadline'] ?? null)): ?>
+                                                <a href="/university/teacher/grades.php?section_id=<?php echo $c['section_id']; ?>"
+                                                   class="btn btn-sm btn-gold" title="Nhập điểm">
+                                                    <i class="bi bi-pencil-square"></i>
+                                                </a>
+                                            <?php endif; ?>
                                         </div>
                                     </td>
                                 </tr>

@@ -73,12 +73,49 @@ $majorsArr=[];
 while($m=$majors->fetch_assoc()) $majorsArr[]=$m;
 $subjects=[];
 if($filter_major){
-    $st=$conn->prepare("SELECT * FROM subjects WHERE major_id=? ORDER BY semester_order ASC, is_mandatory DESC, subject_name ASC");
+    // Ưu tiên lấy từ bảng curriculum (có year_label, semester_label) nếu có dữ liệu
+    $chkCurr = $conn->prepare("SELECT COUNT(*) AS c FROM curriculum WHERE major_id=? AND deleted_at IS NULL");
+    $chkCurr->bind_param('i',$filter_major); $chkCurr->execute();
+    $hasCurr = (int)($chkCurr->get_result()->fetch_assoc()['c'] ?? 0);
+    $chkCurr->close();
+
+    if ($hasCurr > 0) {
+        // Lấy từ curriculum JOIN subjects — có đầy đủ year_label, semester_label
+        $st=$conn->prepare("
+            SELECT s.id, s.major_id, s.subject_code, s.subject_name, s.credits,
+                   s.theory_periods, s.practice_periods, s.total_periods,
+                   s.subject_type, s.subject_type_new, s.is_mandatory, s.description,
+                   c.suggested_semester AS semester_order,
+                   c.semester_label, c.year_label,
+                   c.subject_type AS curr_type, c.id AS curr_id
+            FROM curriculum c
+            JOIN subjects s ON c.subject_id = s.id
+            WHERE c.major_id=? AND c.deleted_at IS NULL
+            ORDER BY c.year_label ASC, c.suggested_semester ASC, s.is_mandatory DESC, s.subject_name ASC
+        ");
+    } else {
+        // Fallback: lấy từ subjects trực tiếp (dữ liệu cũ chưa có curriculum)
+        $st=$conn->prepare("
+            SELECT *, semester_order, NULL AS semester_label, NULL AS year_label,
+                   subject_type_new AS curr_type, id AS curr_id
+            FROM subjects WHERE major_id=?
+            ORDER BY semester_order ASC, is_mandatory DESC, subject_name ASC
+        ");
+    }
     $st->bind_param('i',$filter_major); $st->execute();
     $res=$st->get_result(); while($row=$res->fetch_assoc()) $subjects[]=$row; $st->close();
 }
+
+// Nhóm theo năm học + học kỳ (key: "year_label|semester_label|semester_order")
 $bySemester=[];
-foreach($subjects as $s) $bySemester[$s['semester_order']][]=$s;
+foreach($subjects as $s) {
+    $yearLabel = $s['year_label'] ?? '';
+    $semLabel  = $s['semester_label'] ?? '';
+    $semOrder  = (int)($s['semester_order'] ?? 1);
+    // Key để sort: year_label + semester_order đảm bảo thứ tự đúng
+    $key = ($yearLabel ?: '0000') . '|' . sprintf('%02d', $semOrder) . '|' . $semLabel;
+    $bySemester[$key][] = $s;
+}
 ksort($bySemester);
 $totalCredits=array_sum(array_column($subjects,'credits'));
 $currentMajor=null;
@@ -151,10 +188,10 @@ include 'includes/sidebar.php';
             </div>
             <div class="col-md-6">
                 <div class="row g-2 text-center mt-2 mt-md-0">
-                    <div class="col-3"><div class="fw-bold fs-5"><?php echo $currentMajor['total_credits']; ?></div><div style="opacity:.7;font-size:.75rem;">TC yeu cau</div></div>
-                    <div class="col-3"><div class="fw-bold fs-5"><?php echo $totalCredits; ?></div><div style="opacity:.7;font-size:.75rem;">TC da co</div></div>
-                    <div class="col-3"><div class="fw-bold fs-5"><?php echo count($subjects); ?></div><div style="opacity:.7;font-size:.75rem;">Mon hoc</div></div>
-                    <div class="col-3"><div class="fw-bold fs-5"><?php echo count($bySemester); ?></div><div style="opacity:.7;font-size:.75rem;">Hoc ky</div></div>
+                    <div class="col-3"><div class="fw-bold fs-5"><?php echo $currentMajor['total_credits']; ?></div><div style="opacity:.7;font-size:.75rem;">TC yêu cầu</div></div>
+                    <div class="col-3"><div class="fw-bold fs-5"><?php echo $totalCredits; ?></div><div style="opacity:.7;font-size:.75rem;">TC đã có</div></div>
+                    <div class="col-3"><div class="fw-bold fs-5"><?php echo count($subjects); ?></div><div style="opacity:.7;font-size:.75rem;">Môn học</div></div>
+                    <div class="col-3"><div class="fw-bold fs-5"><?php echo count($bySemester); ?></div><div style="opacity:.7;font-size:.75rem;">Học kỳ</div></div>
                 </div>
             </div>
         </div>
@@ -179,42 +216,95 @@ include 'includes/sidebar.php';
 </div>
 <?php else: ?>
 <?php
-$typeMap=['required'=>['Bat buoc','danger'],'elective'=>['Tu chon','warning'],'general'=>['Dai cuong','info'],'Bat buoc'=>['Bat buoc','danger'],'Tu chon'=>['Tu chon','warning']];
-foreach($bySemester as $semOrder=>$semSubjects):
+$typeMap=['required'=>['Bắt buộc','danger'],'elective'=>['Tự chọn','warning'],'general'=>['Đại cương','info'],
+          'bat buoc'=>['Bắt buộc','danger'],'tu chon'=>['Tự chọn','warning'],
+          'Bắt buộc'=>['Bắt buộc','danger'],'Tự chọn'=>['Tự chọn','warning']];
+$prevYear = null;
+foreach($bySemester as $key=>$semSubjects):
+    [$yearLabel, $semOrderPad, $semLabel] = explode('|', $key);
+    $semOrder = (int)$semOrderPad;
     $semCredits=array_sum(array_column($semSubjects,'credits'));
+    $semTotalPeriods=array_sum(array_column($semSubjects,'total_periods'));
+    // In header năm học khi đổi năm
+    if ($yearLabel && $yearLabel !== $prevYear):
+        $prevYear = $yearLabel;
 ?>
+<div class="d-flex align-items-center gap-2 mb-2 mt-3">
+    <i class="bi bi-calendar-range-fill text-navy"></i>
+    <strong class="text-navy fs-6">Năm học <?php echo htmlspecialchars($yearLabel); ?></strong>
+    <hr class="flex-grow-1 my-0">
+</div>
+<?php endif; ?>
 <div class="card mb-3">
     <div class="card-header d-flex justify-content-between align-items-center">
-        <span><i class="bi bi-calendar3 me-2"></i><strong>Hoc ky <?php echo $semOrder; ?></strong></span>
-        <span class="badge bg-navy fs-6"><?php echo $semCredits; ?> tin chi | <?php echo count($semSubjects); ?> mon</span>
+        <span>
+            <i class="bi bi-calendar3 me-2"></i>
+            <strong><?php echo htmlspecialchars($semLabel ?: 'Học kỳ '.$semOrder); ?></strong>
+            <?php if($yearLabel): ?><span class="text-muted ms-2 small"><?php echo htmlspecialchars($yearLabel); ?></span><?php endif; ?>
+        </span>
+        <div class="d-flex gap-2 align-items-center">
+            <span class="badge bg-light text-dark border"><?php echo $semTotalPeriods; ?> tiết</span>
+            <span class="badge bg-navy"><?php echo $semCredits; ?> TC | <?php echo count($semSubjects); ?> môn</span>
+        </div>
     </div>
     <div class="card-body p-0">
         <div class="table-responsive">
             <table class="table table-hover mb-0 align-middle" style="font-size:.88rem;">
-                <thead><tr><th>#</th><th>Ma mon</th><th>Ten mon hoc</th><th class="text-center">TC</th><th class="text-center">LT</th><th class="text-center">TH</th><th>Loai</th><th>Thao tac</th></tr></thead>
+                <thead class="table-light">
+                    <tr>
+                        <th style="width:40px">#</th>
+                        <th>Mã môn</th>
+                        <th>Tên môn học</th>
+                        <th class="text-center" style="width:50px">TC</th>
+                        <th class="text-center" style="width:55px">LT</th>
+                        <th class="text-center" style="width:55px">TH</th>
+                        <th class="text-center" style="width:65px">Tổng tiết</th>
+                        <th style="width:90px">Loại môn</th>
+                        <th style="width:80px">Bắt buộc</th>
+                        <th style="width:80px">Thao tác</th>
+                    </tr>
+                </thead>
                 <tbody>
                 <?php $idx=1; foreach($semSubjects as $sub):
-                    $t=$sub['subject_type_new']??$sub['subject_type']??'required';
-                    $type=$typeMap[$t]??['Khac','secondary'];
-                    $lt=$sub['theory_periods']??0; $th=$sub['practice_periods']??0;
+                    // Ưu tiên loại từ curriculum, fallback về subjects
+                    $t = $sub['curr_type'] ?? $sub['subject_type_new'] ?? $sub['subject_type'] ?? 'required';
+                    $type = $typeMap[$t] ?? ['Khác','secondary'];
+                    $lt  = (int)($sub['theory_periods'] ?? 0);
+                    $th  = (int)($sub['practice_periods'] ?? 0);
+                    $tot = (int)($sub['total_periods'] ?? ($lt + $th));
+                    $isMandatory = (bool)($sub['is_mandatory'] ?? 1);
                 ?>
                 <tr>
                     <td class="text-muted"><?php echo $idx++; ?></td>
                     <td><span class="badge bg-navy"><?php echo htmlspecialchars($sub['subject_code']); ?></span></td>
-                    <td class="fw-bold"><?php echo htmlspecialchars($sub['subject_name']); ?></td>
+                    <td class="fw-semibold"><?php echo htmlspecialchars($sub['subject_name']); ?></td>
                     <td class="text-center"><span class="badge bg-gold text-dark fw-bold"><?php echo $sub['credits']; ?></span></td>
-                    <td class="text-center text-muted"><?php echo $lt?:'-'; ?></td>
-                    <td class="text-center text-muted"><?php echo $th?:'-'; ?></td>
+                    <td class="text-center text-muted"><?php echo $lt ?: '-'; ?></td>
+                    <td class="text-center text-muted"><?php echo $th ?: '-'; ?></td>
+                    <td class="text-center text-muted"><?php echo $tot ?: '-'; ?></td>
                     <td><span class="badge bg-<?php echo $type[1]; ?>"><?php echo $type[0]; ?></span></td>
+                    <td class="text-center">
+                        <?php if($isMandatory): ?>
+                        <span class="badge bg-success">Có</span>
+                        <?php else: ?>
+                        <span class="badge bg-secondary">Không</span>
+                        <?php endif; ?>
+                    </td>
                     <td>
                         <button class="btn btn-sm btn-outline-primary me-1" data-bs-toggle="modal" data-bs-target="#editModal"
-                            data-id="<?php echo $sub['id']; ?>" data-major="<?php echo $sub['major_id']; ?>"
-                            data-code="<?php echo htmlspecialchars($sub['subject_code']); ?>" data-name="<?php echo htmlspecialchars($sub['subject_name']); ?>"
-                            data-credits="<?php echo $sub['credits']; ?>" data-type="<?php echo $t; ?>" data-sem="<?php echo $sub['semester_order']; ?>"
-                            data-lt="<?php echo $lt; ?>" data-th="<?php echo $th; ?>" data-desc="<?php echo htmlspecialchars($sub['description']??''); ?>">
+                            data-id="<?php echo $sub['id']; ?>"
+                            data-major="<?php echo $sub['major_id']; ?>"
+                            data-code="<?php echo htmlspecialchars($sub['subject_code']); ?>"
+                            data-name="<?php echo htmlspecialchars($sub['subject_name']); ?>"
+                            data-credits="<?php echo $sub['credits']; ?>"
+                            data-type="<?php echo htmlspecialchars($t); ?>"
+                            data-sem="<?php echo $semOrder; ?>"
+                            data-lt="<?php echo $lt; ?>"
+                            data-th="<?php echo $th; ?>"
+                            data-desc="<?php echo htmlspecialchars($sub['description'] ?? ''); ?>">
                             <i class="bi bi-pencil-fill"></i>
                         </button>
-                        <form method="POST" class="d-inline" onsubmit="return confirm('Xoa mon hoc nay?')">
+                        <form method="POST" class="d-inline" onsubmit="return confirm('Xóa môn học này?')">
                             <input type="hidden" name="action" value="delete">
                             <input type="hidden" name="id" value="<?php echo $sub['id']; ?>">
                             <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash-fill"></i></button>
@@ -223,7 +313,15 @@ foreach($bySemester as $semOrder=>$semSubjects):
                 </tr>
                 <?php endforeach; ?>
                 </tbody>
-                <tfoot class="table-light"><tr><td colspan="3" class="text-end fw-bold text-muted small">Tong hoc ky <?php echo $semOrder; ?>:</td><td class="text-center"><span class="badge bg-navy fw-bold"><?php echo $semCredits; ?></span></td><td colspan="4"></td></tr></tfoot>
+                <tfoot class="table-light">
+                    <tr>
+                        <td colspan="3" class="text-end fw-bold text-muted small">Tổng học kỳ:</td>
+                        <td class="text-center"><span class="badge bg-navy fw-bold"><?php echo $semCredits; ?></span></td>
+                        <td colspan="2"></td>
+                        <td class="text-center text-muted small"><?php echo $semTotalPeriods; ?></td>
+                        <td colspan="3"></td>
+                    </tr>
+                </tfoot>
             </table>
         </div>
     </div>

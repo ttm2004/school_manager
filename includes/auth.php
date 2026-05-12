@@ -3,6 +3,100 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
+// ============================================================
+// CSRF PROTECTION
+// ============================================================
+
+/**
+ * Tạo hoặc lấy CSRF token cho session hiện tại
+ */
+function generateCSRFToken(): string {
+    if (empty($_SESSION['_csrf_token'])) {
+        $_SESSION['_csrf_token'] = bin2hex(random_bytes(32));
+    }
+    return $_SESSION['_csrf_token'];
+}
+
+/**
+ * Xác minh CSRF token từ POST request
+ * Dùng hash_equals để chống timing attack
+ */
+function verifyCSRFToken(string $token): bool {
+    if (empty($_SESSION['_csrf_token'])) return false;
+    return hash_equals($_SESSION['_csrf_token'], $token);
+}
+
+/**
+ * Kiểm tra CSRF và dừng nếu không hợp lệ (dùng trong xử lý POST)
+ */
+function requireCSRF(): void {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') return;
+    $token = $_POST['_csrf_token'] ?? ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? '');
+    if (!verifyCSRFToken($token)) {
+        http_response_code(403);
+        die(json_encode(['success' => false, 'message' => 'Yêu cầu không hợp lệ (CSRF). Vui lòng tải lại trang.']));
+    }
+}
+
+/**
+ * In hidden input CSRF token vào form HTML
+ */
+function csrfField(): string {
+    return '<input type="hidden" name="_csrf_token" value="' . htmlspecialchars(generateCSRFToken()) . '">';
+}
+
+// ============================================================
+// RATE LIMITING — chống brute force login
+// ============================================================
+
+/**
+ * Kiểm tra và ghi nhận số lần thử đăng nhập thất bại theo IP
+ * Trả về true nếu bị chặn (quá giới hạn)
+ */
+function isRateLimited(string $key, int $maxAttempts = 5, int $windowSeconds = 300): bool {
+    $sessionKey = '_rl_' . md5($key);
+    $now = time();
+
+    if (!isset($_SESSION[$sessionKey])) {
+        $_SESSION[$sessionKey] = ['count' => 0, 'window_start' => $now];
+    }
+
+    // Reset nếu đã qua cửa sổ thời gian
+    if ($now - $_SESSION[$sessionKey]['window_start'] > $windowSeconds) {
+        $_SESSION[$sessionKey] = ['count' => 0, 'window_start' => $now];
+    }
+
+    return $_SESSION[$sessionKey]['count'] >= $maxAttempts;
+}
+
+/**
+ * Tăng bộ đếm thất bại
+ */
+function incrementRateLimit(string $key): void {
+    $sessionKey = '_rl_' . md5($key);
+    if (isset($_SESSION[$sessionKey])) {
+        $_SESSION[$sessionKey]['count']++;
+    }
+}
+
+/**
+ * Reset bộ đếm sau khi đăng nhập thành công
+ */
+function resetRateLimit(string $key): void {
+    $sessionKey = '_rl_' . md5($key);
+    unset($_SESSION[$sessionKey]);
+}
+
+/**
+ * Lấy số giây còn lại trước khi hết block
+ */
+function getRateLimitRemaining(string $key, int $windowSeconds = 300): int {
+    $sessionKey = '_rl_' . md5($key);
+    if (!isset($_SESSION[$sessionKey])) return 0;
+    $elapsed = time() - $_SESSION[$sessionKey]['window_start'];
+    return max(0, $windowSeconds - $elapsed);
+}
+
 function isLoggedIn() {
     return isset($_SESSION['user_id']) && !empty($_SESSION['user_id']);
 }
@@ -42,6 +136,21 @@ function requireRole($role) {
         }
         exit();
     }
+    // Xác minh CSRF token cho tất cả POST requests
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        $token = $_POST['_csrf_token'] ?? ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? '');
+        if (!verifyCSRFToken($token)) {
+            http_response_code(403);
+            // Nếu là AJAX request, trả về JSON
+            if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
+                header('Content-Type: application/json; charset=utf-8');
+                die(json_encode(['success' => false, 'message' => 'Yêu cầu không hợp lệ (CSRF). Vui lòng tải lại trang.']));
+            }
+            $_SESSION['_flash'] = ['type' => 'danger', 'message' => 'Yêu cầu không hợp lệ. Vui lòng tải lại trang và thử lại.'];
+            header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?'));
+            exit();
+        }
+    }
 }
 
 // ============================================================
@@ -56,45 +165,85 @@ function hasRole(string $roleCode): bool {
     if (!isLoggedIn()) return false;
     if ($_SESSION['role'] === 'admin') return true;
 
+    // Dùng cache trong session nếu đã load
+    if (!empty($_SESSION['_roles_cached']) && isset($_SESSION['_user_role_codes'])) {
+        return in_array($roleCode, $_SESSION['_user_role_codes'], true);
+    }
+
     global $conn;
     $uid = (int)$_SESSION['user_id'];
-    $code = $conn->real_escape_string($roleCode);
-    $result = $conn->query("
+    // Dùng prepared statement thay vì real_escape_string
+    $stmt = $conn->prepare("
         SELECT ur.id FROM user_roles ur
         JOIN roles r ON ur.role_id = r.id
-        WHERE ur.user_id = $uid
-          AND r.code = '$code'
+        WHERE ur.user_id = ?
+          AND r.code = ?
           AND r.is_active = 1
           AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
         LIMIT 1
     ");
-    return $result && $result->num_rows > 0;
+    if (!$stmt) return false;
+    $stmt->bind_param('is', $uid, $roleCode);
+    $stmt->execute();
+    $has = $stmt->get_result()->num_rows > 0;
+    $stmt->close();
+    return $has;
 }
 
 /**
- * Kiểm tra user có quyền cụ thể trong module không
- * Admin luôn có tất cả quyền
+ * Kiểm tra user có quyền cụ thể trong module không.
+ * Admin luôn có tất cả quyền.
+ * Hỗ trợ cả permission code mới (permissions table) và code cũ (role_permissions).
  */
 function hasPermission(string $module, string $permission): bool {
     if (!isLoggedIn()) return false;
     if ($_SESSION['role'] === 'admin') return true;
 
     global $conn;
-    $uid  = (int)$_SESSION['user_id'];
-    $mod  = $conn->real_escape_string($module);
-    $perm = $conn->real_escape_string($permission);
-    $result = $conn->query("
-        SELECT rp.id FROM role_permissions rp
-        JOIN user_roles ur ON rp.role_id = ur.role_id
-        JOIN roles r ON ur.role_id = r.id
-        WHERE ur.user_id = $uid
-          AND rp.module = '$mod'
-          AND rp.permission = '$perm'
-          AND r.is_active = 1
-          AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
-        LIMIT 1
-    ");
-    return $result && $result->num_rows > 0;
+    $uid = (int)$_SESSION['user_id'];
+
+    // Thử permission code mới: 'module.action' format
+    $fullCode = str_contains($permission, '.') ? $permission : "$module.$permission";
+    $chkPerm = $conn->query("SHOW TABLES LIKE 'permissions'");
+    if ($chkPerm && $chkPerm->num_rows > 0) {
+        $stmt = $conn->prepare(
+            "SELECT p.id FROM permissions p
+             JOIN role_permissions rp ON rp.permission = p.code
+             JOIN user_roles ur ON ur.role_id = rp.role_id
+             JOIN roles r ON ur.role_id = r.id
+             WHERE ur.user_id = ?
+               AND p.code = ?
+               AND r.is_active = 1
+               AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
+             LIMIT 1"
+        );
+        if ($stmt) {
+            $stmt->bind_param('is', $uid, $fullCode);
+            $stmt->execute();
+            $has = $stmt->get_result()->num_rows > 0;
+            $stmt->close();
+            if ($has) return true;
+        }
+    }
+
+    // Fallback: permission code cũ (string trong role_permissions.permission)
+    $stmt = $conn->prepare(
+        "SELECT rp.id FROM role_permissions rp
+         JOIN user_roles ur ON rp.role_id = ur.role_id
+         JOIN roles r ON ur.role_id = r.id
+         WHERE ur.user_id = ?
+           AND rp.module = ?
+           AND rp.permission = ?
+           AND r.is_active = 1
+           AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
+         LIMIT 1"
+    );
+    if (!$stmt) return false;
+    $stmt->bind_param('iss', $uid, $module, $permission);
+    $stmt->execute();
+    $has = $stmt->get_result()->num_rows > 0;
+    $stmt->close();
+    return $has;
 }
 
 /**
@@ -106,17 +255,23 @@ function getUserRoles(): array {
 
     global $conn;
     $uid = (int)$_SESSION['user_id'];
-    $result = $conn->query("
+    $stmt = $conn->prepare("
         SELECT r.code, r.name, r.department, r.color
         FROM user_roles ur
         JOIN roles r ON ur.role_id = r.id
-        WHERE ur.user_id = $uid
+        WHERE ur.user_id = ?
           AND r.is_active = 1
           AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
         ORDER BY r.department
     ");
     $roles = [];
-    if ($result) while ($row = $result->fetch_assoc()) $roles[] = $row;
+    if ($stmt) {
+        $stmt->bind_param('i', $uid);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        while ($row = $result->fetch_assoc()) $roles[] = $row;
+        $stmt->close();
+    }
     return $roles;
 }
 
@@ -124,15 +279,99 @@ function getUserRoles(): array {
  * Yêu cầu user phải có ít nhất 1 trong các role được liệt kê
  * Dùng cho các trang module riêng
  */
+/**
+ * Yêu cầu user phải có ít nhất 1 trong các role được liệt kê.
+ * Ưu tiên kiểm tra _active_role từ session (khi user đã chọn role).
+ * Hỗ trợ wildcard: 'faculty_manager' khớp cả 'faculty_manager_1', 'faculty_manager_2'...
+ */
 function requireAnyRole(array $roleCodes): void {
     requireLogin();
-    // admin và staff đều có thể vào nếu có role phù hợp
-    if (in_array($_SESSION['role'], ['admin', 'staff'])) {
-        if ($_SESSION['role'] === 'admin') return; // admin có tất cả
+
+    // Admin luôn pass
+    if ($_SESSION['role'] === 'admin') {
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $token = $_POST['_csrf_token'] ?? ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? '');
+            if (!verifyCSRFToken($token)) {
+                http_response_code(403);
+                if (!empty($_SERVER['HTTP_X_REQUESTED_WITH'])) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    die(json_encode(['success' => false, 'message' => 'CSRF invalid.']));
+                }
+                $_SESSION['_flash'] = ['type' => 'danger', 'message' => 'Yêu cầu không hợp lệ.'];
+                header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?'));
+                exit();
+            }
+        }
+        return;
+    }
+
+    // Kiểm tra _active_role trước (user đã chọn role từ màn hình chọn)
+    $activeRole = $_SESSION['_active_role'] ?? '';
+    if ($activeRole) {
         foreach ($roleCodes as $code) {
-            if (hasRole($code)) return;
+            // Exact match
+            if ($activeRole === $code) {
+                self_csrf_check();
+                return;
+            }
+            // Prefix match: 'faculty_manager' khớp 'faculty_manager_1'
+            if (str_starts_with($activeRole, $code)) {
+                self_csrf_check();
+                return;
+            }
+            // Reverse: code là prefix của activeRole
+            if (str_starts_with($code, 'faculty_') && str_starts_with($activeRole, 'faculty_')) {
+                // faculty_manager khớp faculty_manager_2
+                $baseCode = preg_replace('/_\d+$/', '', $activeRole);
+                if ($baseCode === $code) {
+                    self_csrf_check();
+                    return;
+                }
+            }
         }
     }
+
+    // Fallback: kiểm tra qua DB (cho staff role hoặc khi không có _active_role)
+    if (in_array($_SESSION['role'], ['staff', 'teacher'])) {
+        // Mở rộng roleCodes với pattern khoa cụ thể
+        $expandedCodes = [];
+        foreach ($roleCodes as $code) {
+            $expandedCodes[] = $code;
+            if (in_array($code, ['faculty_manager', 'faculty_staff', 'dept_head'], true)) {
+                if (!empty($_SESSION['_user_role_codes'])) {
+                    foreach ($_SESSION['_user_role_codes'] as $userCode) {
+                        if (str_starts_with($userCode, $code . '_')) {
+                            $expandedCodes[] = $userCode;
+                        }
+                    }
+                } else {
+                    global $conn;
+                    $uid  = (int)$_SESSION['user_id'];
+                    $like = $code . '_%';
+                    $res  = $conn->prepare(
+                        "SELECT r.code FROM user_roles ur JOIN roles r ON ur.role_id=r.id
+                         WHERE ur.user_id=? AND r.code LIKE ? AND r.is_active=1
+                           AND (ur.expires_at IS NULL OR ur.expires_at > NOW())"
+                    );
+                    if ($res) {
+                        $res->bind_param('is', $uid, $like);
+                        $res->execute();
+                        $result = $res->get_result();
+                        while ($row = $result->fetch_assoc()) $expandedCodes[] = $row['code'];
+                        $res->close();
+                    }
+                }
+            }
+        }
+
+        foreach ($expandedCodes as $code) {
+            if (hasRole($code)) {
+                self_csrf_check();
+                return;
+            }
+        }
+    }
+
     // Không có quyền
     http_response_code(403);
     die('
@@ -144,6 +383,24 @@ function requireAnyRole(array $roleCodes): void {
 }
 
 /**
+ * Helper: kiểm tra CSRF cho POST request
+ */
+function self_csrf_check(): void {
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        $token = $_POST['_csrf_token'] ?? ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? '');
+        if (!verifyCSRFToken($token)) {
+            http_response_code(403);
+            if (!empty($_SERVER['HTTP_X_REQUESTED_WITH'])) {
+                header('Content-Type: application/json; charset=utf-8');
+                die(json_encode(['success' => false, 'message' => 'CSRF invalid.']));
+            }
+            $_SESSION['_flash'] = ['type' => 'danger', 'message' => 'Yêu cầu không hợp lệ.'];
+            header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?'));
+            exit();
+        }
+    }
+}
+/**
  * Ghi log truy cập — gọi sau khi set session thành công
  * Mỗi session_id chỉ ghi 1 lần (UNIQUE KEY)
  */
@@ -151,13 +408,18 @@ function logVisit($conn): void {
     if (!isLoggedIn()) return;
     $sid  = session_id();
     $uid  = (int)$_SESSION['user_id'];
-    $role = $conn->real_escape_string($_SESSION['role'] ?? '');
-    $ip   = $conn->real_escape_string($_SERVER['REMOTE_ADDR'] ?? '');
-    $ua   = $conn->real_escape_string(mb_substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 500));
-    // INSERT IGNORE — nếu session đã tồn tại thì chỉ update last_seen
-    $conn->query("INSERT INTO visit_logs (user_id, role, session_id, ip, user_agent)
-        VALUES ($uid, '$role', '$sid', '$ip', '$ua')
-        ON DUPLICATE KEY UPDATE last_seen=NOW(), user_id=$uid, role='$role'");
+    $role = $_SESSION['role'] ?? '';
+    $ip   = $_SERVER['REMOTE_ADDR'] ?? '';
+    $ua   = mb_substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 500);
+    // Dùng prepared statement thay vì real_escape_string
+    $stmt = $conn->prepare("INSERT INTO visit_logs (user_id, role, session_id, ip, user_agent)
+        VALUES (?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE last_seen=NOW(), user_id=?, role=?");
+    if ($stmt) {
+        $stmt->bind_param('issssss', $uid, $role, $sid, $ip, $ua, $uid, $role);
+        $stmt->execute();
+        $stmt->close();
+    }
 }
 
 /**
@@ -170,28 +432,50 @@ function getVisitStats($conn): array {
 
     // Ngưỡng "đang online" — session active trong 15 phút gần nhất
     $ONLINE_MINUTES = 15;
-    $onlineCond     = "last_seen >= NOW() - INTERVAL $ONLINE_MINUTES MINUTE";
 
     $role   = $_SESSION['role'] ?? '';
-    $userId = (int)$_SESSION['user_id'];
 
-    // Helper: đếm session online với điều kiện bổ sung
-    $count = function(string $extra = '') use ($conn, $onlineCond): int {
-        $where = $extra ? "$onlineCond AND ($extra)" : $onlineCond;
-        $r = $conn->query("SELECT COUNT(*) c FROM visit_logs WHERE $where");
-        return $r ? (int)$r->fetch_assoc()['c'] : 0;
+    // Helper: đếm session online với role cụ thể (dùng prepared statement)
+    $countByRole = function(string $filterRole = '') use ($conn, $ONLINE_MINUTES): int {
+        if ($filterRole !== '') {
+            $stmt = $conn->prepare("SELECT COUNT(*) c FROM visit_logs WHERE last_seen >= NOW() - INTERVAL ? MINUTE AND role = ?");
+            if (!$stmt) return 0;
+            $stmt->bind_param('is', $ONLINE_MINUTES, $filterRole);
+        } else {
+            $stmt = $conn->prepare("SELECT COUNT(*) c FROM visit_logs WHERE last_seen >= NOW() - INTERVAL ? MINUTE");
+            if (!$stmt) return 0;
+            $stmt->bind_param('i', $ONLINE_MINUTES);
+        }
+        $stmt->execute();
+        $result = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
+        return (int)($result['c'] ?? 0);
+    };
+
+    $countByRoles = function(array $roles) use ($conn, $ONLINE_MINUTES): int {
+        if (empty($roles)) return 0;
+        $placeholders = implode(',', array_fill(0, count($roles), '?'));
+        $types = 'i' . str_repeat('s', count($roles));
+        $stmt = $conn->prepare("SELECT COUNT(*) c FROM visit_logs WHERE last_seen >= NOW() - INTERVAL ? MINUTE AND role IN ($placeholders)");
+        if (!$stmt) return 0;
+        $params = array_merge([$ONLINE_MINUTES], $roles);
+        $stmt->bind_param($types, ...$params);
+        $stmt->execute();
+        $result = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
+        return (int)($result['c'] ?? 0);
     };
 
     // ── Admin chung — xem tất cả role ──────────────────────
     if ($role === 'admin') {
         return [
             'level'   => 'admin',
-            'total'   => $count(),
+            'total'   => $countByRole(),
             'by_role' => [
-                'admin'   => $count("role='admin'"),
-                'teacher' => $count("role='teacher'"),
-                'student' => $count("role='student'"),
-                'staff'   => $count("role='staff'"),
+                'admin'   => $countByRole('admin'),
+                'teacher' => $countByRole('teacher'),
+                'student' => $countByRole('student'),
+                'staff'   => $countByRole('staff'),
             ],
         ];
     }
@@ -200,18 +484,18 @@ function getVisitStats($conn): array {
     if ($role === 'staff') {
         return [
             'level'    => 'staff',
-            'total'    => $count("role IN ('student','teacher','staff')"),
-            'students' => $count("role='student'"),
-            'teachers' => $count("role='teacher'"),
+            'total'    => $countByRoles(['student', 'teacher', 'staff']),
+            'students' => $countByRole('student'),
+            'teachers' => $countByRole('teacher'),
         ];
     }
 
     // ── Teacher / Student — chỉ xem tổng + SV + GV ─────────
     return [
         'level'    => $role,
-        'total'    => $count("role IN ('student','teacher')"),
-        'students' => $count("role='student'"),
-        'teachers' => $count("role='teacher'"),
+        'total'    => $countByRoles(['student', 'teacher']),
+        'students' => $countByRole('student'),
+        'teachers' => $countByRole('teacher'),
     ];
 }
 // ============================================================
@@ -239,13 +523,13 @@ function isFinanceManager(): bool {
 function isTrainingStaff(): bool {
     if (!isLoggedIn()) return false;
     if ($_SESSION['role'] === 'admin') return true;
-    return hasRole('training_manager') || hasRole('training_staff');
+    return hasRole('academic_manager') || hasRole('academic_staff');
 }
 
 function isTrainingManager(): bool {
     if (!isLoggedIn()) return false;
     if ($_SESSION['role'] === 'admin') return true;
-    return hasRole('training_manager');
+    return hasRole('academic_manager');
 }
 
 /**
@@ -326,18 +610,64 @@ function hasTuitionDebt(int $studentId): bool {
     return $has;
 }
 
+/**
+ * Kiểm tra user hiện tại có thể chuyển vai trò không.
+ * Điều kiện: có từ 2 role trở lên trong user_roles,
+ * hoặc là teacher có ít nhất 1 dept role (vì teacher luôn có thể về portal GV).
+ */
+function canSwitchRole(): bool {
+    if (!isLoggedIn()) return false;
+    if ($_SESSION['role'] === 'admin') return false; // admin không cần chuyển
+
+    // Dùng cache nếu có
+    if (isset($_SESSION['_can_switch_role'])) {
+        return (bool)$_SESSION['_can_switch_role'];
+    }
+
+    global $conn;
+    $uid = (int)$_SESSION['user_id'];
+
+    // Đếm số dept roles (loại faculty_lecturer)
+    $stmt = $conn->prepare(
+        "SELECT COUNT(*) AS c FROM user_roles ur
+         JOIN roles r ON ur.role_id = r.id
+         WHERE ur.user_id = ? AND r.is_active = 1
+           AND r.code != 'faculty_lecturer'
+           AND (ur.expires_at IS NULL OR ur.expires_at > NOW())"
+    );
+    $count = 0;
+    if ($stmt) {
+        $stmt->bind_param('i', $uid);
+        $stmt->execute();
+        $count = (int)$stmt->get_result()->fetch_assoc()['c'];
+        $stmt->close();
+    }
+
+    // Teacher có ít nhất 1 dept role → có thể chuyển (giữa teacher portal và dept module)
+    // Bất kỳ user nào có >= 2 dept roles → có thể chuyển
+    $can = ($count >= 2) || ($_SESSION['role'] === 'teacher' && $count >= 1);
+    $_SESSION['_can_switch_role'] = $can;
+    return $can;
+}
+
 function cacheUserRoles(): void {
     if (!isLoggedIn() || isset($_SESSION['_roles_cached'])) return;
     global $conn;
     $uid = (int)$_SESSION['user_id'];
-    $result = $conn->query("
+    $stmt = $conn->prepare("
         SELECT r.code FROM user_roles ur
         JOIN roles r ON ur.role_id = r.id
-        WHERE ur.user_id = $uid AND r.is_active = 1
+        WHERE ur.user_id = ? AND r.is_active = 1
           AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
     ");
     $_SESSION['_user_role_codes'] = [];
-    if ($result) while ($row = $result->fetch_assoc()) $_SESSION['_user_role_codes'][] = $row['code'];
+    if ($stmt) {
+        $stmt->bind_param('i', $uid);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        while ($row = $result->fetch_assoc()) $_SESSION['_user_role_codes'][] = $row['code'];
+        $stmt->close();
+    }
     $_SESSION['_roles_cached'] = true;
 }
 
@@ -467,6 +797,11 @@ function getRoundStatusMessage(): array {
  * Trả về true nếu có hóa đơn unpaid/partial/overdue
  */
 function hasDebt(int $studentId, $conn): bool {
-    $r = $conn->query("SELECT id FROM tuition_invoices WHERE student_id=$studentId AND status IN ('unpaid','partial','overdue') LIMIT 1");
-    return $r && $r->num_rows > 0;
+    $stmt = $conn->prepare("SELECT id FROM tuition_invoices WHERE student_id=? AND status IN ('unpaid','partial','overdue') LIMIT 1");
+    if (!$stmt) return false;
+    $stmt->bind_param('i', $studentId);
+    $stmt->execute();
+    $has = $stmt->get_result()->num_rows > 0;
+    $stmt->close();
+    return $has;
 }

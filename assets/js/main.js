@@ -1,109 +1,4 @@
-// ===== LOADING SCREEN =====
-(function () {
-    // Tạo loading overlay ngay khi script chạy (trước DOMContentLoaded)
-    const overlay = document.createElement('div');
-    overlay.id = 'tdmu-loading';
-    overlay.innerHTML = `
-        <div class="tdmu-loading-inner">
-            <div class="tdmu-logo-wrap">
-                <i class="bi bi-mortarboard-fill"></i>
-            </div>
-            <div class="tdmu-loading-name">TDMU</div>
-            <div class="tdmu-loading-sub">Trường Đại học Thủ Dầu Một</div>
-            <div class="tdmu-spinner">
-                <div class="tdmu-bar"></div>
-                <div class="tdmu-bar"></div>
-                <div class="tdmu-bar"></div>
-                <div class="tdmu-bar"></div>
-                <div class="tdmu-bar"></div>
-            </div>
-        </div>
-    `;
-
-    const style = document.createElement('style');
-    style.textContent = `
-        #tdmu-loading {
-            position: fixed; inset: 0; z-index: 99999;
-            background: #003087;
-            display: flex; align-items: center; justify-content: center;
-            transition: opacity 0.5s ease, visibility 0.5s ease;
-        }
-        #tdmu-loading.hide {
-            opacity: 0; visibility: hidden; pointer-events: none;
-        }
-        .tdmu-loading-inner {
-            text-align: center; color: #fff;
-            animation: tdmuFadeIn 0.4s ease;
-        }
-        @keyframes tdmuFadeIn {
-            from { opacity: 0; transform: translateY(20px); }
-            to   { opacity: 1; transform: translateY(0); }
-        }
-        .tdmu-logo-wrap {
-            width: 80px; height: 80px; border-radius: 20px;
-            background: #FFB81C;
-            display: flex; align-items: center; justify-content: center;
-            margin: 0 auto 16px;
-            font-size: 2.5rem; color: #003087;
-            box-shadow: 0 8px 30px rgba(255,184,28,0.4);
-            animation: tdmuPulse 1.5s ease-in-out infinite;
-        }
-        @keyframes tdmuPulse {
-            0%, 100% { transform: scale(1); box-shadow: 0 8px 30px rgba(255,184,28,0.4); }
-            50%       { transform: scale(1.08); box-shadow: 0 12px 40px rgba(255,184,28,0.6); }
-        }
-        .tdmu-loading-name {
-            font-size: 2.2rem; font-weight: 800; letter-spacing: 4px;
-            color: #FFB81C; line-height: 1;
-        }
-        .tdmu-loading-sub {
-            font-size: 0.85rem; color: rgba(255,255,255,0.7);
-            margin-top: 6px; margin-bottom: 28px; letter-spacing: 0.5px;
-        }
-        .tdmu-spinner {
-            display: flex; gap: 6px; justify-content: center; align-items: flex-end;
-            height: 36px;
-        }
-        .tdmu-bar {
-            width: 6px; border-radius: 3px;
-            background: #FFB81C; opacity: 0.85;
-            animation: tdmuBounce 1s ease-in-out infinite;
-        }
-        .tdmu-bar:nth-child(1) { animation-delay: 0s;    height: 16px; }
-        .tdmu-bar:nth-child(2) { animation-delay: 0.15s; height: 24px; }
-        .tdmu-bar:nth-child(3) { animation-delay: 0.3s;  height: 32px; }
-        .tdmu-bar:nth-child(4) { animation-delay: 0.15s; height: 24px; }
-        .tdmu-bar:nth-child(5) { animation-delay: 0s;    height: 16px; }
-        @keyframes tdmuBounce {
-            0%, 100% { transform: scaleY(0.5); opacity: 0.5; }
-            50%       { transform: scaleY(1);   opacity: 1; }
-        }
-    `;
-
-    document.head.appendChild(style);
-    // Chèn vào body ngay khi có thể
-    if (document.body) {
-        document.body.appendChild(overlay);
-    } else {
-        document.addEventListener('DOMContentLoaded', function () {
-            document.body.appendChild(overlay);
-        });
-    }
-
-    // Ẩn loading khi trang load xong
-    window.addEventListener('load', function () {
-        setTimeout(function () {
-            overlay.classList.add('hide');
-            setTimeout(function () { overlay.remove(); }, 500);
-        }, 400); // Tối thiểu 400ms để thấy animation
-    });
-
-    // Fallback: ẩn sau 3s dù trang chưa load xong
-    setTimeout(function () {
-        overlay.classList.add('hide');
-        setTimeout(function () { if (overlay.parentNode) overlay.remove(); }, 500);
-    }, 3000);
-})();
+// ===== LOADING SCREEN — disabled (CDN timeout issue) =====
 
 // ===== TOAST NOTIFICATION SYSTEM =====
 // Tự động convert tất cả .alert thành toast nổi góc phải màn hình
@@ -521,6 +416,88 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 });
+
+// ===== CSRF AUTO-INJECTION =====
+// Tự động thêm CSRF token vào tất cả form POST và AJAX requests
+(function () {
+    // Lấy CSRF token từ meta tag
+    function getCSRFToken() {
+        const meta = document.querySelector('meta[name="csrf-token"]');
+        return meta ? meta.getAttribute('content') : '';
+    }
+
+    // Inject CSRF hidden field vào tất cả form POST chưa có
+    function injectCSRFToForms() {
+        const token = getCSRFToken();
+        if (!token) return;
+        document.querySelectorAll('form[method="POST"], form[method="post"]').forEach(function (form) {
+            if (!form.querySelector('input[name="_csrf_token"]')) {
+                const input = document.createElement('input');
+                input.type  = 'hidden';
+                input.name  = '_csrf_token';
+                input.value = token;
+                form.appendChild(input);
+            }
+        });
+    }
+
+    // Chạy khi DOM ready
+    document.addEventListener('DOMContentLoaded', injectCSRFToForms);
+
+    // Cũng chạy ngay nếu DOM đã ready (cho các form được render trước script)
+    if (document.readyState !== 'loading') {
+        injectCSRFToForms();
+    }
+
+    // Theo dõi các form được thêm động (modal forms)
+    if (typeof MutationObserver !== 'undefined') {
+        const observer = new MutationObserver(function (mutations) {
+            let hasNewNodes = false;
+            mutations.forEach(function (m) {
+                if (m.addedNodes.length) hasNewNodes = true;
+            });
+            if (hasNewNodes) injectCSRFToForms();
+        });
+        document.addEventListener('DOMContentLoaded', function () {
+            observer.observe(document.body, { childList: true, subtree: true });
+        });
+    }
+
+    // Thêm CSRF header vào tất cả fetch() requests
+    const _originalFetch = window.fetch;
+    window.fetch = function (url, options) {
+        options = options || {};
+        const token = getCSRFToken();
+        if (token) {
+            options.headers = options.headers || {};
+            if (options.headers instanceof Headers) {
+                if (!options.headers.has('X-CSRF-Token')) {
+                    options.headers.set('X-CSRF-Token', token);
+                }
+            } else {
+                options.headers['X-CSRF-Token'] = options.headers['X-CSRF-Token'] || token;
+            }
+        }
+        return _originalFetch.call(this, url, options);
+    };
+
+    // Thêm CSRF header vào tất cả XMLHttpRequest
+    const _originalXHROpen = XMLHttpRequest.prototype.open;
+    const _originalXHRSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function (method, url) {
+        this._tdmuMethod = method;
+        return _originalXHROpen.apply(this, arguments);
+    };
+    XMLHttpRequest.prototype.send = function () {
+        if (this._tdmuMethod && this._tdmuMethod.toUpperCase() === 'POST') {
+            const token = getCSRFToken();
+            if (token) {
+                try { this.setRequestHeader('X-CSRF-Token', token); } catch(e) {}
+            }
+        }
+        return _originalXHRSend.apply(this, arguments);
+    };
+})();
 
 // ===== UTILITY FUNCTIONS =====
 function confirmDelete(url, msg) {

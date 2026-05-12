@@ -52,7 +52,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // Xoa user va student neu da tao
                 $appRow = $conn->query("SELECT * FROM admission_applications WHERE id=$id")->fetch_assoc();
                 if ($appRow) {
-                    $uCheck = $conn->query("SELECT id FROM users WHERE email='" . $conn->real_escape_string($appRow['email']) . "' AND role='student'")->fetch_assoc();
+                    $stmt = $conn->prepare("SELECT id FROM users WHERE email=? AND role='student'");
+                    $stmt->bind_param('s', $appRow['email']);
+                    $stmt->execute();
+                    $uCheck = $stmt->get_result()->fetch_assoc();
+                    $stmt->close();
                     if ($uCheck) {
                         $uid = $uCheck['id'];
                         $conn->query("DELETE FROM students WHERE user_id=$uid");
@@ -269,7 +273,11 @@ $classes = $conn->query("SELECT c.id, c.class_name, c.class_code, c.school_year,
                     // Kiem tra da co tai khoan chua
                     $hasAccount = false; $studentInfo = null;
                     if ($tab === 'enrolled') {
-                        $uCheck = $conn->query("SELECT u.username, s.student_code FROM users u JOIN students s ON u.id=s.user_id WHERE u.email='" . $conn->real_escape_string($app['email']) . "' AND u.role='student' LIMIT 1")->fetch_assoc();
+                        $uStmt = $conn->prepare("SELECT u.username, s.student_code FROM users u JOIN students s ON u.id=s.user_id WHERE u.email=? AND u.role='student' LIMIT 1");
+                        $uStmt->bind_param('s', $app['email']);
+                        $uStmt->execute();
+                        $uCheck = $uStmt->get_result()->fetch_assoc();
+                        $uStmt->close();
                         $hasAccount = !empty($uCheck);
                         $studentInfo = $uCheck;
                     }

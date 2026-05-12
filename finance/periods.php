@@ -8,6 +8,10 @@ $aid = (int)($_SESSION['user_id'] ?? 0);
 
 // POST
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!verifyCSRFToken($_POST['_csrf_token'] ?? '')) {
+        $_SESSION['_flash'] = ['type'=>'danger','message'=>'Yeu cau khong hop le. Vui long tai lai trang va thu lai.'];
+        header('Location: periods.php'); exit();
+    }
     $action = $_POST['action'] ?? '';
 
     if ($action === 'create_period') {
@@ -17,8 +21,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!$semId||!$title||!$open||!$due) {
             $_SESSION['_flash'] = ['type'=>'danger','message'=>'Vui lòng điền đầy đủ thông tin.'];
         } else {
-            $chk = $conn->query("SELECT id FROM tuition_periods WHERE semester_id=$semId");
-            if ($chk && $chk->num_rows > 0) {
+            $chk = $conn->prepare("SELECT id FROM tuition_periods WHERE semester_id = ?");
+            $chk->bind_param('i', $semId);
+            $chk->execute();
+            $chkResult = $chk->get_result();
+            $chk->close();
+            if ($chkResult->num_rows > 0) {
                 $_SESSION['_flash'] = ['type'=>'danger','message'=>'Học kỳ này đã có đợt thu học phí.'];
             } else {
                 $ins = $conn->prepare("INSERT INTO tuition_periods (semester_id,title,open_date,due_date,note,created_by) VALUES (?,?,?,?,?,?)");
@@ -60,21 +68,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($action === 'regenerate') {
         $pid=intval($_POST['period_id']??0);
-        $period=$conn->query("SELECT * FROM tuition_periods WHERE id=$pid AND status='draft'")->fetch_assoc();
+        $stmtPeriod = $conn->prepare("SELECT * FROM tuition_periods WHERE id=? AND status='draft'");
+        $stmtPeriod->bind_param('i', $pid);
+        $stmtPeriod->execute();
+        $period = $stmtPeriod->get_result()->fetch_assoc();
+        $stmtPeriod->close();
         if ($period) {
             $semId=(int)$period['semester_id'];
-            $res=$conn->query("SELECT ss.student_id, SUM(sub.credits) tc, m.tuition_per_credit up
+            $stmtReg = $conn->prepare("SELECT ss.student_id, SUM(sub.credits) tc, m.tuition_per_credit up
                 FROM student_subjects ss JOIN course_sections cs ON ss.course_section_id=cs.id
                 JOIN subjects sub ON cs.subject_id=sub.id JOIN students st ON ss.student_id=st.id
                 JOIN classes cl ON st.class_id=cl.id JOIN majors m ON cl.major_id=m.id
-                WHERE cs.semester_id=$semId AND ss.status!='cancelled'
+                WHERE cs.semester_id=? AND ss.status!='cancelled'
                 GROUP BY ss.student_id, m.tuition_per_credit");
+            $stmtReg->bind_param('i', $semId);
+            $stmtReg->execute();
+            $res = $stmtReg->get_result();
+            $stmtReg->close();
             $upd=$new=0;
             if ($res) while ($row=$res->fetch_assoc()) {
                 $sid=(int)$row['student_id']; $tc=(int)$row['tc']; $up=(float)$row['up']; $gross=$tc*$up;
-                $chk=$conn->query("SELECT id FROM tuition_invoices WHERE period_id=$pid AND student_id=$sid");
-                if ($chk&&$chk->num_rows>0) { $conn->query("UPDATE tuition_invoices SET total_credits=$tc,unit_price=$up,gross_amount=$gross,net_amount=$gross,updated_at=NOW() WHERE period_id=$pid AND student_id=$sid AND status='draft'"); $upd++; }
-                else { $i2=$conn->prepare("INSERT INTO tuition_invoices (period_id,student_id,semester_id,total_credits,unit_price,gross_amount,discount,net_amount,paid_amount,status,created_by) VALUES (?,?,?,?,?,?,0,?,0,'draft',?)"); $i2->bind_param('iiiidddi',$pid,$sid,$semId,$tc,$up,$gross,$gross,$aid); if ($i2->execute()) $new++; $i2->close(); }
+                $chkInv=$conn->prepare("SELECT id FROM tuition_invoices WHERE period_id=? AND student_id=?");
+                $chkInv->bind_param('ii',$pid,$sid); $chkInv->execute();
+                $chkInvResult=$chkInv->get_result(); $chkInv->close();
+                if ($chkInvResult->num_rows>0) {
+                    $updInv=$conn->prepare("UPDATE tuition_invoices SET total_credits=?,unit_price=?,gross_amount=?,net_amount=?,updated_at=NOW() WHERE period_id=? AND student_id=? AND status='draft'");
+                    $updInv->bind_param('ddddii',$tc,$up,$gross,$gross,$pid,$sid); $updInv->execute(); $updInv->close(); $upd++;
+                } else { $i2=$conn->prepare("INSERT INTO tuition_invoices (period_id,student_id,semester_id,total_credits,unit_price,gross_amount,discount,net_amount,paid_amount,status,created_by) VALUES (?,?,?,?,?,?,0,?,0,'draft',?)"); $i2->bind_param('iiiidddi',$pid,$sid,$semId,$tc,$up,$gross,$gross,$aid); if ($i2->execute()) $new++; $i2->close(); }
             }
             $_SESSION['_flash']=['type'=>'success','message'=>"Đã cập nhật $upd, tạo mới $new hóa đơn nháp."];
         }
@@ -83,16 +103,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($action === 'publish') {
         $pid=intval($_POST['period_id']??0);
-        $conn->query("UPDATE tuition_periods SET status='published',published_at=NOW(),updated_at=NOW() WHERE id=$pid AND status='draft'");
-        $conn->query("UPDATE tuition_invoices SET status='unpaid',updated_at=NOW() WHERE period_id=$pid AND status='draft'");
+        $stmtPub=$conn->prepare("UPDATE tuition_periods SET status='published',published_at=NOW(),updated_at=NOW() WHERE id=? AND status='draft'");
+        $stmtPub->bind_param('i',$pid); $stmtPub->execute(); $stmtPub->close();
+        $stmtPubInv=$conn->prepare("UPDATE tuition_invoices SET status='unpaid',updated_at=NOW() WHERE period_id=? AND status='draft'");
+        $stmtPubInv->bind_param('i',$pid); $stmtPubInv->execute(); $stmtPubInv->close();
         $_SESSION['_flash']=['type'=>'success','message'=>'Đã công bố! Sinh viên có thể xem hóa đơn.'];
         header('Location: periods.php?id='.$pid); exit();
     }
 
     if ($action === 'close') {
         $pid=intval($_POST['period_id']??0);
-        $conn->query("UPDATE tuition_periods SET status='closed',updated_at=NOW() WHERE id=$pid");
-        $conn->query("UPDATE tuition_invoices SET status='overdue',updated_at=NOW() WHERE period_id=$pid AND status IN ('unpaid','partial')");
+        $stmtClose=$conn->prepare("UPDATE tuition_periods SET status='closed',updated_at=NOW() WHERE id=?");
+        $stmtClose->bind_param('i',$pid); $stmtClose->execute(); $stmtClose->close();
+        $stmtCloseInv=$conn->prepare("UPDATE tuition_invoices SET status='overdue',updated_at=NOW() WHERE period_id=? AND status IN ('unpaid','partial')");
+        $stmtCloseInv->bind_param('i',$pid); $stmtCloseInv->execute(); $stmtCloseInv->close();
         $_SESSION['_flash']=['type'=>'success','message'=>'Đã đóng đợt thu. Hóa đơn chưa đóng được đánh dấu quá hạn.'];
         header('Location: periods.php?id='.$pid); exit();
     }
@@ -171,17 +195,20 @@ $flash = getFlash();
                     <?php if ($viewPeriod['status']==='draft'): ?>
                     <button class="btn btn-sm btn-outline-light" data-bs-toggle="modal" data-bs-target="#editModal"><i class="bi bi-pencil me-1"></i>Sửa</button>
                     <form method="POST" class="d-inline" onsubmit="return confirm('Tái tạo hóa đơn từ dữ liệu đăng ký hiện tại?')">
+                        <?php echo csrfField(); ?>
                         <input type="hidden" name="action" value="regenerate">
                         <input type="hidden" name="period_id" value="<?php echo $viewId; ?>">
                         <button type="submit" class="btn btn-sm btn-outline-warning"><i class="bi bi-arrow-clockwise me-1"></i>Tái tạo HĐ</button>
                     </form>
                     <form method="POST" class="d-inline" onsubmit="return confirm('Xác nhận công bố? Sinh viên sẽ thấy hóa đơn ngay.')">
+                        <?php echo csrfField(); ?>
                         <input type="hidden" name="action" value="publish">
                         <input type="hidden" name="period_id" value="<?php echo $viewId; ?>">
                         <button type="submit" class="btn btn-sm btn-gold"><i class="bi bi-megaphone-fill me-1"></i>Công bố</button>
                     </form>
                     <?php elseif ($viewPeriod['status']==='published'): ?>
                     <form method="POST" class="d-inline" onsubmit="return confirm('Đóng đợt thu? Hóa đơn chưa đóng sẽ bị đánh dấu quá hạn.')">
+                        <?php echo csrfField(); ?>
                         <input type="hidden" name="action" value="close">
                         <input type="hidden" name="period_id" value="<?php echo $viewId; ?>">
                         <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-lock-fill me-1"></i>Đóng đợt thu</button>
@@ -249,6 +276,7 @@ $flash = getFlash();
     <div class="modal-dialog modal-lg"><div class="modal-content">
         <div class="modal-header"><h5 class="modal-title"><i class="bi bi-plus-lg me-2"></i>Tạo đợt thu học phí</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
         <form method="POST">
+            <?php echo csrfField(); ?>
             <input type="hidden" name="action" value="create_period">
             <div class="modal-body">
                 <div class="alert alert-info small mb-3"><i class="bi bi-info-circle me-1"></i>Hệ thống tự tính học phí = tín chỉ đã đăng ký × đơn giá/TC. Hóa đơn ở trạng thái <strong>Nháp</strong> cho đến khi bạn xác nhận công bố.</div>
@@ -296,6 +324,7 @@ $flash = getFlash();
     <div class="modal-dialog"><div class="modal-content">
         <div class="modal-header"><h5 class="modal-title"><i class="bi bi-pencil me-2"></i>Sửa đợt thu</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
         <form method="POST">
+            <?php echo csrfField(); ?>
             <input type="hidden" name="action" value="update_period">
             <input type="hidden" name="period_id" value="<?php echo $viewId; ?>">
             <div class="modal-body">

@@ -1,0 +1,21 @@
+{
+    "name": "tdmu/university",
+    "description": "TDMU University Management System",
+    "type": "project",
+    "require-dev": {
+        "phpunit/phpunit": "^10.5"
+    },
+    "autoload": {
+        "files": [
+            "faculty/includes/faculty_helpers.php"
+        ]
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "optimize-autoloader": true
+    }
+}

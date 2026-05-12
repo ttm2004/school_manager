@@ -10,58 +10,8 @@ $roundMsg        = getRoundStatusMessage();
 $activeRound     = getActiveRound();
 $roundPhase      = getRoundPhase();
 
-// Logic khóa:
-// - Đang xét tuyển (reviewing/supp_reviewing): khóa tất cả thủ công, kể cả admin
-// - Không có đợt active (no_round/completed): khóa tất cả thủ công
-// - Các giai đoạn khác: cho phép theo quyền
-$isLocked = in_array($roundPhase, ['reviewing', 'supp_reviewing', 'no_round', 'completed']);
+$isLocked        = in_array($roundPhase, ['reviewing', 'supp_reviewing', 'no_round', 'completed']);
 $canManualReview = !$isLocked;
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $action = $_POST['action'] ?? '';
-
-    if ($action === 'update_status') {
-        if (!hasPermission('admissions', 'edit_application')) {
-            $error = 'Bạn không có quyền cập nhật trạng thái hồ sơ.';
-        } elseif (!$canManualReview) {
-            $error = '⚠️ Đang trong giai đoạn xét tuyển — không thể cập nhật trạng thái thủ công.';
-        } else {
-            $id     = intval($_POST['id'] ?? 0);
-            $status = trim($_POST['status'] ?? '');
-            if ($id && in_array($status, ['new','checking','approved','rejected','enrolled'])) {
-                $stmt = $conn->prepare("UPDATE admission_applications SET status=? WHERE id=?");
-                $stmt->bind_param('si', $status, $id);
-                $stmt->execute() ? $success = 'Cập nhật trạng thái thành công!' : $error = 'Lỗi: ' . $conn->error;
-                $stmt->close();
-            }
-        }
-    }
-
-    if ($action === 'delete') {
-        if (!hasPermission('admissions', 'delete_application')) {
-            $error = 'Bạn không có quyền xóa hồ sơ.';
-        } else {
-            $id = intval($_POST['id'] ?? 0);
-            if ($id) {
-                $stmt = $conn->prepare("DELETE FROM admission_applications WHERE id=?");
-                $stmt->bind_param('i', $id);
-                $stmt->execute() ? $success = 'Xóa hồ sơ thành công!' : $error = 'Lỗi: ' . $conn->error;
-                $stmt->close();
-            }
-        }
-    }
-
-    // ── PRG: redirect sau POST để tránh F5 gửi lại form ──
-    if (!empty($success) || !empty($error)) {
-        $_SESSION['_flash'] = [
-            'type'    => !empty($success) ? 'success' : 'danger',
-            'message' => !empty($success) ? $success : $error,
-        ];
-        $qs = $_SERVER['QUERY_STRING'] ?? '';
-        header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?') . ($qs ? '?' . $qs : ''));
-        exit();
-    }
-}
 
 $perPage = 15;
 $page = max(1, intval($_GET['page'] ?? 1));
@@ -267,16 +217,17 @@ document.addEventListener('DOMContentLoaded', function() {
                     <?php $s = $statusMap[$viewApp['status']] ?? [$viewApp['status'],'secondary']; ?>
                     <span class="badge bg-<?php echo $s[1]; ?> fs-6"><?php echo $s[0]; ?></span>
                     <?php if (hasPermission('admissions', 'edit_application') && $canManualReview): ?>
-                    <form method="POST" class="d-flex gap-2 align-items-center ms-auto">
-                        <input type="hidden" name="action" value="update_status">
-                        <input type="hidden" name="id" value="<?php echo $viewApp['id']; ?>">
-                        <select name="status" class="form-select form-select-sm" style="width:auto">
+                    <div class="d-flex gap-2 align-items-center ms-auto">
+                        <select id="statusSelect" class="form-select form-select-sm" style="width:auto">
                             <?php foreach ($statusMap as $val => [$label, $color]): ?>
                             <option value="<?php echo $val; ?>" <?php echo $viewApp['status']==$val?'selected':''; ?>><?php echo $label; ?></option>
                             <?php endforeach; ?>
                         </select>
-                        <button type="submit" class="btn btn-sm btn-navy"><i class="bi bi-save me-1"></i>Cập nhật</button>
-                    </form>
+                        <button type="button" class="btn btn-sm btn-navy"
+                            onclick="updateStatus(<?php echo $viewApp['id']; ?>, document.getElementById('statusSelect').value)">
+                            <i class="bi bi-save me-1"></i>Cập nhật
+                        </button>
+                    </div>
                     <?php elseif ($isLocked): ?>
                     <span class="text-danger small ms-auto"><i class="bi bi-lock-fill me-1"></i>Hồ sơ đã khóa — không thể sửa</span>
                     <?php else: ?>
@@ -348,11 +299,9 @@ document.addEventListener('DOMContentLoaded', function() {
                                 <td>
                                     <a href="?view=<?php echo $app['id']; ?>" class="btn btn-sm btn-outline-primary me-1" title="Xem chi tiết"><i class="bi bi-eye-fill"></i></a>
                                     <?php if (hasPermission('admissions', 'delete_application')): ?>
-                                    <form method="POST" class="d-inline" onsubmit="return confirm('Xóa hồ sơ này?')">
-                                        <input type="hidden" name="action" value="delete">
-                                        <input type="hidden" name="id" value="<?php echo $app['id']; ?>">
-                                        <button type="submit" class="btn btn-sm btn-outline-danger" title="Xóa"><i class="bi bi-trash-fill"></i></button>
-                                    </form>
+                                    <button type="button" class="btn btn-sm btn-outline-danger"
+                                        onclick="deleteApp(<?php echo $app['id']; ?>, this)"
+                                        title="Xóa"><i class="bi bi-trash-fill"></i></button>
                                     <?php endif; ?>
                                 </td>
                             </tr>
@@ -376,3 +325,65 @@ document.addEventListener('DOMContentLoaded', function() {
             </div>
         </div>
 <?php include __DIR__ . '/includes/footer.php'; ?>
+<script>
+// ── Fetch API helper ─────────────────────────────────────────
+const CSRF = document.querySelector('meta[name="csrf-token"]')?.content || '';
+
+function admFetch(data) {
+    const fd = new FormData();
+    fd.append('_csrf_token', CSRF);
+    Object.entries(data).forEach(([k, v]) => fd.append(k, v));
+    return fetch('/university/admissions/api/actions.php', {
+        method: 'POST', body: fd, credentials: 'same-origin'
+    }).then(r => r.json());
+}
+
+function showToast(type, msg) {
+    if (window.tdmuToast) { window.tdmuToast[type]?.(msg) || window.tdmuToast.info(msg); return; }
+    const el = document.createElement('div');
+    el.className = `alert alert-${type === 'success' ? 'success' : 'danger'} alert-dismissible fade show position-fixed`;
+    el.style.cssText = 'top:1rem;right:1rem;z-index:9999;min-width:280px;';
+    el.innerHTML = msg + '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>';
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 4000);
+}
+
+// Cập nhật trạng thái hồ sơ
+function updateStatus(id, status) {
+    admFetch({ module: 'applications', action: 'update_status', id, status })
+        .then(res => {
+            if (res.success) {
+                showToast('success', res.message);
+                // Cập nhật badge trên trang nếu đang xem detail
+                const badge = document.querySelector('.badge.fs-6');
+                if (badge) {
+                    const map = {new:'warning',checking:'info',approved:'success',rejected:'danger',enrolled:'primary'};
+                    const labels = {new:'Mới',checking:'Đang xét',approved:'Đã duyệt',rejected:'Từ chối',enrolled:'Nhập học'};
+                    badge.className = `badge bg-${map[status]||'secondary'} fs-6`;
+                    badge.textContent = labels[status] || status;
+                }
+            } else {
+                showToast('error', res.message);
+            }
+        })
+        .catch(() => showToast('error', 'Lỗi kết nối.'));
+}
+
+// Xóa hồ sơ
+function deleteApp(id, btn) {
+    if (!confirm('Xóa hồ sơ này? Thao tác không thể hoàn tác.')) return;
+    btn.disabled = true;
+    admFetch({ module: 'applications', action: 'delete', id })
+        .then(res => {
+            if (res.success) {
+                showToast('success', res.message);
+                const row = btn.closest('tr');
+                if (row) row.remove();
+            } else {
+                btn.disabled = false;
+                showToast('error', res.message);
+            }
+        })
+        .catch(() => { btn.disabled = false; showToast('error', 'Lỗi kết nối.'); });
+}
+</script>

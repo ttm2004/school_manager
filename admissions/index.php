@@ -18,7 +18,12 @@ $stats = [
 $chartLabels = $chartData = [];
 for ($i = 6; $i >= 0; $i--) {
     $d = date('Y-m-d', strtotime("-$i days"));
-    $cnt = $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE DATE(created_at)='$d'")->fetch_assoc()['c'] ?? 0;
+    // $d được tạo từ date() nên an toàn
+    $cntStmt = $conn->prepare("SELECT COUNT(*) as c FROM admission_applications WHERE DATE(created_at)=?");
+    $cntStmt->bind_param('s', $d);
+    $cntStmt->execute();
+    $cnt = $cntStmt->get_result()->fetch_assoc()['c'] ?? 0;
+    $cntStmt->close();
     $chartLabels[] = date('d/m', strtotime($d));
     $chartData[]   = (int)$cnt;
 }

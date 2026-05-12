@@ -23,19 +23,29 @@ if (isset($_GET['ajax'])) {
 
 // POST
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!verifyCSRFToken($_POST['_csrf_token'] ?? '')) {
+        $_SESSION['_flash'] = ['type'=>'danger','message'=>'Yeu cau khong hop le. Vui long tai lai trang va thu lai.'];
+        header('Location: invoices.php'); exit();
+    }
     $action = $_POST['action'] ?? '';
 
     if ($action === 'record_payment') {
         $iid=intval($_POST['invoice_id']??0); $amount=floatval($_POST['amount']??0);
         $method=trim($_POST['method']??'cash'); $ref=trim($_POST['reference']??''); $note=trim($_POST['note']??'');
+        // Whitelist payment method
+        $allowedMethods = ['cash','bank_transfer','online','other'];
+        if (!in_array($method, $allowedMethods, true)) $method = 'cash';
         if ($iid && $amount > 0) {
-            $inv=$conn->query("SELECT * FROM tuition_invoices WHERE id=$iid")->fetch_assoc();
+            $invStmt=$conn->prepare("SELECT * FROM tuition_invoices WHERE id=?");
+            $invStmt->bind_param('i',$iid); $invStmt->execute();
+            $inv=$invStmt->get_result()->fetch_assoc(); $invStmt->close();
             if ($inv) {
                 $pay=$conn->prepare("INSERT INTO tuition_payments (invoice_id,amount,method,reference,note,paid_by) VALUES (?,?,?,?,?,?)");
                 $pay->bind_param('idsssi',$iid,$amount,$method,$ref,$note,$aid); $pay->execute(); $pay->close();
                 $newPaid=$inv['paid_amount']+$amount; $net=$inv['net_amount'];
                 $st=$inv['status']==='waived'?'waived':($newPaid>=$net?'paid':($newPaid>0?'partial':'unpaid'));
-                $conn->query("UPDATE tuition_invoices SET paid_amount=$newPaid,status='$st',updated_at=NOW() WHERE id=$iid");
+                $updStmt=$conn->prepare("UPDATE tuition_invoices SET paid_amount=?,status=?,updated_at=NOW() WHERE id=?");
+                $updStmt->bind_param('dsi',$newPaid,$st,$iid); $updStmt->execute(); $updStmt->close();
                 $_SESSION['_flash']=['type'=>'success','message'=>'Ghi nhận thanh toán thành công!'];
             }
         }
@@ -46,7 +56,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'update_discount') {
         $iid=intval($_POST['invoice_id']??0); $disc=floatval($_POST['discount']??0); $note=trim($_POST['note']??'');
         if ($iid) {
-            $inv=$conn->query("SELECT gross_amount,paid_amount,status FROM tuition_invoices WHERE id=$iid")->fetch_assoc();
+            $invStmt=$conn->prepare("SELECT gross_amount,paid_amount,status FROM tuition_invoices WHERE id=?");
+            $invStmt->bind_param('i',$iid); $invStmt->execute();
+            $inv=$invStmt->get_result()->fetch_assoc(); $invStmt->close();
             if ($inv) {
                 $net=max(0,$inv['gross_amount']-$disc);
                 $st=$inv['status']==='waived'?'waived':($inv['paid_amount']>=$net&&$net>0?'paid':($inv['paid_amount']>0?'partial':($inv['status']==='draft'?'draft':'unpaid')));
@@ -197,6 +209,7 @@ $flash=getFlash();
     <div class="modal-dialog"><div class="modal-content">
         <div class="modal-header"><h5 class="modal-title"><i class="bi bi-cash-coin me-2"></i>Ghi nhận Thanh toán</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
         <form method="POST">
+            <?php echo csrfField(); ?>
             <input type="hidden" name="action" value="record_payment">
             <input type="hidden" name="invoice_id" id="payId">
             <div class="modal-body">
@@ -221,6 +234,7 @@ $flash=getFlash();
     <div class="modal-dialog"><div class="modal-content">
         <div class="modal-header"><h5 class="modal-title"><i class="bi bi-percent me-2"></i>Cập nhật Miễn giảm</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
         <form method="POST">
+            <?php echo csrfField(); ?>
             <input type="hidden" name="action" value="update_discount">
             <input type="hidden" name="invoice_id" id="discId">
             <div class="modal-body">

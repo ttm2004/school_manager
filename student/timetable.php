@@ -173,6 +173,7 @@ $classDays = array_unique($classDays);
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
     <title>Thời khóa biểu — Sinh viên</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
@@ -195,44 +196,44 @@ $classDays = array_unique($classDays);
         /* Header / footer row */
         .tkb thead th,.tkb tfoot th{
             background:var(--navy);color:#fff;
-            text-align:center;padding:9px 4px;
-            font-weight:600;font-size:.79rem;
+            text-align:center;padding:10px 4px;
+            font-weight:600;font-size:.8rem;
         }
         .tkb thead th.th-today,.tkb tfoot th.th-today{background:#1565c0;}
-        .tkb thead th.th-nav,.tkb tfoot th.th-nav{width:34px;cursor:pointer;}
+        .tkb thead th.th-nav,.tkb tfoot th.th-nav{width:42px;cursor:pointer;}
         .tkb thead th.th-nav:hover,.tkb tfoot th.th-nav:hover{background:#1a4fa0;}
-        .nav-btn{background:none;border:none;color:#fff;width:100%;height:100%;display:flex;align-items:center;justify-content:center;padding:8px 0;font-size:1rem;cursor:pointer;}
+        .nav-btn{background:none;border:none;color:#fff;width:100%;height:100%;display:flex;align-items:center;justify-content:center;padding:10px 0;font-size:1.1rem;cursor:pointer;}
 
         /* Period label column */
         .td-period{
-            width:54px;text-align:center;font-size:.72rem;
-            font-weight:600;color:#0d2d6b;padding:3px 2px;
+            width:62px;min-width:62px;text-align:center;font-size:.73rem;
+            font-weight:600;color:#0d2d6b;padding:4px 3px;
             border-right:2px solid #d0d7e3;
-            background:#f8f9fc;
+            background:#f8f9fc;white-space:nowrap;
         }
         .td-period.s-sang{border-left:3px solid #1976d2;background:#f0f7ff;}
         .td-period.s-chieu{border-left:3px solid #f57c00;background:#fff8f0;}
         .td-period.s-toi{border-left:3px solid #7b1fa2;background:#fdf4ff;}
 
         /* Subject cell */
-        .td-sub{height:30px;padding:0;vertical-align:top;position:relative;}
-        .td-sub.td-today{background:#fffde7;}
-        .td-sub.td-empty{background:#fafbff;}
+        .td-sub{height:34px;padding:0;vertical-align:top;position:relative;background:#fff;}
+        .td-sub.td-today{background:#fffde7 !important;}
 
         /* Subject card — spans multiple rows via absolute + height */
         .sub-card{
-            position:absolute;left:1px;right:1px;top:1px;
-            border-radius:4px;
-            padding:5px 7px;
-            font-size:.72rem;line-height:1.35;
+            position:absolute;left:2px;right:2px;top:2px;
+            border-radius:5px;
+            padding:5px 8px;
+            font-size:.73rem;line-height:1.4;
             overflow:hidden;cursor:pointer;
-            border-left:3px solid;
-            transition:filter .15s;
+            border-left:4px solid;
+            transition:filter .15s, box-shadow .15s;
             z-index:2;
+            box-shadow:0 1px 4px rgba(0,0,0,.08);
         }
-        .sub-card:hover{filter:brightness(.92);}
-        .sub-card .sn{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-        .sub-card .si{font-size:.67rem;margin-top:2px;opacity:.82;}
+        .sub-card:hover{filter:brightness(.94);box-shadow:0 3px 10px rgba(0,0,0,.15);}
+        .sub-card .sn{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.75rem;}
+        .sub-card .si{font-size:.68rem;margin-top:3px;line-height:1.5;}
 
         /* Timeline */
         .tl-wrap{background:#fff;border:1px solid #dde3ee;border-radius:8px;padding:16px 18px;margin-top:14px;}
@@ -268,29 +269,7 @@ $classDays = array_unique($classDays);
 </head>
 <body>
 <div class="student-wrapper">
-    <div class="student-sidebar">
-        <div class="sidebar-brand">
-            <div class="sidebar-brand-icon"><i class="bi bi-mortarboard-fill"></i></div>
-            <div class="sidebar-brand-text">
-                <div>Cổng Sinh viên</div>
-                <small><?php echo htmlspecialchars($student['student_code']); ?></small>
-            </div>
-        </div>
-        <nav class="sidebar-nav">
-            <a href="/university/student/index.php" class="sidebar-link"><i class="bi bi-speedometer2"></i> Tổng quan</a>
-            <a href="/university/student/profile.php" class="sidebar-link"><i class="bi bi-person-fill"></i> Hồ sơ cá nhân</a>
-            <a href="/university/student/register_subject.php" class="sidebar-link"><i class="bi bi-journal-plus"></i> Đăng ký học phần</a>
-            <a href="/university/student/my_subjects.php" class="sidebar-link"><i class="bi bi-journal-check"></i> Học phần của tôi</a>
-            <a href="/university/student/timetable.php" class="sidebar-link active"><i class="bi bi-calendar3-week"></i> Thời khóa biểu</a>
-            <a href="/university/student/exam_schedule.php" class="sidebar-link"><i class="bi bi-calendar-event-fill"></i> Lịch thi cuối kỳ</a>
-            <a href="/university/student/grades.php" class="sidebar-link"><i class="bi bi-bar-chart-fill"></i> Kết quả học tập</a>
-            <a href="/university/student/tuition.php" class="sidebar-link"><i class="bi bi-cash-coin"></i> Học phí</a>
-            <a href="/university/student/evaluation.php" class="sidebar-link"><i class="bi bi-star-fill"></i> Đánh giá giảng viên</a>
-            <hr class="my-2">
-            <a href="/university/index.php" class="sidebar-link"><i class="bi bi-globe"></i> Trang chủ</a>
-            <a href="/university/login.php?logout=1" class="sidebar-link text-danger"><i class="bi bi-box-arrow-right"></i> Đăng xuất</a>
-        </nav>
-    </div>
+    <?php include __DIR__ . '/includes/sidebar.php'; ?>
     <div class="student-main">
         <div class="student-topbar">
             <div class="d-flex align-items-center gap-3">
@@ -308,16 +287,16 @@ $classDays = array_unique($classDays);
 <!-- Controls -->
 <div class="ctrl-bar no-print">
     <div class="sec-title">Thời khóa biểu dạng tuần</div>
-    <div class="row g-2">
-        <div class="col-md-4">
+    <div class="row g-2 align-items-center">
+        <div class="col-md-3">
             <select class="form-select" onchange="window.location.href='?semester_id='+this.value+'&week=0'">
                 <?php foreach ($bySemester as $sid => $sd): ?>
                 <option value="<?php echo $sid; ?>" <?php echo $sid==$selectedSem?'selected':''; ?>><?php echo htmlspecialchars($sd['info']); ?></option>
                 <?php endforeach; ?>
             </select>
         </div>
-        <div class="col-md-3">
-            <select class="form-select" disabled><option>Thời khóa biểu cá nhân</option></select>
+        <div class="col-md-2">
+            <select class="form-select" disabled><option>TKB cá nhân</option></select>
         </div>
         <div class="col-md-4">
             <select class="form-select" onchange="window.location.href='?semester_id=<?php echo $selectedSem; ?>&week='+this.value">
@@ -326,8 +305,19 @@ $classDays = array_unique($classDays);
                 <?php endforeach; ?>
             </select>
         </div>
-        <div class="col-md-1">
-            <button class="btn btn-outline-secondary btn-sm w-100" onclick="window.print()" style="height:36px;"><i class="bi bi-printer me-1"></i>In</button>
+        <div class="col-md-3 d-flex gap-2">
+            <button class="btn btn-outline-secondary btn-sm flex-fill" onclick="prevWeek()" <?php echo $currentWeek<=0?'disabled':''; ?>>
+                <i class="bi bi-chevron-left me-1"></i>Tuần trước
+            </button>
+            <button class="btn btn-navy btn-sm" onclick="goToday()" title="Về tuần hiện tại">
+                <i class="bi bi-calendar-check"></i>
+            </button>
+            <button class="btn btn-outline-secondary btn-sm flex-fill" onclick="nextWeek()">
+                Tuần sau<i class="bi bi-chevron-right ms-1"></i>
+            </button>
+            <button class="btn btn-outline-secondary btn-sm" onclick="window.print()" title="In TKB">
+                <i class="bi bi-printer"></i>
+            </button>
         </div>
     </div>
 </div>
@@ -340,8 +330,7 @@ $classDays = array_unique($classDays);
 <?php else: ?>
 
 <!-- TKB Grid -->
-<div style="background:#fff;border:1px solid #d0d7e3;border-radius:8px;overflow:hidden;">
-<div class="table-responsive">
+<div style="background:#fff;border:1px solid #d0d7e3;border-radius:8px;overflow-x:auto;">
 <table class="tkb">
 <thead>
 <tr>
@@ -354,6 +343,7 @@ $classDays = array_unique($classDays);
         <?php echo $dl; ?> (<?php echo $dt?date('d/m',$dt):''; ?>)
     </th>
     <?php endforeach; ?>
+    <th class="th-nav" onclick="nextWeek()"><button class="nav-btn"><i class="bi bi-chevron-right"></i></button></th>
 </tr>
 </thead>
 <tbody>
@@ -362,8 +352,9 @@ $sessBorderColor = ['sang'=>'#1976d2','chieu'=>'#f57c00','toi'=>'#7b1fa2'];
 for ($period=1; $period<=16; $period++):
     $sess = $period<=5 ? 'sang' : ($period<=10 ? 'chieu' : 'toi');
     $borderTop = in_array($period,[1,6,11]) ? 'border-top:2px solid '.$sessBorderColor[$sess].';' : '';
+    $rowBg = in_array($period,[1,6,11]) ? 'background:#f5f8ff;' : '';
 ?>
-<tr>
+<tr style="<?php echo $rowBg; ?>">
     <td class="td-period s-<?php echo $sess; ?>" style="<?php echo $borderTop; ?>">
         Tiết <?php echo $period; ?>
     </td>
@@ -372,7 +363,7 @@ for ($period=1; $period<=16; $period++):
         $isToday = $dt && date('Y-m-d',$dt)==date('Y-m-d');
         $sub = $timetable[$dn][$period] ?? null;
     ?>
-    <td class="td-sub <?php echo $isToday?'td-today':'td-empty'; ?>">
+    <td class="td-sub<?php echo $isToday?' td-today':''; ?>">
         <?php if ($sub):
             $color = $subjectColors[$sub['section_code']] ?? '#1565c0';
             $dsMap = $sub['_dsmap'];
@@ -380,12 +371,12 @@ for ($period=1; $period<=16; $period++):
             if ($subSess && isset($SESSION_PERIODS[$subSess])):
                 [$pS,$pE] = $SESSION_PERIODS[$subSess];
                 if ($period === $pS):
-                    $cardH = ($pE - $pS + 1) * 30 - 2;
+                    $cardH = ($pE - $pS + 1) * 34 - 4;
                     // Light bg from color
                     $r = hexdec(substr($color,1,2));
                     $g = hexdec(substr($color,3,2));
                     $b = hexdec(substr($color,5,2));
-                    $bgStyle = "background:rgba($r,$g,$b,.12);border-left-color:$color;color:#1a1a2e;height:{$cardH}px;";
+                    $bgStyle = "background:rgba($r,$g,$b,.1);border-left-color:$color;color:#1a1a2e;height:{$cardH}px;";
         ?>
             <div class="sub-card" style="<?php echo $bgStyle; ?>"
                  data-bs-toggle="tooltip"
@@ -413,10 +404,10 @@ for ($period=1; $period<=16; $period++):
     ?>
     <th class="<?php echo $isToday?'th-today':''; ?>"><?php echo $dl; ?> (<?php echo $dt?date('d/m',$dt):''; ?>)</th>
     <?php endforeach; ?>
+    <th class="th-nav" onclick="nextWeek()"><button class="nav-btn"><i class="bi bi-chevron-right"></i></button></th>
 </tr>
 </tfoot>
 </table>
-</div>
 </div>
 
 <?php endif; ?>
@@ -455,6 +446,10 @@ const CLASS_DAYS  = <?php echo json_encode(array_values($classDays)); ?>;
 
 function prevWeek(){ if(CUR_WEEK>0) location.href='?semester_id='+SEM_ID+'&week='+(CUR_WEEK-1); }
 function nextWeek(){ location.href='?semester_id='+SEM_ID+'&week='+(CUR_WEEK+1); }
+function goToday(){
+    const nowWeek = Math.max(0, Math.floor((Date.now()/1000 - SEM_S_TS) / (7*86400)));
+    location.href='?semester_id='+SEM_ID+'&week='+nowWeek;
+}
 
 document.addEventListener('keydown',e=>{
     if(e.key==='ArrowLeft') prevWeek();

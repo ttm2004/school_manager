@@ -1,0 +1,65 @@
+# ============================================================
+# .gitignore — TDMU University Management System
+# ============================================================
+
+# ── Môi trường & Credentials (NHẠY CẢM) ─────────────────────
+.env
+.env.local
+.env.production
+.env.staging
+*.env
+
+# ── Database dumps (có thể chứa dữ liệu thật) ───────────────
+# Chỉ giữ edu_management.sql (schema gốc) và migration files
+# Không commit dump có dữ liệu thật
+*.sql.bak
+*.sql.gz
+database/backups/
+database/dumps/
+
+# ── Upload files (dữ liệu người dùng) ───────────────────────
+assets/uploads/avatars/*
+assets/uploads/documents/*
+assets/uploads/temp/*
+admissions/uploads/*
+!assets/uploads/avatars/.gitkeep
+!assets/uploads/documents/.gitkeep
+!assets/uploads/temp/.gitkeep
+!admissions/uploads/.gitkeep
+
+# ── PHP Cache & Logs ─────────────────────────────────────────
+*.log
+*.cache
+.phpunit.result.cache
+storage/logs/
+storage/cache/
+storage/sessions/
+
+# ── Composer vendor (dependencies) ──────────────────────────
+vendor/
+composer.lock
+
+# ── IDE & Editor ─────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Node (nếu có) ────────────────────────────────────────────
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# ── Test artifacts ───────────────────────────────────────────
+tests/coverage/
+tests/reports/
+.phpunit.cache/
+
+# ── Temp files ───────────────────────────────────────────────
+*.tmp
+*.temp
+/tmp/

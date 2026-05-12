@@ -4,6 +4,12 @@ header('Content-Type: application/json; charset=utf-8');
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') adm_json(false, 'Phương thức không hợp lệ');
 
+// Xác minh CSRF token
+$csrfToken = $_POST['_csrf_token'] ?? ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? '');
+if (!verifyCSRFToken($csrfToken)) {
+    adm_json(false, 'Yêu cầu không hợp lệ. Vui lòng tải lại trang và thử lại.');
+}
+
 // Required fields
 $required = ['fullname','birthday','phone','email','identification','address','graduation_year','school','major_id','method_code'];
 foreach ($required as $f) {
@@ -69,10 +75,33 @@ try {
     // File upload
     if (!empty($_FILES['transcript']['name'])) {
         $ext = strtolower(pathinfo($_FILES['transcript']['name'], PATHINFO_EXTENSION));
-        if (in_array($ext, ADM_ALLOWED_EXT) && $_FILES['transcript']['size'] <= ADM_MAX_FILE_SIZE) {
+
+        // Kiểm tra MIME type thực của file (không chỉ dựa vào extension)
+        $allowedMimes = [
+            'pdf'  => 'application/pdf',
+            'jpg'  => 'image/jpeg',
+            'jpeg' => 'image/jpeg',
+            'png'  => 'image/png',
+        ];
+        $finfo    = finfo_open(FILEINFO_MIME_TYPE);
+        $mimeType = finfo_file($finfo, $_FILES['transcript']['tmp_name']);
+        finfo_close($finfo);
+
+        $mimeValid = isset($allowedMimes[$ext]) && $allowedMimes[$ext] === $mimeType;
+
+        if (in_array($ext, ADM_ALLOWED_EXT) && $mimeValid && $_FILES['transcript']['size'] <= ADM_MAX_FILE_SIZE) {
+            // Tên file an toàn: chỉ dùng regId + timestamp, không dùng tên gốc từ user
             $fname = 'transcript_' . $regId . '_' . time() . '.' . $ext;
-            move_uploaded_file($_FILES['transcript']['tmp_name'], ADM_UPLOAD_DIR . 'registrations/' . $fname);
-            $conn->query("UPDATE adm_registrations SET transcript_file='$fname' WHERE id=$regId");
+            $destPath = ADM_UPLOAD_DIR . 'registrations/' . $fname;
+            if (move_uploaded_file($_FILES['transcript']['tmp_name'], $destPath)) {
+                // Dùng prepared statement thay vì query trực tiếp
+                $upStmt = $conn->prepare("UPDATE adm_registrations SET transcript_file=? WHERE id=?");
+                if ($upStmt) {
+                    $upStmt->bind_param('si', $fname, $regId);
+                    $upStmt->execute();
+                    $upStmt->close();
+                }
+            }
         }
     }
 

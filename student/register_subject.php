@@ -1,6 +1,7 @@
 ﻿<?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
+require_once '../includes/AcademicPolicy.php';
 requireRole('student');
 
 // Lấy thông tin sinh viên
@@ -15,33 +16,21 @@ $colCheck = $conn->query("SHOW COLUMNS FROM course_sections LIKE 'schedule_data'
 if ($colCheck->num_rows == 0) {
     $conn->query("ALTER TABLE course_sections ADD COLUMN schedule_data JSON NULL AFTER schedule_text");
 }
-// Tự động seed lịch mẫu nếu chưa có
-// Luôn cập nhật lịch mẫu để đảm bảo không trùng
-$seedData = [
-    'CNTT101_01'=>'[{"day":2,"session":"sang","period_start":1},{"day":4,"session":"sang","period_start":1},{"day":6,"session":"sang","period_start":1}]',
-    'CNTT102_01'=>'[{"day":3,"session":"chieu","period_start":1},{"day":5,"session":"chieu","period_start":1},{"day":7,"session":"chieu","period_start":1}]',
-    'CNTT201_01'=>'[{"day":2,"session":"toi","period_start":1},{"day":4,"session":"toi","period_start":1},{"day":6,"session":"toi","period_start":1}]',
-    'CNTT202_01'=>'[{"day":3,"session":"sang","period_start":1},{"day":5,"session":"sang","period_start":1},{"day":7,"session":"sang","period_start":1}]',
-    'CNTT203_01'=>'[{"day":2,"session":"chieu","period_start":1},{"day":4,"session":"chieu","period_start":1},{"day":6,"session":"chieu","period_start":1}]',
-    'KTPM101_01'=>'[{"day":3,"session":"toi","period_start":1},{"day":5,"session":"toi","period_start":1},{"day":7,"session":"toi","period_start":1}]',
-    'KTPM201_01'=>'[{"day":8,"session":"sang","period_start":1},{"day":8,"session":"chieu","period_start":1},{"day":8,"session":"toi","period_start":1}]',
-    'QTKD101_01'=>'[{"day":2,"session":"sang","period_start":1},{"day":4,"session":"sang","period_start":1},{"day":6,"session":"sang","period_start":1}]',
-    'KT101_01'  =>'[{"day":3,"session":"chieu","period_start":1},{"day":5,"session":"chieu","period_start":1},{"day":7,"session":"chieu","period_start":1}]',
-    'NNA101_01' =>'[{"day":2,"session":"toi","period_start":1},{"day":4,"session":"toi","period_start":1},{"day":6,"session":"toi","period_start":1}]',
-];
-foreach ($seedData as $code => $json) {
-    $s = $conn->prepare("UPDATE course_sections SET schedule_data=? WHERE section_code=?");
-    if ($s) { $s->bind_param('ss', $json, $code); $s->execute(); $s->close(); }
-}
-
 $success = $error = '';
 
 // Xử lý đăng ký
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!verifyCSRFToken($_POST['_csrf_token'] ?? '')) {
+        $error = 'Yêu cầu không hợp lệ. Vui lòng tải lại trang và thử lại.';
+    }
     $action = $_POST['action'] ?? '';
     $section_id = intval($_POST['section_id'] ?? 0);
 
-    if ($action === 'register' && $section_id) {
+    if (empty($error) && $action === 'register' && $section_id) {
+        $registrationPolicy = academicPolicyValidateStudentRegistration($conn, (int)$student['id'], $section_id);
+        if (!$registrationPolicy['ok']) {
+            $error = $registrationPolicy['message'];
+        } else {
         // Kiểm tra học kỳ mở
         $sem = $conn->query("SELECT * FROM semesters WHERE status='open' AND register_start <= NOW() AND register_end >= NOW() LIMIT 1")->fetch_assoc();
         if (!$sem) {
@@ -158,19 +147,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if ($conflictMsg) {
                         $error = '⚠️ Không thể đăng ký! ' . $conflictMsg . '<a href="/university/student/timetable.php" class="alert-link ms-1">Xem thời khóa biểu</a>';
                     } else {
-                        $ins = $conn->prepare("INSERT INTO student_subjects (student_id, course_section_id, status) VALUES (?,?,'registered')");
-                        $ins->bind_param('ii', $student['id'], $section_id);
-                        if ($ins->execute()) {
-                            $conn->query("UPDATE course_sections SET current_students = current_students + 1 WHERE id=$section_id");
+                        $conn->begin_transaction();
+                        try {
+                            $stmtLock = $conn->prepare(
+                                "UPDATE course_sections
+                                 SET current_students = current_students + 1,
+                                     status = CASE WHEN current_students + 1 >= max_students THEN 'full' ELSE status END
+                                 WHERE id = ?
+                                   AND status IN ('open','full')
+                                   AND current_students < max_students"
+                            );
+                            $stmtLock->bind_param('i', $section_id);
+                            $stmtLock->execute();
+                            $updated = $stmtLock->affected_rows;
+                            $stmtLock->close();
+
+                            if ($updated <= 0) {
+                                throw new RuntimeException('Lớp học phần đã đầy hoặc không còn mở đăng ký.');
+                            }
+
+                            $ins = $conn->prepare("INSERT INTO student_subjects (student_id, course_section_id, status) VALUES (?,?,'registered')");
+                            $ins->bind_param('ii', $student['id'], $section_id);
+                            if (!$ins->execute()) {
+                                throw new RuntimeException('Lỗi đăng ký: ' . $conn->error);
+                            }
+                            $ins->close();
+
+                            $conn->commit();
                             $success = '✅ Đăng ký học phần <strong>' . htmlspecialchars($sec['subject_name']) . '</strong> thành công! <a href="/university/student/timetable.php" class="alert-link">Xem thời khóa biểu</a>';
-                        } else {
-                            $error = 'Lỗi đăng ký: ' . $conn->error;
+                        } catch (Throwable $e) {
+                            $conn->rollback();
+                            $error = $e->getMessage();
                         }
-                        $ins->close();
                     }
                 }
             }
             } // end hasTuitionDebt check
+        }
         }
     }
 
@@ -260,15 +273,21 @@ if ($semester) {
         JOIN subjects s ON cs.subject_id = s.id
         JOIN teachers t ON cs.teacher_id = t.id
         JOIN users u ON t.user_id = u.id
+        LEFT JOIN curriculum cur ON cur.subject_id = cs.subject_id
+             AND cur.major_id = (SELECT cl.major_id FROM classes cl WHERE cl.id = ? LIMIT 1)
+             AND cur.deleted_at IS NULL
         WHERE cs.semester_id = ?
-          AND cs.status != 'closed'
+          AND cs.status IN ('open','full')
+          AND (cs.target_cohort_id IS NULL OR cs.target_cohort_id = ?)
+          AND cur.id IS NOT NULL
           AND cs.id NOT IN (
               SELECT course_section_id FROM student_subjects
               WHERE student_id = ? AND status != 'cancelled'
           )
         ORDER BY s.subject_name
     ");
-    $stmt->bind_param('ii', $semester['id'], $student['id']);
+    $studentCohortForList = (int)($student['cohort_id'] ?? 0);
+    $stmt->bind_param('iiii', $student['class_id'], $semester['id'], $studentCohortForList, $student['id']);
     $stmt->execute();
     $sections = $stmt->get_result();
     $stmt->close();
@@ -295,15 +314,21 @@ if ($semester && (!$sections || $sections->num_rows == 0)) {
             JOIN subjects s ON cs.subject_id = s.id
             JOIN teachers t ON cs.teacher_id = t.id
             JOIN users u ON t.user_id = u.id
+            LEFT JOIN curriculum cur ON cur.subject_id = cs.subject_id
+                 AND cur.major_id = (SELECT cl.major_id FROM classes cl WHERE cl.id = ? LIMIT 1)
+                 AND cur.deleted_at IS NULL
             WHERE cs.semester_id = ?
-              AND cs.status != 'closed'
+              AND cs.status IN ('open','full')
+              AND (cs.target_cohort_id IS NULL OR cs.target_cohort_id = ?)
+              AND cur.id IS NOT NULL
               AND cs.id NOT IN (
                   SELECT course_section_id FROM student_subjects
                   WHERE student_id = ? AND status != 'cancelled'
               )
             ORDER BY s.subject_name
         ");
-        $stmt->bind_param('ii', $semester['id'], $student['id']);
+        $studentCohortForList = (int)($student['cohort_id'] ?? 0);
+        $stmt->bind_param('iiii', $student['class_id'], $semester['id'], $studentCohortForList, $student['id']);
         $stmt->execute();
         $sections = $stmt->get_result();
         $stmt->close();
@@ -315,6 +340,7 @@ if ($semester && (!$sections || $sections->num_rows == 0)) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
     <title>Đăng ký học phần - Sinh viên</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
@@ -322,23 +348,7 @@ if ($semester && (!$sections || $sections->num_rows == 0)) {
 </head>
 <body>
 <div class="student-wrapper">
-    <div class="student-sidebar">
-        <div class="sidebar-brand">
-            <div class="sidebar-brand-icon"><i class="bi bi-mortarboard-fill"></i></div>
-            <div class="sidebar-brand-text"><div>Cổng Sinh viên</div><small><?php echo htmlspecialchars($student['student_code']); ?></small></div>
-        </div>
-        <nav class="sidebar-nav">
-            <a href="/university/student/index.php" class="sidebar-link"><i class="bi bi-speedometer2"></i> Tổng quan</a>
-            <a href="/university/student/profile.php" class="sidebar-link"><i class="bi bi-person-fill"></i> Hồ sơ cá nhân</a>
-            <a href="/university/student/register_subject.php" class="sidebar-link active"><i class="bi bi-journal-plus"></i> Đăng ký học phần</a>
-            <a href="/university/student/my_subjects.php" class="sidebar-link"><i class="bi bi-journal-check"></i> Học phần của tôi</a>
-            <a href="/university/student/grades.php" class="sidebar-link"><i class="bi bi-bar-chart-fill"></i> Kết quả học tập</a>
-            <a href="/university/student/evaluation.php" class="sidebar-link"><i class="bi bi-star-fill"></i> Đánh giá giảng viên</a>
-            <hr class="my-2">
-            <a href="/university/index.php" class="sidebar-link"><i class="bi bi-globe"></i> Trang chủ</a>
-            <a href="/university/login.php?logout=1" class="sidebar-link text-danger"><i class="bi bi-box-arrow-right"></i> Đăng xuất</a>
-        </nav>
-    </div>
+    <?php include __DIR__ . '/includes/sidebar.php'; ?>
     <div class="student-main">
         <div class="student-topbar">
             <div class="d-flex align-items-center gap-3">
@@ -396,8 +406,8 @@ if ($semester && (!$sections || $sections->num_rows == 0)) {
                                 // Helper: parse day_sessions "2:sang,4:chieu" → [day=>session]
                                 function parseDaySessionsReg(string $ds): array {
                                     $r = [];
-                                    foreach (explode(',', $ds) as $p) {
-                                        $a = explode(':', trim($p));
+                                    foreach (academicPolicyScheduleTokens($ds) as $p) {
+                                        $a = explode(':', trim($p), 2);
                                         if (count($a)==2 && $a[0] && $a[1]) $r[(int)$a[0]] = $a[1];
                                     }
                                     return $r;
@@ -517,6 +527,7 @@ if ($semester && (!$sections || $sections->num_rows == 0)) {
                                         </span>
                                         <?php elseif (!$isFull && $regOpen): ?>
                                         <form method="POST">
+                                            <?php echo csrfField(); ?>
                                             <input type="hidden" name="action" value="register">
                                             <input type="hidden" name="section_id" value="<?php echo $sec['id']; ?>">
                                             <button type="submit" class="btn btn-sm btn-gold"

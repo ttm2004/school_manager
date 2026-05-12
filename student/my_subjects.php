@@ -1,6 +1,7 @@
 ﻿<?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
+require_once '../includes/AcademicPolicy.php';
 requireRole('student');
 
 $stmt = $conn->prepare("SELECT s.*, u.full_name FROM students s JOIN users u ON s.user_id=u.id WHERE s.user_id=?");
@@ -11,37 +12,71 @@ $stmt->close();
 
 $success = $error = '';
 
-// Dọn dẹp các bản ghi đã hủy cũ (nếu còn sót từ logic cũ)
-$oldCancelled = $conn->query("SELECT course_section_id FROM student_subjects WHERE student_id={$student['id']} AND status='cancelled'");
-if ($oldCancelled && $oldCancelled->num_rows > 0) {
-    while ($row = $oldCancelled->fetch_assoc()) {
-        $conn->query("UPDATE course_sections SET current_students = GREATEST(0, current_students - 1) WHERE id=" . intval($row['course_section_id']));
-    }
-    $conn->query("DELETE FROM student_subjects WHERE student_id={$student['id']} AND status='cancelled'");
-}
-
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'cancel') {
+    if (!verifyCSRFToken($_POST['_csrf_token'] ?? '')) {
+        $error = 'Yêu cầu không hợp lệ. Vui lòng tải lại trang và thử lại.';
+    }
     $ss_id = intval($_POST['ss_id'] ?? 0);
-    // Kiểm tra học kỳ còn mở đăng ký không
-    $sem = $conn->query("SELECT * FROM semesters WHERE status='open' AND register_start <= NOW() AND register_end >= NOW() LIMIT 1")->fetch_assoc();
-    if (!$sem) {
-        $error = 'Đã hết thời gian hủy đăng ký.';
-    } else {
-        // Lấy section_id để giảm current_students
-        $getStmt = $conn->prepare("SELECT course_section_id FROM student_subjects WHERE id=? AND student_id=?");
-        $getStmt->bind_param('ii', $ss_id, $student['id']);
-        $getStmt->execute();
-        $ssRow = $getStmt->get_result()->fetch_assoc();
-        $getStmt->close();
 
-        if ($ssRow) {
-            $del = $conn->prepare("DELETE FROM student_subjects WHERE id=? AND student_id=?");
-            $del->bind_param('ii', $ss_id, $student['id']);
-            if ($del->execute()) {
-                $conn->query("UPDATE course_sections SET current_students = GREATEST(0, current_students - 1) WHERE id=" . $ssRow['course_section_id']);
-                $success = 'Hủy đăng ký thành công!';
+    if (empty($error)) {
+        $conn->begin_transaction();
+        try {
+            $getStmt = $conn->prepare(
+                "SELECT ss.course_section_id, cs.semester_id
+                 FROM student_subjects ss
+                 JOIN course_sections cs ON ss.course_section_id = cs.id
+                 WHERE ss.id = ? AND ss.student_id = ? AND ss.status = 'registered'
+                 LIMIT 1"
+            );
+            $getStmt->bind_param('ii', $ss_id, $student['id']);
+            $getStmt->execute();
+            $ssRow = $getStmt->get_result()->fetch_assoc();
+            $getStmt->close();
+
+            if (!$ssRow) {
+                throw new RuntimeException('Không tìm thấy học phần đang đăng ký để hủy.');
             }
-            $del->close();
+
+            $stmtWindow = $conn->prepare(
+                "SELECT id FROM semesters
+                 WHERE id = ?
+                   AND status = 'open'
+                   AND register_start <= NOW()
+                   AND register_end >= NOW()
+                 LIMIT 1"
+            );
+            $stmtWindow->bind_param('i', $ssRow['semester_id']);
+            $stmtWindow->execute();
+            $canCancel = $stmtWindow->get_result()->num_rows > 0;
+            $stmtWindow->close();
+            if (!$canCancel) {
+                throw new RuntimeException('Đã hết thời gian hủy đăng ký học phần.');
+            }
+
+            $updReg = $conn->prepare("UPDATE student_subjects SET status='cancelled' WHERE id=? AND student_id=? AND status='registered'");
+            $updReg->bind_param('ii', $ss_id, $student['id']);
+            $updReg->execute();
+            if ($updReg->affected_rows <= 0) {
+                throw new RuntimeException('Không thể hủy học phần này.');
+            }
+            $updReg->close();
+
+            $sectionId = (int)$ssRow['course_section_id'];
+            $updSection = $conn->prepare(
+                "UPDATE course_sections
+                 SET current_students = GREATEST(0, current_students - 1),
+                     status = CASE WHEN status = 'full' THEN 'open' ELSE status END
+                 WHERE id = ?"
+            );
+            $updSection->bind_param('i', $sectionId);
+            $updSection->execute();
+            $updSection->close();
+
+            $conn->commit();
+            $success = 'Hủy đăng ký thành công!';
+        } catch (Throwable $e) {
+            $conn->rollback();
+            $error = $e->getMessage();
         }
     }
     // ── PRG ──
@@ -113,6 +148,7 @@ if ($allSections) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
     <title>Học phần của tôi - Sinh viên</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
@@ -120,25 +156,7 @@ if ($allSections) {
 </head>
 <body>
 <div class="student-wrapper">
-    <div class="student-sidebar">
-        <div class="sidebar-brand">
-            <div class="sidebar-brand-icon"><i class="bi bi-mortarboard-fill"></i></div>
-            <div class="sidebar-brand-text"><div>Cổng Sinh viên</div><small><?php echo htmlspecialchars($student['student_code']); ?></small></div>
-        </div>
-        <nav class="sidebar-nav">
-            <a href="/university/student/index.php" class="sidebar-link"><i class="bi bi-speedometer2"></i> Tổng quan</a>
-            <a href="/university/student/profile.php" class="sidebar-link"><i class="bi bi-person-fill"></i> Hồ sơ cá nhân</a>
-            <a href="/university/student/register_subject.php" class="sidebar-link"><i class="bi bi-journal-plus"></i> Đăng ký học phần</a>
-            <a href="/university/student/my_subjects.php" class="sidebar-link active"><i class="bi bi-journal-check"></i> Học phần của tôi</a>
-            <a href="/university/student/timetable.php" class="sidebar-link"><i class="bi bi-calendar3-week"></i> Thời khóa biểu</a>
-            <a href="/university/student/exam_schedule.php" class="sidebar-link"><i class="bi bi-calendar-event-fill"></i> Lịch thi cuối kỳ</a>
-            <a href="/university/student/grades.php" class="sidebar-link"><i class="bi bi-bar-chart-fill"></i> Kết quả học tập</a>
-            <a href="/university/student/evaluation.php" class="sidebar-link"><i class="bi bi-star-fill"></i> Đánh giá giảng viên</a>
-            <hr class="my-2">
-            <a href="/university/index.php" class="sidebar-link"><i class="bi bi-globe"></i> Trang chủ</a>
-            <a href="/university/login.php?logout=1" class="sidebar-link text-danger"><i class="bi bi-box-arrow-right"></i> Đăng xuất</a>
-        </nav>
-    </div>
+    <?php include __DIR__ . '/includes/sidebar.php'; ?>
     <div class="student-main">
         <div class="student-topbar">
             <div class="d-flex align-items-center gap-3">
@@ -247,6 +265,7 @@ if ($allSections) {
                                     <td>
                                         <?php if ($sub['reg_status'] === 'registered' && $regOpen): ?>
                                         <form method="POST" onsubmit="return confirm('Hủy đăng ký môn này?')">
+                                            <?php echo csrfField(); ?>
                                             <input type="hidden" name="action" value="cancel">
                                             <input type="hidden" name="ss_id" value="<?php echo $sub['ss_id']; ?>">
                                             <button type="submit" class="btn btn-sm btn-outline-danger">

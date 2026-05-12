@@ -45,6 +45,11 @@ $currentFile = basename($_SERVER['PHP_SELF']);
         </a>
 
         <div class="sidebar-section-title">Hệ thống</div>
+        <?php if (canSwitchRole()): ?>
+        <a href="/university/switch_role.php" class="sidebar-link text-warning">
+            <i class="bi bi-arrow-left-right"></i> Chuyển vai trò
+        </a>
+        <?php endif; ?>
         <a href="/university/admin/index.php" class="sidebar-link">
             <i class="bi bi-arrow-left-circle-fill"></i> Về Admin
         </a>

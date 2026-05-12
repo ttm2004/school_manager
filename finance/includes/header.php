@@ -65,6 +65,7 @@ if ($_pr) $_pendingCount = (int)$_pr->fetch_assoc()['c'];
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
     <title><?php echo isset($pageTitle) ? htmlspecialchars($pageTitle).' — ' : ''; ?>Kế toán · TDMU</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
@@ -183,6 +184,11 @@ if ($_pr) $_pendingCount = (int)$_pr->fetch_assoc()['c'];
         <?php endif; ?>
 
         <div class="sidebar-divider"></div>
+        <?php if (canSwitchRole()): ?>
+        <a href="/university/switch_role.php" class="sidebar-link" style="color:#ffc107;" data-tooltip="Chuyển vai trò">
+            <i class="bi bi-arrow-left-right"></i><span class="link-text"> Chuyển vai trò</span>
+        </a>
+        <?php endif; ?>
         <?php if ($_SESSION['role']==='admin'): ?>
         <a href="/university/admin/" class="sidebar-link" data-tooltip="Về Admin chính">
             <i class="bi bi-arrow-left-circle"></i><span class="link-text"> Về Admin chính</span>
