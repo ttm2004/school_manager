@@ -2,6 +2,7 @@
 require_once '../config/database.php';
 require_once '../includes/auth.php';
 require_once '../includes/grade_windows.php';
+require_once '../academic/includes/academic_helpers.php';
 requireRole('teacher');
 
 $stmt = $conn->prepare("SELECT t.*, u.full_name FROM teachers t JOIN users u ON t.user_id=u.id WHERE t.user_id=?");
@@ -22,7 +23,8 @@ $stmt = $conn->prepare("
            cs.day_sessions, cs.start_date, cs.end_date,
            cs.room, cs.max_students, cs.current_students, cs.status,
            s.subject_name, s.credits, s.subject_code,
-           sm.semester_name, sm.school_year, sm.id as semester_id, sm.start_date as sem_start,
+           COALESCE(NULLIF(s.total_periods,0), s.theory_periods + s.practice_periods, s.credits * 15, 45) AS total_periods,
+           sm.semester_name, sm.school_year, sm.id as semester_id, sm.start_date as sem_start, sm.end_date as sem_end,
            sm.grade_submit_deadline
     FROM course_sections cs
     JOIN subjects s ON cs.subject_id = s.id
@@ -77,10 +79,18 @@ foreach ($allCourses as $c) {
     $key = $c['semester_id'];
     $bySemester[$key]['info']       = $c['semester_name'] . ' ' . $c['school_year'];
     $bySemester[$key]['start_date'] = $c['sem_start'];
+    $bySemester[$key]['end_date']   = $c['sem_end'];
     $bySemester[$key]['courses'][]  = $c;
 }
 
 $selectedSem = intval($_GET['semester_id'] ?? (array_key_first($bySemester) ?? 0));
+$scheduleChanges = [];
+if (isset($bySemester[$selectedSem])) {
+    $scheduleChanges = academicScheduleChangesBySection(
+        $conn,
+        array_column($bySemester[$selectedSem]['courses'], 'section_id')
+    );
+}
 
 $SESSIONS = [
     'sang'  => ['label'=>'Sáng',  'color'=>'#e3f2fd','border'=>'#1976d2','text'=>'#0d47a1','time'=>'7:00 - 11:30'],
@@ -89,45 +99,77 @@ $SESSIONS = [
 ];
 $DAYS = [2=>'Thứ 2',3=>'Thứ 3',4=>'Thứ 4',5=>'Thứ 5',6=>'Thứ 6',7=>'Thứ 7',8=>'Chủ nhật'];
 
-// ===== TÍNH TUẦN THỰC TẾ từ start_date/end_date các lớp =====
-$semStartTs = null;
-$semEndTs   = null;
 if (isset($bySemester[$selectedSem])) {
-    foreach ($bySemester[$selectedSem]['courses'] as $c) {
-        if (!empty($c['start_date'])) {
-            $ts = strtotime($c['start_date']);
-            if ($semStartTs === null || $ts < $semStartTs) $semStartTs = $ts;
-        }
-        if (!empty($c['end_date'])) {
-            $ts = strtotime($c['end_date']);
-            if ($semEndTs === null || $ts > $semEndTs) $semEndTs = $ts;
+    foreach ($bySemester[$selectedSem]['courses'] as &$c) {
+        $dates = academicScheduleSectionDates(
+            $c['start_date'] ?: ($c['sem_start'] ?? null),
+            $c['day_sessions'] ?? '',
+            (int)($c['total_periods'] ?? 45),
+            5,
+            $bySemester[$selectedSem]['end_date'] ?? null
+        );
+        if ($dates) {
+            $dateSessions = [];
+            foreach ($dates as $date) {
+                $dow = (int)date('N', strtotime($date));
+                $dayKey = $dow === 7 ? 8 : $dow + 1;
+                $dayMapForDate = !empty($c['day_sessions']) ? parseDaySessionsTeacher($c['day_sessions']) : [];
+                if (isset($dayMapForDate[$dayKey])) {
+                    $dateSessions[$date][] = ['day' => $dayKey, 'session' => $dayMapForDate[$dayKey], 'room' => $c['room']];
+                }
+            }
+            foreach ($scheduleChanges[(int)$c['section_id']] ?? [] as $change) {
+                unset($dateSessions[$change['original_date']]);
+                $newDay = (int)date('N', strtotime($change['new_date']));
+                $newDay = $newDay === 7 ? 8 : $newDay + 1;
+                $dateSessions[$change['new_date']][] = [
+                    'day' => $newDay,
+                    'session' => academicScheduleNormalizeSession((string)$change['new_day_session']),
+                    'room' => $change['room'] ?: $c['room'],
+                    'changed' => true,
+                ];
+            }
+            ksort($dateSessions);
+            $c['_class_dates'] = $dates;
+            $c['_date_sessions'] = $dateSessions;
+            $c['_effective_start'] = $dates[0];
+            $effectiveDates = array_keys($dateSessions);
+            $c['_effective_end'] = $effectiveDates ? end($effectiveDates) : end($dates);
+        } else {
+            $c['_class_dates'] = [];
+            $c['_date_sessions'] = [];
+            $c['_effective_start'] = $c['start_date'] ?: ($c['sem_start'] ?? null);
+            $c['_effective_end'] = $c['end_date'] ?: ($c['sem_end'] ?? null);
         }
     }
+    unset($c);
 }
-// Fallback: dùng start_date học kỳ hoặc tuần hiện tại
-if (!$semStartTs) {
-    $semStartTs = !empty($bySemester[$selectedSem]['start_date'])
-        ? strtotime($bySemester[$selectedSem]['start_date'])
-        : strtotime('monday this week');
-}
+
+// ===== TÍNH TUẦN THEO THỜI GIAN HỌC KỲ =====
+$semStartTs = !empty($bySemester[$selectedSem]['start_date'])
+    ? strtotime($bySemester[$selectedSem]['start_date'])
+    : strtotime('monday this week');
+$semEndTs = !empty($bySemester[$selectedSem]['end_date'])
+    ? strtotime($bySemester[$selectedSem]['end_date'])
+    : null;
 
 // Đảm bảo là Thứ 2
 $dow = (int)date('N', $semStartTs);
-if ($dow != 1) $semStartTs = strtotime('last monday', $semStartTs);
+if ($dow != 1) $semStartTs = strtotime('next monday', $semStartTs);
 
-// Tuần đang xem — không giới hạn
+$totalWeeks = 20;
+if ($semEndTs) {
+    $totalWeeks = max(1, (int)ceil(($semEndTs - $semStartTs + 86400) / (7 * 86400)));
+}
+
 $nowWeek     = max(0, (int)floor((time() - $semStartTs) / (7 * 86400)));
-$currentWeek = max(0, intval($_GET['week'] ?? $nowWeek));
+$currentWeek = max(0, min(max(0, $totalWeeks - 1), intval($_GET['week'] ?? $nowWeek)));
 
 $weekStartTs = $semStartTs + ($currentWeek * 7 * 86400);
 $weekEndTs   = $weekStartTs + (6 * 86400);
 
-$totalWeeks = 20;
-if ($semEndTs) {
-    $totalWeeks = max(1, (int)ceil(($semEndTs - $semStartTs) / (7 * 86400)));
-}
 $weekOptions = [];
-for ($w = 0; $w <= $totalWeeks; $w++) {
+for ($w = 0; $w < $totalWeeks; $w++) {
     $ws = $semStartTs + ($w * 7 * 86400);
     $we = $ws + (6 * 86400);
     $weekOptions[$w] = 'Tuần ' . ($w + 1) . ' [từ ngày ' . date('d/m/Y', $ws) . ' đến ngày ' . date('d/m/Y', $we) . ']';
@@ -167,12 +209,33 @@ if (isset($bySemester[$selectedSem])) {
         if (empty($dayMap)) continue;
 
         // Kiểm tra lớp có học tuần này không
-        $subStart = !empty($c['start_date']) ? strtotime($c['start_date']) : null;
-        $subEnd   = !empty($c['end_date'])   ? strtotime($c['end_date'])   : null;
+        $subStart = !empty($c['_effective_start']) ? strtotime($c['_effective_start']) : null;
+        $subEnd   = !empty($c['_effective_end'])   ? strtotime($c['_effective_end'])   : null;
         if ($subStart && $weekEndTs   < $subStart) continue;
         if ($subEnd   && $weekStartTs > $subEnd)   continue;
 
+        foreach (($c['_date_sessions'] ?? []) as $date => $entries) {
+            $ts = strtotime($date);
+            if ($ts < $weekStartTs || $ts > $weekEndTs) continue;
+            foreach ($entries as $entry) {
+                if (!empty($entry['changed'])) {
+                    $dayMap[(int)$entry['day']] = (string)$entry['session'];
+                }
+            }
+        }
+
         foreach ($dayMap as $day => $session) {
+            $classDate = isset($dayDates[$day]) ? date('Y-m-d', $dayDates[$day]) : null;
+            if (!empty($c['_date_sessions'])) {
+                $dateEntries = array_filter($c['_date_sessions'][$classDate] ?? [], fn($entry) => (int)$entry['day'] === (int)$day);
+                if (!$dateEntries) continue;
+                $entry = reset($dateEntries);
+                $session = (string)$entry['session'];
+                $c['_display_room'] = $entry['room'] ?? $c['room'];
+                $c['_changed_session'] = !empty($entry['changed']);
+            } elseif (!empty($c['_class_dates']) && !in_array($classDate, $c['_class_dates'], true)) {
+                continue;
+            }
             if (!isset($timetable[$day][$session])) $timetable[$day][$session] = [];
             $alreadyIn = false;
             foreach ($timetable[$day][$session] as $existing) {
@@ -327,14 +390,18 @@ $qString = $qParams ? '&' . http_build_query($qParams) : '';
                         <?php endif; ?>
                     </div>
 
-                    <a href="?semester_id=<?php echo $selectedSem; ?>&week=<?php echo $nowWeek; ?>"
+                    <a href="?semester_id=<?php echo $selectedSem; ?>&week=<?php echo min(max(0, $totalWeeks-1), $nowWeek); ?>"
                        class="btn btn-sm btn-outline-secondary"
                        title="Về tuần hiện tại">
                         <i class="bi bi-calendar-check"></i>
                     </a>
+                    <?php if ($currentWeek < $totalWeeks - 1): ?>
                     <a href="?semester_id=<?php echo $selectedSem; ?>&week=<?php echo $currentWeek+1; ?>" class="btn btn-sm btn-navy">
                         Tuần sau <i class="bi bi-chevron-right"></i>
                     </a>
+                    <?php else: ?>
+                    <button class="btn btn-sm btn-navy" disabled>Tuần sau <i class="bi bi-chevron-right"></i></button>
+                    <?php endif; ?>
                 </div>
             </div>
 
@@ -378,13 +445,13 @@ $qString = $qParams ? '&' . http_build_query($qParams) : '';
                                             <div class="subject-card"
                                                  style="background:<?php echo $color; ?>18; border-left-color:<?php echo $color; ?>;"
                                                  data-bs-toggle="tooltip"
-                                                 title="<?php echo htmlspecialchars($c['subject_name'] . ' | ' . $c['section_code'] . ' | ' . $c['room'] . ' | ' . $c['current_students'] . '/' . $c['max_students'] . ' SV'); ?>">
+                                                 title="<?php echo htmlspecialchars($c['subject_name'] . ' | ' . $c['section_code'] . ' | ' . ($c['_display_room'] ?? $c['room']) . ' | ' . $c['current_students'] . '/' . $c['max_students'] . ' SV'); ?>">
                                                 <div class="sub-name" style="color:<?php echo $color; ?>">
                                                     <?php echo htmlspecialchars($c['subject_name']); ?>
                                                 </div>
                                                 <div class="sub-info">
                                                     <i class="bi bi-tag-fill"></i> <?php echo htmlspecialchars($c['section_code']); ?><br>
-                                                    <i class="bi bi-door-open-fill"></i> <?php echo htmlspecialchars($c['room'] ?: '--'); ?>
+                                                    <i class="bi bi-door-open-fill"></i> <?php echo htmlspecialchars(($c['_display_room'] ?? $c['room']) ?: '--'); ?><?php echo !empty($c['_changed_session']) ? ' (đổi lịch)' : ''; ?>
                                                     &bull; <i class="bi bi-people-fill"></i>
                                                     <span class="<?php echo $c['current_students'] >= $c['max_students'] ? 'text-danger' : ''; ?>">
                                                         <?php echo $c['current_students']; ?>/<?php echo $c['max_students']; ?>

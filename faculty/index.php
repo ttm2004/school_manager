@@ -74,9 +74,9 @@ if ($facultyId > 0) {
     $pendingProposals = (int)($stmtPending->get_result()->fetch_assoc()['c'] ?? 0);
     $stmtPending->close();
 
-    // Thông báo gần đây (7 ngày) — notifications là broadcast, đếm chung
+    // Thông báo hệ thống gần đây (7 ngày)
     $stmtNotif = $conn->prepare(
-        "SELECT COUNT(*) AS c FROM notifications
+        "SELECT COUNT(*) AS c FROM system_notifications
          WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)"
     );
     $stmtNotif->execute();
@@ -97,7 +97,7 @@ if ($facultyId > 0) {
         "SELECT COUNT(*) AS c FROM course_sections WHERE proposal_status = 'pending'"
     )->fetch_assoc()['c'] ?? 0);
     $recentNotifications = (int)($conn->query(
-        "SELECT COUNT(*) AS c FROM notifications WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)"
+        "SELECT COUNT(*) AS c FROM system_notifications WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)"
     )->fetch_assoc()['c'] ?? 0);
 }
 

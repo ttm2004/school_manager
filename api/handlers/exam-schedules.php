@@ -1,6 +1,7 @@
-<?php
+﻿<?php
 /** API: /api/exam-schedules */
 requireApiAuth();
+require_once __DIR__ . '/../../includes/AcademicPolicy.php';
 
 // GET /api/exam-schedules
 if ($method === 'GET' && !$action) {
@@ -38,7 +39,7 @@ if ($method === 'GET' && !$action) {
          LEFT JOIN faculties f ON m.faculty_id=f.id
          LEFT JOIN teachers t ON cs.teacher_id=t.id
          LEFT JOIN users ut ON t.user_id=ut.id
-         LEFT JOIN student_subjects ss ON ss.course_section_id=cs.id AND ss.status='registered'
+         LEFT JOIN student_subjects ss ON ss.course_section_id=cs.id AND ss.status IN ('registered','auto_enrolled')
          WHERE $whereSQL
          GROUP BY fes.id
          ORDER BY fes.exam_date ASC, fes.start_time ASC
@@ -77,10 +78,11 @@ if ($method === 'POST' && !$action) {
     }
 
     $stmt = $conn->prepare(
-        "INSERT INTO final_exam_schedules (course_section_id, exam_date, start_time, end_time, room, exam_form, note, status)
-         VALUES (?,?,?,?,?,?,?,?)"
+        "INSERT INTO final_exam_schedules (course_section_id, exam_date, start_time, end_time, room, exam_form, note, status, data_mode, demo_batch_id)
+         VALUES (?,?,?,?,?,?,?,?,?,?)"
     );
-    $stmt->bind_param('isssssss', $sectionId,$examDate,$startTime,$endTime,$room,$examForm,$note,$status);
+    $demoContext = academicPolicySectionDemoContext($conn, $sectionId);
+    $stmt->bind_param('isssssssss', $sectionId,$examDate,$startTime,$endTime,$room,$examForm,$note,$status,$demoContext['data_mode'],$demoContext['demo_batch_id']);
     if ($stmt->execute()) {
         $newId = $conn->insert_id;
         $stmt->close();
@@ -117,3 +119,4 @@ if ($method === 'DELETE' && $id) {
     $stmt->close();
     apiOk(null, 'Đã xóa lịch thi');
 }
+

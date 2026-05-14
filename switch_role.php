@@ -46,6 +46,9 @@ $stmt->close();
 
 if (empty($deptRoles) && $_SESSION['role'] === 'teacher') {
     // GV không có dept role → về thẳng teacher portal
+    $_SESSION['_active_role'] = '__teacher__';
+    $_SESSION['_user_role_codes'] = ['faculty_lecturer'];
+    $_SESSION['_roles_cached'] = true;
     header('Location: /university/teacher/');
     exit();
 }

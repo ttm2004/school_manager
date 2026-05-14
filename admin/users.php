@@ -96,21 +96,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 $search=trim($_GET['q']??'');
+$filterType = trim($_GET['type'] ?? 'all');
+$validTypes = ['all', 'admin', 'staff', 'teacher', 'leader', 'inactive'];
+if (!in_array($filterType, $validTypes, true)) {
+    $filterType = 'all';
+}
 $perPage=15; $page=max(1,intval($_GET['page']??1)); $offset=($page-1)*$perPage;
 
-$baseFrom="FROM users u LEFT JOIN (SELECT user_id,COUNT(*) cnt FROM user_roles GROUP BY user_id) rc ON rc.user_id=u.id";
-$baseWhere="WHERE (u.role IN ('admin','staff') OR rc.cnt>0)";
+$baseFrom="FROM users u
+    LEFT JOIN teachers t ON t.user_id=u.id
+    LEFT JOIN faculties f ON f.id=t.faculty_id
+    LEFT JOIN (SELECT user_id,COUNT(*) cnt FROM user_roles GROUP BY user_id) rc ON rc.user_id=u.id
+    LEFT JOIN (
+        SELECT ur.user_id, COUNT(*) leader_cnt
+        FROM user_roles ur
+        JOIN roles r ON r.id=ur.role_id
+        WHERE r.is_active=1
+          AND (r.code LIKE '%_manager' OR r.name LIKE 'Trưởng%' OR r.name LIKE '%lãnh đạo%')
+          AND (ur.expires_at IS NULL OR ur.expires_at>NOW())
+        GROUP BY ur.user_id
+    ) lr ON lr.user_id=u.id";
+$baseWhere="WHERE (u.role IN ('admin','staff','teacher') OR rc.cnt>0)";
+$typeWhere = '';
+if ($filterType === 'admin') {
+    $typeWhere = " AND u.role='admin'";
+} elseif ($filterType === 'staff') {
+    $typeWhere = " AND u.role='staff'";
+} elseif ($filterType === 'teacher') {
+    $typeWhere = " AND (u.role='teacher' OR t.id IS NOT NULL)";
+} elseif ($filterType === 'leader') {
+    $typeWhere = " AND COALESCE(lr.leader_cnt,0)>0";
+} elseif ($filterType === 'inactive') {
+    $typeWhere = " AND u.status=0";
+}
+$baseWhere .= $typeWhere;
+$selectUserFields = "u.id,u.username,u.full_name,u.email,u.phone,u.role,u.status,u.created_at,
+    t.teacher_code, t.degree, f.faculty_name, COALESCE(lr.leader_cnt,0) leader_cnt";
 
 if ($search) {
     $like="%$search%";
     $cs=$conn->prepare("SELECT COUNT(*) c $baseFrom $baseWhere AND (u.username LIKE ? OR u.full_name LIKE ? OR u.email LIKE ?)");
     $cs->bind_param('sss',$like,$like,$like); $cs->execute();
     $total=$cs->get_result()->fetch_assoc()['c']; $cs->close();
-    $stmt=$conn->prepare("SELECT u.id,u.username,u.full_name,u.email,u.phone,u.status,u.created_at $baseFrom $baseWhere AND (u.username LIKE ? OR u.full_name LIKE ? OR u.email LIKE ?) ORDER BY u.created_at DESC LIMIT ? OFFSET ?");
+    $stmt=$conn->prepare("SELECT $selectUserFields $baseFrom $baseWhere AND (u.username LIKE ? OR u.full_name LIKE ? OR u.email LIKE ?) ORDER BY u.created_at DESC LIMIT ? OFFSET ?");
     $stmt->bind_param('sssii',$like,$like,$like,$perPage,$offset);
 } else {
     $total=$conn->query("SELECT COUNT(*) c $baseFrom $baseWhere")->fetch_assoc()['c'];
-    $stmt=$conn->prepare("SELECT u.id,u.username,u.full_name,u.email,u.phone,u.status,u.created_at $baseFrom $baseWhere ORDER BY u.created_at DESC LIMIT ? OFFSET ?");
+    $stmt=$conn->prepare("SELECT $selectUserFields $baseFrom $baseWhere ORDER BY u.created_at DESC LIMIT ? OFFSET ?");
     $stmt->bind_param('ii',$perPage,$offset);
 }
 $stmt->execute(); $users=$stmt->get_result(); $stmt->close();
@@ -144,7 +176,7 @@ include 'includes/sidebar.php';
 <?php if($success):?><div class="alert alert-success auto-dismiss alert-dismissible fade show"><i class="bi bi-check-circle-fill me-2"></i><?php echo $success;?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div><?php endif;?>
 <?php if($error):?><div class="alert alert-danger auto-dismiss alert-dismissible fade show"><i class="bi bi-exclamation-circle-fill me-2"></i><?php echo $error;?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div><?php endif;?>
 
-<div class="alert alert-info py-2 small mb-3"><i class="bi bi-info-circle-fill me-2"></i>Trang nay quan ly tai khoan <strong>nhan vien truong</strong>. Sinh vien va giang vien duoc quan ly o trang rieng.</div>
+<div class="alert alert-info py-2 small mb-3"><i class="bi bi-info-circle-fill me-2"></i>Trang này quản lý tài khoản hệ thống của nhà trường. Giảng viên vẫn có thể là nhân sự/lãnh đạo nếu được cấp quyền phòng ban hoặc quyền Khoa/Viện.</div>
 
 <?php if($viewUser):?>
 <div class="card mb-4">
@@ -204,15 +236,31 @@ include 'includes/sidebar.php';
     </div>
     <div class="card-body">
         <form method="GET" class="mb-3">
-            <div class="input-group" style="max-width:420px">
-                <input type="text" name="q" class="form-control" placeholder="Tim ten, email..." value="<?php echo htmlspecialchars($search);?>">
-                <button class="btn btn-navy" type="submit"><i class="bi bi-search"></i></button>
-                <?php if($search):?><a href="users.php" class="btn btn-outline-secondary"><i class="bi bi-x-lg"></i></a><?php endif;?>
+            <div class="d-flex gap-2 flex-wrap align-items-end">
+                <div>
+                    <label class="form-label small fw-semibold mb-1">Loại tài khoản</label>
+                    <select name="type" class="form-select" style="width:190px" onchange="this.form.submit()">
+                        <option value="all" <?php echo $filterType==='all'?'selected':''; ?>>Tất cả nhân sự</option>
+                        <option value="admin" <?php echo $filterType==='admin'?'selected':''; ?>>Quản trị hệ thống</option>
+                        <option value="staff" <?php echo $filterType==='staff'?'selected':''; ?>>Nhân viên phòng ban</option>
+                        <option value="teacher" <?php echo $filterType==='teacher'?'selected':''; ?>>Giảng viên</option>
+                        <option value="leader" <?php echo $filterType==='leader'?'selected':''; ?>>Lãnh đạo/Quản lý</option>
+                        <option value="inactive" <?php echo $filterType==='inactive'?'selected':''; ?>>Tài khoản đã khóa</option>
+                    </select>
+                </div>
+                <div class="flex-grow-1" style="max-width:420px">
+                    <label class="form-label small fw-semibold mb-1">Tìm kiếm</label>
+                    <div class="input-group">
+                        <input type="text" name="q" class="form-control" placeholder="Tìm tên, email, tài khoản..." value="<?php echo htmlspecialchars($search);?>">
+                        <button class="btn btn-navy" type="submit"><i class="bi bi-search"></i></button>
+                    </div>
+                </div>
+                <?php if($search || $filterType !== 'all'):?><a href="users.php" class="btn btn-outline-secondary"><i class="bi bi-x-lg me-1"></i>Xóa lọc</a><?php endif;?>
             </div>
         </form>
         <div class="table-responsive">
             <table class="table table-hover">
-                <thead><tr><th>#</th><th>Ten dang nhap</th><th>Ho ten</th><th>Email / SDT</th><th>Quyen phong ban</th><th>Trang thai</th><th>Ngay tao</th><th>Thao tac</th></tr></thead>
+                <thead><tr><th>#</th><th>Tên đăng nhập</th><th>Họ tên</th><th>Loại</th><th>Email / SĐT</th><th>Quyền phòng ban</th><th>Trạng thái</th><th>Ngày tạo</th><th>Thao tác</th></tr></thead>
                 <tbody>
                 <?php if($users&&$users->num_rows>0): $idx=$offset+1; while($u=$users->fetch_assoc()):
                     $ur2=$conn->query("SELECT r.name,r.color FROM user_roles ur JOIN roles r ON ur.role_id=r.id WHERE ur.user_id={$u['id']} AND r.is_active=1 AND (ur.expires_at IS NULL OR ur.expires_at>NOW())");
@@ -221,6 +269,20 @@ include 'includes/sidebar.php';
                     <td class="text-muted small"><?php echo $idx++;?></td>
                     <td class="fw-bold text-navy"><?php echo htmlspecialchars($u['username']);?></td>
                     <td><?php echo htmlspecialchars($u['full_name']);?></td>
+                    <td class="small">
+                        <?php if ($u['role'] === 'admin'): ?>
+                            <span class="badge bg-dark">Quản trị</span>
+                        <?php elseif ($u['role'] === 'teacher' || !empty($u['teacher_code'])): ?>
+                            <span class="badge bg-primary">Giảng viên</span>
+                            <?php if (!empty($u['degree'])): ?><div class="text-muted mt-1"><?php echo htmlspecialchars($u['degree']); ?></div><?php endif; ?>
+                            <?php if (!empty($u['faculty_name'])): ?><div class="text-muted"><?php echo htmlspecialchars($u['faculty_name']); ?></div><?php endif; ?>
+                        <?php else: ?>
+                            <span class="badge bg-info text-dark">Nhân viên</span>
+                        <?php endif; ?>
+                        <?php if ((int)$u['leader_cnt'] > 0): ?>
+                            <div class="mt-1"><span class="badge bg-warning text-dark">Lãnh đạo/Quản lý</span></div>
+                        <?php endif; ?>
+                    </td>
                     <td class="small text-muted"><?php echo htmlspecialchars($u['email']??'');?><?php if($u['phone']):?><br><?php echo htmlspecialchars($u['phone']);?><?php endif;?></td>
                     <td>
                         <?php if($ur2&&$ur2->num_rows>0): while($r=$ur2->fetch_assoc()):?>
@@ -246,18 +308,18 @@ include 'includes/sidebar.php';
                     </td>
                 </tr>
                 <?php endwhile; else:?>
-                <tr><td colspan="8" class="text-center text-muted py-5"><i class="bi bi-people fs-2 d-block mb-2"></i>Chua co nhan vien nao</td></tr>
+                <tr><td colspan="9" class="text-center text-muted py-5"><i class="bi bi-people fs-2 d-block mb-2"></i>Không có tài khoản nào phù hợp</td></tr>
                 <?php endif;?>
                 </tbody>
             </table>
         </div>
         <?php if($totalPages>1):?>
         <nav><ul class="pagination justify-content-center mt-3">
-            <?php if($page>1):?><li class="page-item"><a class="page-link" href="?q=<?php echo urlencode($search);?>&page=<?php echo $page-1;?>"><i class="bi bi-chevron-left"></i></a></li><?php endif;?>
+            <?php if($page>1):?><li class="page-item"><a class="page-link" href="?type=<?php echo urlencode($filterType);?>&q=<?php echo urlencode($search);?>&page=<?php echo $page-1;?>"><i class="bi bi-chevron-left"></i></a></li><?php endif;?>
             <?php for($p=max(1,$page-2);$p<=min($totalPages,$page+2);$p++):?>
-            <li class="page-item <?php echo $p==$page?'active':'';?>"><a class="page-link" href="?q=<?php echo urlencode($search);?>&page=<?php echo $p;?>"><?php echo $p;?></a></li>
+            <li class="page-item <?php echo $p==$page?'active':'';?>"><a class="page-link" href="?type=<?php echo urlencode($filterType);?>&q=<?php echo urlencode($search);?>&page=<?php echo $p;?>"><?php echo $p;?></a></li>
             <?php endfor;?>
-            <?php if($page<$totalPages):?><li class="page-item"><a class="page-link" href="?q=<?php echo urlencode($search);?>&page=<?php echo $page+1;?>"><i class="bi bi-chevron-right"></i></a></li><?php endif;?>
+            <?php if($page<$totalPages):?><li class="page-item"><a class="page-link" href="?type=<?php echo urlencode($filterType);?>&q=<?php echo urlencode($search);?>&page=<?php echo $page+1;?>"><i class="bi bi-chevron-right"></i></a></li><?php endif;?>
         </ul></nav>
         <?php endif;?>
     </div>

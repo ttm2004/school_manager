@@ -26,7 +26,7 @@ if ($filterSem > 0) {
     while ($row = $r->fetch_assoc()) $sectionsByStatus[$row['status']] = $row['c'];
 
     // Tong luot dang ky
-    $totalReg = (int)$conn->query("SELECT COUNT(*) AS c FROM student_subjects ss JOIN course_sections cs ON ss.course_section_id=cs.id WHERE cs.semester_id=$filterSem AND ss.status='registered'")->fetch_assoc()['c'];
+    $totalReg = (int)$conn->query("SELECT COUNT(*) AS c FROM student_subjects ss JOIN course_sections cs ON ss.course_section_id=cs.id WHERE cs.semester_id=$filterSem AND ss.status IN ('registered','auto_enrolled')")->fetch_assoc()['c'];
 
     // Ti le dat trung binh
     $passRate = $conn->query(
@@ -34,7 +34,7 @@ if ($filterSem > 0) {
              SELECT cs.id,
                     CASE WHEN COUNT(g.id)>0 THEN SUM(CASE WHEN g.final_score>=5 THEN 1 ELSE 0 END)/COUNT(g.id)*100 ELSE NULL END AS pass_rate
              FROM course_sections cs
-             JOIN student_subjects ss ON ss.course_section_id=cs.id AND ss.status='registered'
+             JOIN student_subjects ss ON ss.course_section_id=cs.id AND ss.status IN ('registered','auto_enrolled')
              LEFT JOIN grades g ON g.student_subject_id=ss.id
              WHERE cs.semester_id=$filterSem
              GROUP BY cs.id
@@ -49,7 +49,7 @@ if ($filterSem > 0) {
          JOIN subjects s ON cs.subject_id=s.id
          JOIN majors m ON s.major_id=m.id
          JOIN faculties f ON m.faculty_id=f.id
-         WHERE cs.semester_id=$filterSem AND ss.status='registered'
+         WHERE cs.semester_id=$filterSem AND ss.status IN ('registered','auto_enrolled')
          GROUP BY f.id, f.faculty_name ORDER BY c DESC"
     )->fetch_all(MYSQLI_ASSOC);
 
@@ -65,7 +65,7 @@ if ($filterSem > 0) {
                 AVG(g.total_score) AS avg_score
          FROM course_sections cs
          JOIN subjects s ON cs.subject_id=s.id
-         JOIN student_subjects ss ON ss.course_section_id=cs.id AND ss.status='registered'
+         JOIN student_subjects ss ON ss.course_section_id=cs.id AND ss.status IN ('registered','auto_enrolled')
          LEFT JOIN grades g ON g.student_subject_id=ss.id
          WHERE cs.semester_id=$filterSem
          GROUP BY s.id, s.subject_name, s.credits
@@ -246,3 +246,4 @@ include 'includes/sidebar.php';
 <div class="admin-footer">&copy; <?php echo date('Y'); ?> TDMU</div>
 </div>
 <?php include 'includes/footer.php'; ?>
+

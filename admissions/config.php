@@ -30,12 +30,8 @@ function adm_json($success, $message, $data = []) {
 
 // Auth check for admissions admin pages
 function adm_require_auth() {
-    if (!isset($_SESSION['user_id'])) {
-        adm_redirect('/university/login.php');
-    }
-    if (!in_array($_SESSION['role'], ['admin', 'admissions'])) {
-        adm_redirect('/university/login.php');
-    }
+    require_once __DIR__ . '/../includes/auth.php';
+    requireAnyRole(['admissions_manager', 'admissions_staff']);
 }
 
 // Upload config

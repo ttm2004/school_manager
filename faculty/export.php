@@ -126,7 +126,8 @@ if ($type === 'grades' && $semesterId > 0) {
 
 if ($type === 'exams' && $semesterId > 0) {
     $stmtE = $conn->prepare(
-        "SELECT s.subject_name, cs.section_code, fes.exam_date, fes.exam_time_start, fes.exam_time_end, fes.room,
+        "SELECT s.subject_name, cs.section_code, fes.exam_date,
+                fes.start_time AS exam_time_start, fes.end_time AS exam_time_end, fes.room,
                 u.full_name AS teacher_name
          FROM final_exam_schedules fes
          JOIN course_sections cs ON fes.course_section_id = cs.id
@@ -136,7 +137,7 @@ if ($type === 'exams' && $semesterId > 0) {
          LEFT JOIN teachers t ON cs.teacher_id = t.id
          LEFT JOIN users u ON t.user_id = u.id
          WHERE m.faculty_id = ? AND cs.semester_id = ?
-         ORDER BY fes.exam_date ASC, fes.exam_time_start ASC"
+         ORDER BY fes.exam_date ASC, fes.start_time ASC"
     );
     $stmtE->bind_param('ii', $facultyId, $semesterId);
     $stmtE->execute();

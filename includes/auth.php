@@ -137,6 +137,10 @@ function requireRole($role) {
         exit();
     }
     // Xác minh CSRF token cho tất cả POST requests
+    if ($role === 'teacher' && !empty($_SESSION['_active_role']) && $_SESSION['_active_role'] !== '__teacher__') {
+        header('Location: /university/switch_role.php');
+        exit();
+    }
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $token = $_POST['_csrf_token'] ?? ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? '');
         if (!verifyCSRFToken($token)) {
@@ -166,6 +170,18 @@ function hasRole(string $roleCode): bool {
     if ($_SESSION['role'] === 'admin') return true;
 
     // Dùng cache trong session nếu đã load
+    $activeRole = $_SESSION['_active_role'] ?? '';
+    if ($activeRole !== '') {
+        if ($activeRole === '__teacher__') {
+            return $roleCode === 'faculty_lecturer';
+        }
+        if ($activeRole === $roleCode || str_starts_with($activeRole, $roleCode)) {
+            return true;
+        }
+        $baseCode = preg_replace('/_\d+$/', '', $activeRole);
+        return $baseCode === $roleCode;
+    }
+
     if (!empty($_SESSION['_roles_cached']) && isset($_SESSION['_user_role_codes'])) {
         return in_array($roleCode, $_SESSION['_user_role_codes'], true);
     }
@@ -201,6 +217,18 @@ function hasPermission(string $module, string $permission): bool {
 
     global $conn;
     $uid = (int)$_SESSION['user_id'];
+    $activeRole = $_SESSION['_active_role'] ?? '';
+    $activeRoleSql = '';
+    $activeRoleParam = '';
+    if ($activeRole !== '' && $activeRole !== '__teacher__') {
+        $activeRoleSql = " AND (
+            r.code COLLATE utf8mb4_general_ci = CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_general_ci
+            OR r.code COLLATE utf8mb4_general_ci LIKE CONCAT(CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_general_ci, '_%')
+        )";
+        $activeRoleParam = preg_replace('/_\d+$/', '', $activeRole);
+    } elseif ($activeRole === '__teacher__') {
+        return false;
+    }
 
     // Thử permission code mới: 'module.action' format
     $fullCode = str_contains($permission, '.') ? $permission : "$module.$permission";
@@ -214,11 +242,16 @@ function hasPermission(string $module, string $permission): bool {
              WHERE ur.user_id = ?
                AND p.code = ?
                AND r.is_active = 1
+               $activeRoleSql
                AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
              LIMIT 1"
         );
         if ($stmt) {
-            $stmt->bind_param('is', $uid, $fullCode);
+            if ($activeRoleSql) {
+                $stmt->bind_param('isss', $uid, $fullCode, $activeRole, $activeRoleParam);
+            } else {
+                $stmt->bind_param('is', $uid, $fullCode);
+            }
             $stmt->execute();
             $has = $stmt->get_result()->num_rows > 0;
             $stmt->close();
@@ -235,11 +268,16 @@ function hasPermission(string $module, string $permission): bool {
            AND rp.module = ?
            AND rp.permission = ?
            AND r.is_active = 1
+           $activeRoleSql
            AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
          LIMIT 1"
     );
     if (!$stmt) return false;
-    $stmt->bind_param('iss', $uid, $module, $permission);
+    if ($activeRoleSql) {
+        $stmt->bind_param('issss', $uid, $module, $permission, $activeRole, $activeRoleParam);
+    } else {
+        $stmt->bind_param('iss', $uid, $module, $permission);
+    }
     $stmt->execute();
     $has = $stmt->get_result()->num_rows > 0;
     $stmt->close();
@@ -308,6 +346,10 @@ function requireAnyRole(array $roleCodes): void {
     // Kiểm tra _active_role trước (user đã chọn role từ màn hình chọn)
     $activeRole = $_SESSION['_active_role'] ?? '';
     if ($activeRole) {
+        if ($activeRole === '__teacher__' && in_array('faculty_lecturer', $roleCodes, true)) {
+            self_csrf_check();
+            return;
+        }
         foreach ($roleCodes as $code) {
             // Exact match
             if ($activeRole === $code) {
@@ -332,6 +374,16 @@ function requireAnyRole(array $roleCodes): void {
     }
 
     // Fallback: kiểm tra qua DB (cho staff role hoặc khi không có _active_role)
+    if ($activeRole) {
+        http_response_code(403);
+        die('
+        <div style="font-family:sans-serif;text-align:center;padding:80px 20px;">
+            <h2 style="color:#dc3545;">Không có quyền truy cập</h2>
+            <p style="color:#6c757d;">Vai trò hiện tại không có quyền vào trang này. Vui lòng chuyển vai trò nếu cần.</p>
+            <a href="/university/switch_role.php" style="color:#0d6efd;">Chuyển vai trò</a>
+        </div>');
+    }
+
     if (in_array($_SESSION['role'], ['staff', 'teacher'])) {
         // Mở rộng roleCodes với pattern khoa cụ thể
         $expandedCodes = [];
@@ -404,29 +456,80 @@ function self_csrf_check(): void {
  * Ghi log truy cập — gọi sau khi set session thành công
  * Mỗi session_id chỉ ghi 1 lần (UNIQUE KEY)
  */
+function visitLogColumnExists(mysqli $conn, string $column): bool {
+    static $cache = [];
+    if (isset($cache[$column])) return $cache[$column];
+    $safe = $conn->real_escape_string($column);
+    $res = $conn->query("SHOW COLUMNS FROM `visit_logs` LIKE '{$safe}'");
+    return $cache[$column] = ($res && $res->num_rows > 0);
+}
+
+function detectVisitModule(string $path): string {
+    $clean = parse_url($path, PHP_URL_PATH) ?: '';
+    $parts = array_values(array_filter(explode('/', trim($clean, '/'))));
+    $idx = array_search('university', $parts, true);
+    $module = $idx !== false ? ($parts[$idx + 1] ?? 'public') : ($parts[0] ?? 'public');
+    if ($module === '' || str_ends_with($module, '.php')) return 'public';
+    return preg_replace('/[^a-zA-Z0-9_\-]/', '', $module) ?: 'public';
+}
+
+function detectVisitDevice(string $ua): string {
+    $ua = strtolower($ua);
+    if (str_contains($ua, 'mobile') || str_contains($ua, 'android') || str_contains($ua, 'iphone')) return 'mobile';
+    if (str_contains($ua, 'ipad') || str_contains($ua, 'tablet')) return 'tablet';
+    return 'desktop';
+}
+
 function logVisit($conn): void {
     if (!isLoggedIn()) return;
     $sid  = session_id();
     $uid  = (int)$_SESSION['user_id'];
     $role = $_SESSION['role'] ?? '';
+    $activeRole = $_SESSION['_active_role'] ?? '';
     $ip   = $_SERVER['REMOTE_ADDR'] ?? '';
     $ua   = mb_substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 500);
-    // Dùng prepared statement thay vì real_escape_string
-    $stmt = $conn->prepare("INSERT INTO visit_logs (user_id, role, session_id, ip, user_agent)
-        VALUES (?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE last_seen=NOW(), user_id=?, role=?");
+    $path = mb_substr($_SERVER['REQUEST_URI'] ?? '', 0, 255);
+    $module = detectVisitModule($path);
+    $device = detectVisitDevice($ua);
+
+    if (!visitLogColumnExists($conn, 'current_path')) {
+        $stmt = $conn->prepare("INSERT INTO visit_logs (user_id, role, session_id, ip, user_agent)
+            VALUES (?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE last_seen=NOW(), user_id=?, role=?");
+        if ($stmt) {
+            $stmt->bind_param('issssss', $uid, $role, $sid, $ip, $ua, $uid, $role);
+            $stmt->execute();
+            $stmt->close();
+        }
+        return;
+    }
+
+    $stmt = $conn->prepare("INSERT INTO visit_logs
+        (user_id, role, active_role, session_id, ip, user_agent, current_path, current_module, device, is_active, logout_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL)
+        ON DUPLICATE KEY UPDATE
+            last_seen=NOW(), user_id=VALUES(user_id), role=VALUES(role), active_role=VALUES(active_role),
+            ip=VALUES(ip), user_agent=VALUES(user_agent), current_path=VALUES(current_path),
+            current_module=VALUES(current_module), device=VALUES(device), is_active=1, logout_at=NULL");
     if ($stmt) {
-        $stmt->bind_param('issssss', $uid, $role, $sid, $ip, $ua, $uid, $role);
+        $stmt->bind_param('issssssss', $uid, $role, $activeRole, $sid, $ip, $ua, $path, $module, $device);
         $stmt->execute();
         $stmt->close();
     }
 }
 
-/**
- * Lấy thống kê truy cập theo phân quyền của user hiện tại.
- * Chỉ đếm session có last_seen trong vòng ONLINE_MINUTES phút gần nhất
- * (= trình duyệt/thiết bị đang thực sự sử dụng hệ thống).
- */
+function closeCurrentVisitSession(mysqli $conn): void {
+    if (session_status() === PHP_SESSION_NONE || session_id() === '') return;
+    if (!visitLogColumnExists($conn, 'is_active')) return;
+    $sid = session_id();
+    $stmt = $conn->prepare("UPDATE visit_logs SET is_active=0, logout_at=NOW(), last_seen=NOW() WHERE session_id=?");
+    if ($stmt) {
+        $stmt->bind_param('s', $sid);
+        $stmt->execute();
+        $stmt->close();
+    }
+}
+
 function getVisitStats($conn): array {
     if (!isLoggedIn()) return [];
 
@@ -438,11 +541,11 @@ function getVisitStats($conn): array {
     // Helper: đếm session online với role cụ thể (dùng prepared statement)
     $countByRole = function(string $filterRole = '') use ($conn, $ONLINE_MINUTES): int {
         if ($filterRole !== '') {
-            $stmt = $conn->prepare("SELECT COUNT(*) c FROM visit_logs WHERE last_seen >= NOW() - INTERVAL ? MINUTE AND role = ?");
+            $stmt = $conn->prepare("SELECT COUNT(*) c FROM visit_logs WHERE is_active=1 AND last_seen >= NOW() - INTERVAL ? MINUTE AND role = ?");
             if (!$stmt) return 0;
             $stmt->bind_param('is', $ONLINE_MINUTES, $filterRole);
         } else {
-            $stmt = $conn->prepare("SELECT COUNT(*) c FROM visit_logs WHERE last_seen >= NOW() - INTERVAL ? MINUTE");
+            $stmt = $conn->prepare("SELECT COUNT(*) c FROM visit_logs WHERE is_active=1 AND last_seen >= NOW() - INTERVAL ? MINUTE");
             if (!$stmt) return 0;
             $stmt->bind_param('i', $ONLINE_MINUTES);
         }
@@ -456,7 +559,7 @@ function getVisitStats($conn): array {
         if (empty($roles)) return 0;
         $placeholders = implode(',', array_fill(0, count($roles), '?'));
         $types = 'i' . str_repeat('s', count($roles));
-        $stmt = $conn->prepare("SELECT COUNT(*) c FROM visit_logs WHERE last_seen >= NOW() - INTERVAL ? MINUTE AND role IN ($placeholders)");
+        $stmt = $conn->prepare("SELECT COUNT(*) c FROM visit_logs WHERE is_active=1 AND last_seen >= NOW() - INTERVAL ? MINUTE AND role IN ($placeholders)");
         if (!$stmt) return 0;
         $params = array_merge([$ONLINE_MINUTES], $roles);
         $stmt->bind_param($types, ...$params);
@@ -497,6 +600,10 @@ function getVisitStats($conn): array {
         'students' => $countByRole('student'),
         'teachers' => $countByRole('teacher'),
     ];
+}
+
+if (isset($conn) && $conn instanceof mysqli && isLoggedIn()) {
+    logVisit($conn);
 }
 // ============================================================
 // PRG HELPERS — Post/Redirect/Get pattern
@@ -679,12 +786,39 @@ function cacheUserRoles(): void {
  * Lấy đợt tuyển sinh đang active (ưu tiên năm hiện tại)
  * Trả về array hoặc null nếu không có
  */
-function getActiveRound(): ?array {
+function admissionRoundDataMode(string $dataMode = 'system'): string {
+    return $dataMode === 'test' ? 'test' : 'system';
+}
+
+function admissionRoundColumnExists(string $column): bool {
     global $conn;
+    static $cache = [];
+    if (isset($cache[$column])) return $cache[$column];
+    $safeColumn = $conn->real_escape_string($column);
+    $res = $conn->query("SHOW COLUMNS FROM `admission_rounds` LIKE '{$safeColumn}'");
+    return $cache[$column] = ($res && $res->num_rows > 0);
+}
+
+function getActiveRound(string $dataMode = 'system'): ?array {
+    global $conn;
+    $dataMode = admissionRoundDataMode($dataMode);
+    if (admissionRoundColumnExists('data_mode')) {
+        $stmt = $conn->prepare("
+            SELECT * FROM admission_rounds
+            WHERE status NOT IN ('draft','completed') AND data_mode=?
+            ORDER BY year DESC, id DESC LIMIT 1
+        ");
+        $stmt->bind_param('s', $dataMode);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $row = ($result && $result->num_rows > 0) ? $result->fetch_assoc() : null;
+        $stmt->close();
+        return $row;
+    }
     $result = $conn->query("
         SELECT * FROM admission_rounds
         WHERE status NOT IN ('draft','completed')
-        ORDER BY year DESC LIMIT 1
+        ORDER BY year DESC, id DESC LIMIT 1
     ");
     if (!$result || $result->num_rows === 0) return null;
     return $result->fetch_assoc();
@@ -694,8 +828,8 @@ function getActiveRound(): ?array {
  * Lấy trạng thái thời gian hiện tại của đợt tuyển sinh
  * Ưu tiên status được set thủ công, fallback về check thời gian
  */
-function getRoundPhase(): string {
-    $round = getActiveRound();
+function getRoundPhase(string $dataMode = 'system'): string {
+    $round = getActiveRound($dataMode);
     if (!$round) return 'no_round';
 
     // Ưu tiên status được set thủ công bởi admin
@@ -748,33 +882,33 @@ function getRoundPhase(): string {
  * (reviewing hoặc supp_reviewing)
  * Trong giai đoạn này: khóa tác vụ thủ công của nhân viên
  */
-function isReviewingPhase(): bool {
-    $phase = getRoundPhase();
+function isReviewingPhase(string $dataMode = 'system'): bool {
+    $phase = getRoundPhase($dataMode);
     return in_array($phase, ['reviewing', 'supp_reviewing']);
 }
 
 /**
  * Kiểm tra form đăng ký công khai có được mở không
  */
-function isRegistrationOpen(): bool {
-    $phase = getRoundPhase();
+function isRegistrationOpen(string $dataMode = 'system'): bool {
+    $phase = getRoundPhase($dataMode);
     return in_array($phase, ['reg_open', 'supp_reg_open']);
 }
 
 /**
  * Kiểm tra có phải đợt bổ sung không
  */
-function isSupplementaryPhase(): bool {
-    $phase = getRoundPhase();
+function isSupplementaryPhase(string $dataMode = 'system'): bool {
+    $phase = getRoundPhase($dataMode);
     return in_array($phase, ['supp_reg_open', 'supp_reviewing', 'supp_enrolling']);
 }
 
 /**
  * Lấy thông báo trạng thái hiện tại để hiển thị cho nhân viên
  */
-function getRoundStatusMessage(): array {
-    $round = getActiveRound();
-    $phase = getRoundPhase();
+function getRoundStatusMessage(string $dataMode = 'system'): array {
+    $round = getActiveRound($dataMode);
+    $phase = getRoundPhase($dataMode);
 
     $messages = [
         'no_round'       => ['warning', 'Chưa có đợt tuyển sinh nào được cấu hình.'],

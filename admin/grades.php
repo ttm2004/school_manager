@@ -6,6 +6,18 @@ $pageTitle = 'Quản lý Điểm số';
 
 $success = $error = '';
 
+function adminGradeDemoContext(mysqli $conn, int $studentSubjectId): array {
+    $stmt = $conn->prepare("SELECT data_mode, demo_batch_id FROM student_subjects WHERE id = ? LIMIT 1");
+    $stmt->bind_param('i', $studentSubjectId);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc() ?: [];
+    $stmt->close();
+    return [
+        'data_mode' => (($row['data_mode'] ?? 'system') === 'test') ? 'test' : 'system',
+        'demo_batch_id' => (string)($row['demo_batch_id'] ?? ''),
+    ];
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
 
@@ -37,13 +49,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $chk->execute();
         $exists = $chk->get_result()->fetch_assoc();
         $chk->close();
+        $demoContext = adminGradeDemoContext($conn, $ss_id);
 
         if ($exists) {
-            $stmt = $conn->prepare("UPDATE grades SET process_score=?, midterm_score=?, final_score=?, total_score=?, letter_grade=?, note=? WHERE student_subject_id=?");
-            $stmt->bind_param('ddddssi', $process, $midterm, $final, $total, $letter, $note, $ss_id);
+            $stmt = $conn->prepare("UPDATE grades SET process_score=?, midterm_score=?, final_score=?, total_score=?, letter_grade=?, note=?, data_mode=?, demo_batch_id=? WHERE student_subject_id=?");
+            $stmt->bind_param('ddddssssi', $process, $midterm, $final, $total, $letter, $note, $demoContext['data_mode'], $demoContext['demo_batch_id'], $ss_id);
         } else {
-            $stmt = $conn->prepare("INSERT INTO grades (student_subject_id, process_score, midterm_score, final_score, total_score, letter_grade, note) VALUES (?,?,?,?,?,?,?)");
-            $stmt->bind_param('iddddss', $ss_id, $process, $midterm, $final, $total, $letter, $note);
+            $stmt = $conn->prepare("INSERT INTO grades (student_subject_id, process_score, midterm_score, final_score, total_score, letter_grade, note, data_mode, demo_batch_id) VALUES (?,?,?,?,?,?,?,?,?)");
+            $stmt->bind_param('iddddssss', $ss_id, $process, $midterm, $final, $total, $letter, $note, $demoContext['data_mode'], $demoContext['demo_batch_id']);
         }
         $stmt->execute() ? $success = 'Lưu điểm thành công!' : $error = 'Lỗi: ' . $conn->error;
         $stmt->close();
@@ -195,3 +208,4 @@ include 'includes/sidebar.php';
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script src="/university/assets/js/main.js"></script>
 </body></html>
+

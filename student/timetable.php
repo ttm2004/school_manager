@@ -1,6 +1,7 @@
 ﻿<?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
+require_once '../academic/includes/academic_helpers.php';
 requireRole('student');
 
 $stmt = $conn->prepare("SELECT s.*, u.full_name FROM students s JOIN users u ON s.user_id=u.id WHERE s.user_id=?");
@@ -15,18 +16,19 @@ if ($colCheck->num_rows == 0) {
 }
 
 $stmt = $conn->prepare("
-    SELECT ss.id as ss_id, cs.section_code, cs.schedule_text, cs.schedule_data,
+    SELECT ss.id as ss_id, cs.id as section_id, cs.section_code, cs.schedule_text, cs.schedule_data,
            cs.room, cs.day_sessions, cs.start_date, cs.end_date,
            s.subject_name, s.credits,
+           COALESCE(NULLIF(s.total_periods,0), s.theory_periods + s.practice_periods, s.credits * 15, 45) AS total_periods,
            u.full_name as teacher_name,
-           sm.semester_name, sm.school_year, sm.id as semester_id, sm.start_date as sem_start
+           sm.semester_name, sm.school_year, sm.id as semester_id, sm.start_date as sem_start, sm.end_date as sem_end
     FROM student_subjects ss
     JOIN course_sections cs ON ss.course_section_id = cs.id
     JOIN subjects s ON cs.subject_id = s.id
     JOIN semesters sm ON cs.semester_id = sm.id
     JOIN teachers t ON cs.teacher_id = t.id
     JOIN users u ON t.user_id = u.id
-    WHERE ss.student_id = ? AND ss.status = 'registered'
+    WHERE ss.student_id = ? AND ss.status IN ('registered','auto_enrolled')
     ORDER BY sm.school_year DESC, sm.semester_name
 ");
 $stmt->bind_param('i', $student['id']);
@@ -39,10 +41,18 @@ foreach ($allSubjects as $sub) {
     $key = $sub['semester_id'];
     $bySemester[$key]['info']      = $sub['semester_name'] . ' - Năm học ' . $sub['school_year'];
     $bySemester[$key]['sem_start'] = $sub['sem_start'];
+    $bySemester[$key]['sem_end']   = $sub['sem_end'];
     $bySemester[$key]['subjects'][] = $sub;
 }
 
 $selectedSem = intval($_GET['semester_id'] ?? (array_key_first($bySemester) ?? 0));
+$scheduleChanges = [];
+if (isset($bySemester[$selectedSem])) {
+    $scheduleChanges = academicScheduleChangesBySection(
+        $conn,
+        array_column($bySemester[$selectedSem]['subjects'], 'section_id')
+    );
+}
 
 function parseDaySessions(string $ds): array {
     $r = [];
@@ -65,43 +75,76 @@ function parseScheduleData(string $json): array {
 $SESSION_PERIODS = ['sang'=>[1,5],'chieu'=>[6,10],'toi'=>[11,15]];
 $DAYS = [2=>'Thứ 2',3=>'Thứ 3',4=>'Thứ 4',5=>'Thứ 5',6=>'Thứ 6',7=>'Thứ 7',8=>'Chủ Nhật'];
 
-// Tính tuần
-$semStartTs = null;
 if (isset($bySemester[$selectedSem])) {
-    foreach ($bySemester[$selectedSem]['subjects'] as $sub) {
-        if (!empty($sub['start_date'])) {
-            $ts = strtotime($sub['start_date']);
-            if ($semStartTs===null || $ts<$semStartTs) $semStartTs=$ts;
+    foreach ($bySemester[$selectedSem]['subjects'] as &$sub) {
+        $limitEnd = $bySemester[$selectedSem]['sem_end'] ?? null;
+        $dates = academicScheduleSectionDates(
+            $sub['start_date'] ?: ($sub['sem_start'] ?? null),
+            $sub['day_sessions'] ?? '',
+            (int)($sub['total_periods'] ?? 45),
+            5,
+            $limitEnd
+        );
+        if ($dates) {
+            $dateSessions = [];
+            foreach ($dates as $date) {
+                $dow = (int)date('N', strtotime($date));
+                $dayKey = $dow === 7 ? 8 : $dow + 1;
+                $dsMapForDate = !empty($sub['day_sessions']) ? parseDaySessions($sub['day_sessions']) : [];
+                if (isset($dsMapForDate[$dayKey])) {
+                    $dateSessions[$date][] = ['day' => $dayKey, 'session' => $dsMapForDate[$dayKey], 'room' => $sub['room']];
+                }
+            }
+            foreach ($scheduleChanges[(int)$sub['section_id']] ?? [] as $change) {
+                unset($dateSessions[$change['original_date']]);
+                $newDay = (int)date('N', strtotime($change['new_date']));
+                $newDay = $newDay === 7 ? 8 : $newDay + 1;
+                $newSession = academicScheduleNormalizeSession((string)$change['new_day_session']);
+                $dateSessions[$change['new_date']][] = [
+                    'day' => $newDay,
+                    'session' => $newSession,
+                    'room' => $change['room'] ?: $sub['room'],
+                    'changed' => true,
+                ];
+            }
+            ksort($dateSessions);
+            $sub['_class_dates'] = $dates;
+            $sub['_date_sessions'] = $dateSessions;
+            $sub['_effective_start'] = $dates[0];
+            $effectiveDates = array_keys($dateSessions);
+            $sub['_effective_end'] = $effectiveDates ? end($effectiveDates) : end($dates);
+        } else {
+            $sub['_class_dates'] = [];
+            $sub['_date_sessions'] = [];
+            $sub['_effective_start'] = $sub['start_date'] ?: ($sub['sem_start'] ?? null);
+            $sub['_effective_end'] = $sub['end_date'] ?: ($sub['sem_end'] ?? null);
         }
     }
+    unset($sub);
 }
-if (!$semStartTs) {
-    $semStartTs = isset($bySemester[$selectedSem]['sem_start']) && $bySemester[$selectedSem]['sem_start']
-        ? strtotime($bySemester[$selectedSem]['sem_start'])
-        : strtotime('monday this week');
-}
+
+// Tính tuần theo thời gian bắt đầu/kết thúc học kỳ.
+$semStartTs = isset($bySemester[$selectedSem]['sem_start']) && $bySemester[$selectedSem]['sem_start']
+    ? strtotime($bySemester[$selectedSem]['sem_start'])
+    : strtotime('monday this week');
+$semEndTs = isset($bySemester[$selectedSem]['sem_end']) && $bySemester[$selectedSem]['sem_end']
+    ? strtotime($bySemester[$selectedSem]['sem_end'])
+    : null;
 $dow = (int)date('N', $semStartTs);
-if ($dow!=1) $semStartTs = strtotime('last monday', $semStartTs);
+if ($dow!=1) $semStartTs = strtotime('next monday', $semStartTs);
 
 $totalWeeks = 20;
-if (isset($bySemester[$selectedSem])) {
-    $maxEnd = null;
-    foreach ($bySemester[$selectedSem]['subjects'] as $sub) {
-        if (!empty($sub['end_date'])) {
-            $ts = strtotime($sub['end_date']);
-            if ($maxEnd===null || $ts>$maxEnd) $maxEnd=$ts;
-        }
-    }
-    if ($maxEnd) $totalWeeks = max(1,(int)ceil(($maxEnd-$semStartTs)/(7*86400)));
+if ($semEndTs) {
+    $totalWeeks = max(1,(int)ceil(($semEndTs-$semStartTs + 86400)/(7*86400)));
 }
 
 $nowWeek     = max(0,(int)floor((time()-$semStartTs)/(7*86400)));
-$currentWeek = max(0,intval($_GET['week'] ?? $nowWeek));
+$currentWeek = max(0, min(max(0, $totalWeeks - 1), intval($_GET['week'] ?? $nowWeek)));
 $weekStartTs = $semStartTs + ($currentWeek*7*86400);
 $weekEndTs   = $weekStartTs + (6*86400);
 
 $weekOptions = [];
-for ($w=0; $w<=$totalWeeks; $w++) {
+for ($w=0; $w<$totalWeeks; $w++) {
     $ws = $semStartTs + ($w*7*86400);
     $we = $ws + (6*86400);
     $weekOptions[$w] = 'Tuần '.($w+1).' [từ ngày '.date('d/m/Y',$ws).' đến ngày '.date('d/m/Y',$we).']';
@@ -129,15 +172,36 @@ if (isset($bySemester[$selectedSem])) {
             $ci++;
         }
 
-        $subStart = !empty($sub['start_date']) ? strtotime($sub['start_date']) : null;
-        $subEnd   = !empty($sub['end_date'])   ? strtotime($sub['end_date'])   : null;
+        $subStart = !empty($sub['_effective_start']) ? strtotime($sub['_effective_start']) : null;
+        $subEnd   = !empty($sub['_effective_end'])   ? strtotime($sub['_effective_end'])   : null;
         $active = true;
         if ($subStart && $weekEndTs < $subStart) $active = false;
         if ($subEnd   && $weekStartTs > $subEnd) $active = false;
         $sub['_active'] = $active;
         if (!$active) continue;
 
+        foreach (($sub['_date_sessions'] ?? []) as $date => $entries) {
+            $ts = strtotime($date);
+            if ($ts < $weekStartTs || $ts > $weekEndTs) continue;
+            foreach ($entries as $entry) {
+                if (!empty($entry['changed'])) {
+                    $dsMap[(int)$entry['day']] = (string)$entry['session'];
+                }
+            }
+        }
+
         foreach ($dsMap as $day => $sess) {
+            if (!isset($SESSION_PERIODS[$sess])) continue;
+            $classDate = isset($dayDates[$day]) ? date('Y-m-d', $dayDates[$day]) : null;
+            if (!empty($sub['_date_sessions'])) {
+                $dateEntries = array_filter($sub['_date_sessions'][$classDate] ?? [], fn($entry) => (int)$entry['day'] === (int)$day);
+                if (!$dateEntries) continue;
+                $sess = (string)reset($dateEntries)['session'];
+                $sub['_display_room'] = reset($dateEntries)['room'] ?? $sub['room'];
+                $sub['_changed_session'] = !empty(reset($dateEntries)['changed']);
+            } elseif (!empty($sub['_class_dates']) && !in_array($classDate, $sub['_class_dates'], true)) {
+                continue;
+            }
             if (!isset($SESSION_PERIODS[$sess])) continue;
             [$pStart, $pEnd] = $SESSION_PERIODS[$sess];
             for ($p=$pStart; $p<=$pEnd; $p++) {
@@ -153,15 +217,9 @@ $classDays = [];
 if (isset($bySemester[$selectedSem])) {
     foreach ($bySemester[$selectedSem]['subjects'] as $sub) {
         if (empty($sub['_dsmap'])) continue;
-        $start = !empty($sub['start_date']) ? strtotime($sub['start_date']) : $semStartTs;
-        $end   = !empty($sub['end_date'])   ? strtotime($sub['end_date'])   : ($semStartTs + $totalWeeks*7*86400);
-        foreach ($sub['_dsmap'] as $day => $sess) {
-            $phpDow = $day <= 7 ? $day : 7;
-            $cur = $start;
-            while ($cur <= $end) {
-                if ((int)date('N',$cur) == $phpDow) $classDays[] = date('Y-m-d',$cur);
-                $cur += 86400;
-            }
+        if (!empty($sub['_class_dates'])) {
+            foreach (array_keys($sub['_date_sessions'] ?? []) ?: $sub['_class_dates'] as $classDate) $classDays[] = $classDate;
+            continue;
         }
     }
 }
@@ -312,7 +370,7 @@ $classDays = array_unique($classDays);
             <button class="btn btn-navy btn-sm" onclick="goToday()" title="Về tuần hiện tại">
                 <i class="bi bi-calendar-check"></i>
             </button>
-            <button class="btn btn-outline-secondary btn-sm flex-fill" onclick="nextWeek()">
+            <button class="btn btn-outline-secondary btn-sm flex-fill" onclick="nextWeek()" <?php echo $currentWeek >= $totalWeeks-1 ? 'disabled' : ''; ?>>
                 Tuần sau<i class="bi bi-chevron-right ms-1"></i>
             </button>
             <button class="btn btn-outline-secondary btn-sm" onclick="window.print()" title="In TKB">
@@ -380,12 +438,12 @@ for ($period=1; $period<=16; $period++):
         ?>
             <div class="sub-card" style="<?php echo $bgStyle; ?>"
                  data-bs-toggle="tooltip"
-                 title="<?php echo htmlspecialchars($sub['subject_name'].' | '.$sub['teacher_name'].' | '.$sub['room']); ?>">
+                 title="<?php echo htmlspecialchars($sub['subject_name'].' | '.$sub['teacher_name'].' | '.($sub['_display_room'] ?? $sub['room'])); ?>">
                 <div class="sn" style="color:<?php echo $color; ?>"><?php echo htmlspecialchars($sub['subject_name']); ?></div>
                 <div class="si">
                     <?php echo htmlspecialchars($sub['section_code']); ?><br>
                     Nhóm: <?php echo htmlspecialchars($sub['section_code']); ?><br>
-                    Phòng: <?php echo htmlspecialchars($sub['room']); ?><br>
+                    Phòng: <?php echo htmlspecialchars($sub['_display_room'] ?? $sub['room']); ?><?php echo !empty($sub['_changed_session']) ? ' (đổi lịch)' : ''; ?><br>
                     GV: <?php echo htmlspecialchars($sub['teacher_name']); ?>
                 </div>
             </div>
@@ -445,9 +503,9 @@ const SEMESTERS   = <?php
 const CLASS_DAYS  = <?php echo json_encode(array_values($classDays)); ?>;
 
 function prevWeek(){ if(CUR_WEEK>0) location.href='?semester_id='+SEM_ID+'&week='+(CUR_WEEK-1); }
-function nextWeek(){ location.href='?semester_id='+SEM_ID+'&week='+(CUR_WEEK+1); }
+function nextWeek(){ if(CUR_WEEK<TOTAL_WEEKS-1) location.href='?semester_id='+SEM_ID+'&week='+(CUR_WEEK+1); }
 function goToday(){
-    const nowWeek = Math.max(0, Math.floor((Date.now()/1000 - SEM_S_TS) / (7*86400)));
+    const nowWeek = Math.min(TOTAL_WEEKS-1, Math.max(0, Math.floor((Date.now()/1000 - SEM_S_TS) / (7*86400))));
     location.href='?semester_id='+SEM_ID+'&week='+nowWeek;
 }
 
@@ -532,3 +590,4 @@ document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el=>new bootstra
 <?php include_once __DIR__ . "/../includes/analytics_widget.php"; ?>
 </body>
 </html>
+

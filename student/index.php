@@ -28,7 +28,7 @@ if (!$student) {
 $semester = $conn->query("SELECT * FROM semesters WHERE status='open' ORDER BY id DESC LIMIT 1")->fetch_assoc();
 
 // Số môn đã đăng ký
-$regCount = $conn->prepare("SELECT COUNT(*) as c FROM student_subjects WHERE student_id=? AND status='registered'");
+$regCount = $conn->prepare("SELECT COUNT(*) as c FROM student_subjects WHERE student_id=? AND status IN ('registered','auto_enrolled')");
 $regCount->bind_param('i', $student['id']);
 $regCount->execute();
 $regCount = $regCount->get_result()->fetch_assoc()['c'];
@@ -199,3 +199,4 @@ $pageTitle = 'Dashboard Sinh viên';
 <?php include_once __DIR__ . "/../includes/analytics_widget.php"; ?>
 </body>
 </html>
+

@@ -6,15 +6,17 @@
 require_once '../config/database.php';
 require_once '../includes/auth.php';
 require_once '../includes/AcademicPolicy.php';
+require_once '../app/Services/AdmissionsEnrollmentService.php';
 requireAnyRole(['admissions_manager', 'admissions_staff']);
 
 header('Content-Type: application/json; charset=utf-8');
 
 $isManager = hasRole('admissions_manager');
 $canEnroll = hasPermission('admissions', 'manage_enrollment');
+$dataMode = (($_POST['data_mode'] ?? $_POST['mode'] ?? 'system') === 'test') ? 'test' : 'system';
 
-$roundPhase  = getRoundPhase();
-$activeRound = getActiveRound();
+$roundPhase  = getRoundPhase($dataMode);
+$activeRound = getActiveRound($dataMode);
 $enrollAllowed = in_array($roundPhase, ['enrolling', 'supp_enrolling']);
 $enrollLocked  = !$enrollAllowed;
 
@@ -31,8 +33,8 @@ if ($action === 'enroll') {
     $id = intval($_POST['id'] ?? 0);
     if (!$id) jsonErr('ID không hợp lệ.');
 
-    $stmt = $conn->prepare("UPDATE admission_applications SET status='enrolled' WHERE id=? AND status='approved'");
-    $stmt->bind_param('i', $id);
+    $stmt = $conn->prepare("UPDATE admission_applications SET status='enrolled' WHERE id=? AND status='approved' AND data_mode=?");
+    $stmt->bind_param('is', $id, $dataMode);
     $stmt->execute();
     if ($stmt->affected_rows > 0) {
         $stmt->close();
@@ -60,8 +62,8 @@ if ($action === 'cancel_enroll') {
     $id = intval($_POST['id'] ?? 0);
     if (!$id) jsonErr('ID không hợp lệ.');
 
-    $stmt = $conn->prepare("UPDATE admission_applications SET status='approved' WHERE id=? AND status='enrolled'");
-    $stmt->bind_param('i', $id);
+    $stmt = $conn->prepare("UPDATE admission_applications SET status='approved' WHERE id=? AND status='enrolled' AND data_mode=?");
+    $stmt->bind_param('is', $id, $dataMode);
     $stmt->execute();
     if ($stmt->affected_rows > 0) {
         $stmt->close();
@@ -79,12 +81,13 @@ if ($action === 'create_account') {
 
     $app_id   = intval($_POST['app_id'] ?? 0);
     $class_id = intval($_POST['class_id'] ?? 0);
+    $autoEnrollMode = ($_POST['auto_enroll_mode'] ?? 'system') === 'test' ? 'test' : 'system';
     if (!$app_id || !$class_id) jsonErr('Vui lòng chọn lớp học.');
 
     $stmt = $conn->prepare("SELECT aa.*, m.major_code FROM admission_applications aa
         LEFT JOIN majors m ON aa.major_id=m.id
-        WHERE aa.id=? AND aa.status='enrolled'");
-    $stmt->bind_param('i', $app_id);
+        WHERE aa.id=? AND aa.status='enrolled' AND aa.data_mode=?");
+    $stmt->bind_param('is', $app_id, $dataMode);
     $stmt->execute();
     $app = $stmt->get_result()->fetch_assoc();
     $stmt->close();
@@ -96,11 +99,7 @@ if ($action === 'create_account') {
     if ($chk->get_result()->num_rows > 0) { $chk->close(); jsonErr('Email này đã có tài khoản sinh viên.'); }
     $chk->close();
 
-    $classStmt = $conn->prepare("SELECT c.id, c.major_id, c.enrollment_year, c.cohort_id FROM classes c WHERE c.id = ? LIMIT 1");
-    $classStmt->bind_param('i', $class_id);
-    $classStmt->execute();
-    $classRow = $classStmt->get_result()->fetch_assoc();
-    $classStmt->close();
+    $classRow = AdmissionsEnrollmentService::getClassAcademicContext($conn, $class_id);
     if (!$classRow) jsonErr('Lớp hành chính không hợp lệ.');
     if ((int)$classRow['major_id'] !== (int)$app['major_id']) jsonErr('Lớp hành chính không thuộc ngành trúng tuyển.');
 
@@ -120,33 +119,14 @@ if ($action === 'create_account') {
 
     $conn->begin_transaction();
     try {
-        $cohortId = (int)($classRow['cohort_id'] ?? 0);
-        $programId = 0;
-        $expectedGradYear = $year + 4;
-        if ($cohortId > 0) {
-            $cohort = $conn->query("SELECT program_id, enrollment_year, duration_years FROM training_cohorts WHERE id=$cohortId LIMIT 1")->fetch_assoc();
-            if ($cohort) {
-                $programId = (int)$cohort['program_id'];
-                $year = (int)$cohort['enrollment_year'];
-                $expectedGradYear = $year + (int)ceil((float)$cohort['duration_years']);
-            }
-        }
-
         $us = $conn->prepare("INSERT INTO users (username,password,full_name,email,phone,role,status) VALUES (?,?,?,?,?,'student',1)");
         $us->bind_param('sssss', $username, $hashed, $app['full_name'], $app['email'], $app['phone']);
         if (!$us->execute()) throw new Exception($conn->error);
         $userId = $conn->insert_id;
         $us->close();
 
-        $ss = $conn->prepare(
-            "INSERT INTO students
-             (user_id, student_code, class_id, enrollment_year, cohort_id, training_program_id,
-              expected_grad_year, academic_status, address, birthday, gender)
-             VALUES (?,?,?,?,?,?,?,'Đang học',?,?,?)"
-        );
-        $ss->bind_param('isiiiiisss', $userId, $studentCode, $class_id, $year, $cohortId, $programId, $expectedGradYear, $app['address'], $app['birthday'], $app['gender']);
-        if (!$ss->execute()) throw new Exception($conn->error);
-        $ss->close();
+        $studentId = AdmissionsEnrollmentService::createStudentProfile($conn, $userId, $studentCode, $class_id, $app, $classRow, $autoEnrollMode);
+        AdmissionsEnrollmentService::notifyFinanceNewEnrollment($conn, $studentId, $studentCode, $app['full_name']);
 
         $conn->commit();
         jsonOk([

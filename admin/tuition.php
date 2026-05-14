@@ -1,6 +1,7 @@
 ﻿<?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
+require_once '../includes/AcademicPolicy.php';
 requireRole('admin');
 $pageTitle = 'Quản lý Học phí';
 // TUITION_V3
@@ -64,7 +65,6 @@ $chkIdx = $conn->query("SHOW INDEX FROM `tuition_invoices` WHERE Key_name='uq_ps
 if ($chkIdx && $chkIdx->num_rows === 0) {
     $conn->query("ALTER TABLE `tuition_invoices` ADD UNIQUE KEY `uq_ps` (`period_id`,`student_id`)");
 }
-
 $conn->query("CREATE TABLE IF NOT EXISTS `tuition_payments` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
     `invoice_id` INT NOT NULL,
@@ -146,13 +146,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($chk && $chk->num_rows > 0) {
                 $_SESSION['_flash'] = ['type'=>'danger','message'=>'Học kỳ này đã có đợt thu học phí.'];
             } else {
-                $ins = $conn->prepare("INSERT INTO tuition_periods (semester_id,title,open_date,due_date,note,created_by) VALUES (?,?,?,?,?,?)");
-                $ins->bind_param('issssi', $semId, $title, $openDate, $dueDate, $note, $aid);
+                $demoContext = function_exists('academicPolicySemesterDemoContext') ? academicPolicySemesterDemoContext($conn, $semId) : ['data_mode'=>'system','demo_batch_id'=>''];
+                $ins = $conn->prepare("INSERT INTO tuition_periods (semester_id,title,open_date,due_date,status,data_mode,demo_batch_id,note,created_by) VALUES (?,?,?,?,'draft',?,?,?,?)");
+                $ins->bind_param('issssssi', $semId, $title, $openDate, $dueDate, $demoContext['data_mode'], $demoContext['demo_batch_id'], $note, $aid);
                 if ($ins->execute()) {
                     $pid = $conn->insert_id;
                     // Tự động tạo hóa đơn draft
                     $res = $conn->query("
-                        SELECT ss.student_id, SUM(sub.credits) AS tc, m.tuition_per_credit AS up
+                        SELECT ss.student_id, SUM(sub.credits) AS tc, m.tuition_per_credit AS up,
+                               st.data_mode, st.demo_batch_id
                         FROM student_subjects ss
                         JOIN course_sections cs ON ss.course_section_id=cs.id
                         JOIN subjects sub ON cs.subject_id=sub.id
@@ -160,15 +162,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         JOIN classes cl ON st.class_id=cl.id
                         JOIN majors m ON cl.major_id=m.id
                         WHERE cs.semester_id=$semId AND ss.status!='cancelled'
-                        GROUP BY ss.student_id, m.tuition_per_credit");
+                        GROUP BY ss.student_id, m.tuition_per_credit, st.data_mode, st.demo_batch_id");
                     $created = 0;
                     if ($res) while ($row = $res->fetch_assoc()) {
                         $sid = (int)$row['student_id'];
                         $tc  = (int)$row['tc'];
                         $up  = (float)$row['up'];
                         $gross = $tc * $up;
-                        $ins2 = $conn->prepare("INSERT IGNORE INTO tuition_invoices (period_id,student_id,semester_id,total_credits,unit_price,gross_amount,discount,net_amount,paid_amount,status,created_by) VALUES (?,?,?,?,?,?,0,?,0,'draft',?)");
-                        $ins2->bind_param('iiiidddi', $pid, $sid, $semId, $tc, $up, $gross, $gross, $aid);
+                        $dataMode = (($row['data_mode'] ?? 'system') === 'test') ? 'test' : 'system';
+                        $demoBatchId = (string)($row['demo_batch_id'] ?? '');
+                        $ins2 = $conn->prepare("INSERT IGNORE INTO tuition_invoices (period_id,student_id,semester_id,total_credits,unit_price,gross_amount,discount,net_amount,paid_amount,status,data_mode,demo_batch_id,created_by) VALUES (?,?,?,?,?,?,0,?,0,'draft',?,?,?)");
+                        $ins2->bind_param('iiiidddssi', $pid, $sid, $semId, $tc, $up, $gross, $gross, $dataMode, $demoBatchId, $aid);
                         if ($ins2->execute()) $created++;
                         $ins2->close();
                     }
@@ -206,7 +210,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($period) {
                 $semId = (int)$period['semester_id'];
                 $res = $conn->query("
-                    SELECT ss.student_id, SUM(sub.credits) AS tc, m.tuition_per_credit AS up
+                    SELECT ss.student_id, SUM(sub.credits) AS tc, m.tuition_per_credit AS up,
+                           st.data_mode, st.demo_batch_id
                     FROM student_subjects ss
                     JOIN course_sections cs ON ss.course_section_id=cs.id
                     JOIN subjects sub ON cs.subject_id=sub.id
@@ -214,20 +219,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     JOIN classes cl ON st.class_id=cl.id
                     JOIN majors m ON cl.major_id=m.id
                     WHERE cs.semester_id=$semId AND ss.status!='cancelled'
-                    GROUP BY ss.student_id, m.tuition_per_credit");
+                    GROUP BY ss.student_id, m.tuition_per_credit, st.data_mode, st.demo_batch_id");
                 $updated = $created = 0;
                 if ($res) while ($row = $res->fetch_assoc()) {
                     $sid = (int)$row['student_id'];
                     $tc  = (int)$row['tc'];
                     $up  = (float)$row['up'];
                     $gross = $tc * $up;
+                    $dataMode = (($row['data_mode'] ?? 'system') === 'test') ? 'test' : 'system';
+                    $demoBatchId = (string)($row['demo_batch_id'] ?? '');
                     $chk = $conn->query("SELECT id FROM tuition_invoices WHERE period_id=$pid AND student_id=$sid");
                     if ($chk && $chk->num_rows > 0) {
-                        $conn->query("UPDATE tuition_invoices SET total_credits=$tc,unit_price=$up,gross_amount=$gross,net_amount=$gross,updated_at=NOW() WHERE period_id=$pid AND student_id=$sid AND status='draft'");
+                        $stmtInv = $conn->prepare("UPDATE tuition_invoices SET total_credits=?,unit_price=?,gross_amount=?,net_amount=?,data_mode=?,demo_batch_id=?,updated_at=NOW() WHERE period_id=? AND student_id=? AND status='draft'");
+                        $stmtInv->bind_param('idddssii', $tc, $up, $gross, $gross, $dataMode, $demoBatchId, $pid, $sid);
+                        $stmtInv->execute();
+                        $stmtInv->close();
                         $updated++;
                     } else {
-                        $ins2 = $conn->prepare("INSERT INTO tuition_invoices (period_id,student_id,semester_id,total_credits,unit_price,gross_amount,discount,net_amount,paid_amount,status,created_by) VALUES (?,?,?,?,?,?,0,?,0,'draft',?)");
-                        $ins2->bind_param('iiiidddi', $pid, $sid, $semId, $tc, $up, $gross, $gross, $aid);
+                        $ins2 = $conn->prepare("INSERT INTO tuition_invoices (period_id,student_id,semester_id,total_credits,unit_price,gross_amount,discount,net_amount,paid_amount,status,data_mode,demo_batch_id,created_by) VALUES (?,?,?,?,?,?,0,?,0,'draft',?,?,?)");
+                        $ins2->bind_param('iiiidddssi', $pid, $sid, $semId, $tc, $up, $gross, $gross, $dataMode, $demoBatchId, $aid);
                         if ($ins2->execute()) $created++;
                         $ins2->close();
                     }
@@ -273,8 +283,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($iid && $amount > 0) {
             $inv = $conn->query("SELECT * FROM tuition_invoices WHERE id=$iid")->fetch_assoc();
             if ($inv) {
-                $pay = $conn->prepare("INSERT INTO tuition_payments (invoice_id,amount,method,reference,note,paid_by) VALUES (?,?,?,?,?,?)");
-                $pay->bind_param('idsssi', $iid, $amount, $method, $ref, $note, $aid);
+                $dataMode = (($inv['data_mode'] ?? 'system') === 'test') ? 'test' : 'system';
+                $demoBatchId = (string)($inv['demo_batch_id'] ?? '');
+                $pay = $conn->prepare("INSERT INTO tuition_payments (invoice_id,amount,method,reference,note,data_mode,demo_batch_id,paid_by) VALUES (?,?,?,?,?,?,?,?)");
+                $pay->bind_param('idsssssi', $iid, $amount, $method, $ref, $note, $dataMode, $demoBatchId, $aid);
                 $pay->execute(); $pay->close();
                 $newPaid = $inv['paid_amount'] + $amount;
                 $net = $inv['net_amount'];

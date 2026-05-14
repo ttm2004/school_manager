@@ -2,6 +2,7 @@
 require_once '../config/database.php';
 require_once '../includes/auth.php';
 require_once '../includes/AcademicPolicy.php';
+require_once '../app/Services/StudentRegistrationService.php';
 requireRole('student');
 
 // Lấy thông tin sinh viên
@@ -10,6 +11,7 @@ $stmt->bind_param('i', $_SESSION['user_id']);
 $stmt->execute();
 $student = $stmt->get_result()->fetch_assoc();
 $stmt->close();
+$studentDataMode = ($student['data_mode'] ?? 'system') === 'test' ? 'test' : 'system';
 
 // Tự động thêm cột schedule_data nếu chưa có
 $colCheck = $conn->query("SHOW COLUMNS FROM course_sections LIKE 'schedule_data'");
@@ -18,7 +20,21 @@ if ($colCheck->num_rows == 0) {
 }
 $success = $error = '';
 
-// Xử lý đăng ký
+function studentRegistrationWindowOpenForSemester(mysqli $conn, int $semesterId): bool
+{
+    $stmt = $conn->prepare(
+        "SELECT id FROM semesters
+         WHERE id = ? AND status='open' AND register_start <= NOW() AND register_end >= NOW()
+         LIMIT 1"
+    );
+    $stmt->bind_param('i', $semesterId);
+    $stmt->execute();
+    $open = $stmt->get_result()->num_rows > 0;
+    $stmt->close();
+    return $open;
+}
+
+// Xử lý đăng ký / hủy
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verifyCSRFToken($_POST['_csrf_token'] ?? '')) {
         $error = 'Yêu cầu không hợp lệ. Vui lòng tải lại trang và thử lại.';
@@ -26,8 +42,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     $section_id = intval($_POST['section_id'] ?? 0);
 
+    if (empty($error) && $action === 'cancel') {
+        $ssId = (int)($_POST['ss_id'] ?? 0);
+        if (!$ssId) {
+            $error = 'Không tìm thấy học phần cần hủy.';
+        } else {
+            $conn->begin_transaction();
+            try {
+                $getStmt = $conn->prepare(
+                    "SELECT ss.course_section_id, cs.semester_id
+                     FROM student_subjects ss
+                     JOIN course_sections cs ON ss.course_section_id = cs.id
+                     WHERE ss.id = ? AND ss.student_id = ? AND ss.status = 'registered'
+                     LIMIT 1"
+                );
+                $getStmt->bind_param('ii', $ssId, $student['id']);
+                $getStmt->execute();
+                $ssRow = $getStmt->get_result()->fetch_assoc();
+                $getStmt->close();
+
+                if (!$ssRow) {
+                    throw new RuntimeException('Không tìm thấy học phần đang đăng ký để hủy.');
+                }
+                if (!studentRegistrationWindowOpenForSemester($conn, (int)$ssRow['semester_id'])) {
+                    throw new RuntimeException('Đã hết thời gian hủy đăng ký học phần.');
+                }
+
+                $updReg = $conn->prepare("UPDATE student_subjects SET status='cancelled' WHERE id=? AND student_id=? AND status = 'registered'");
+                $updReg->bind_param('ii', $ssId, $student['id']);
+                $updReg->execute();
+                if ($updReg->affected_rows <= 0) {
+                    throw new RuntimeException('Không thể hủy học phần này.');
+                }
+                $updReg->close();
+
+                $sectionId = (int)$ssRow['course_section_id'];
+                $updSection = $conn->prepare(
+                    "UPDATE course_sections
+                     SET current_students = GREATEST(0, current_students - 1),
+                         status = CASE WHEN status = 'full' THEN 'open' ELSE status END
+                     WHERE id = ?"
+                );
+                $updSection->bind_param('i', $sectionId);
+                $updSection->execute();
+                $updSection->close();
+
+                $conn->commit();
+                $success = 'Hủy đăng ký thành công. Bạn có thể đăng ký lại trong thời gian đăng ký.';
+            } catch (Throwable $e) {
+                $conn->rollback();
+                $error = $e->getMessage();
+            }
+        }
+    }
+
     if (empty($error) && $action === 'register' && $section_id) {
-        $registrationPolicy = academicPolicyValidateStudentRegistration($conn, (int)$student['id'], $section_id);
+        $registrationPolicy = StudentRegistrationService::validateRegistration($conn, (int)$student['id'], $section_id);
         if (!$registrationPolicy['ok']) {
             $error = $registrationPolicy['message'];
         } else {
@@ -40,8 +110,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (hasTuitionDebt($student['id'])) {
                 $error = '⚠️ Bạn đang nợ học phí. Vui lòng đóng học phí trước khi đăng ký học phần. <a href="/university/student/tuition.php" class="alert-link">Xem chi tiết học phí</a>';
             } else {
-            // Kiểm tra đã đăng ký chưa (cùng lớp)
-            $chk = $conn->prepare("SELECT id FROM student_subjects WHERE student_id=? AND course_section_id=?");
+            // Kiểm tra trạng thái đăng ký cũ cùng lớp. Nếu đã hủy thì cho đăng ký lại.
+            $chk = $conn->prepare("SELECT id, status FROM student_subjects WHERE student_id=? AND course_section_id=? LIMIT 1");
             $chk->bind_param('ii', $student['id'], $section_id);
             $chk->execute();
             $exists = $chk->get_result()->fetch_assoc();
@@ -57,6 +127,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     JOIN course_sections cs1 ON cs1.id = ?
                     JOIN subjects s ON cs2.subject_id = s.id
                     WHERE ss.student_id = ?
+                      AND ss.status != 'cancelled'
                       AND cs2.subject_id = cs1.subject_id
                       AND cs2.semester_id = cs1.semester_id
                     LIMIT 1
@@ -67,7 +138,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $dupChk->close();
             }
 
-            if ($exists) {
+            if ($exists && $exists['status'] !== 'cancelled') {
                 $error = 'Bạn đã đăng ký học phần này rồi.';
             } elseif ($dupSubject) {
                 $error = 'Bạn đã đăng ký môn <strong>' . htmlspecialchars($dupSubject['subject_name']) . '</strong> ở lớp <strong>' . htmlspecialchars($dupSubject['section_code']) . '</strong> trong học kỳ này rồi.';
@@ -108,7 +179,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             FROM student_subjects ss
                             JOIN course_sections cs ON ss.course_section_id = cs.id
                             JOIN subjects s ON cs.subject_id = s.id
-                            WHERE ss.student_id = ? AND ss.status = 'registered' AND cs.semester_id = ?
+                            WHERE ss.student_id = ? AND ss.status IN ('registered','auto_enrolled') AND cs.semester_id = ?
                         ");
                         if ($regStmt) {
                             $regStmt->bind_param('ii', $student['id'], $semId);
@@ -166,10 +237,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 throw new RuntimeException('Lớp học phần đã đầy hoặc không còn mở đăng ký.');
                             }
 
-                            $ins = $conn->prepare("INSERT INTO student_subjects (student_id, course_section_id, status) VALUES (?,?,'registered')");
-                            $ins->bind_param('ii', $student['id'], $section_id);
-                            if (!$ins->execute()) {
-                                throw new RuntimeException('Lỗi đăng ký: ' . $conn->error);
+                            if ($exists && $exists['status'] === 'cancelled') {
+                                $ins = $conn->prepare("UPDATE student_subjects SET status='registered', register_date=NOW(), data_mode=?, demo_batch_id=? WHERE id=? AND student_id=? AND status='cancelled'");
+                                $demoBatchId = (string)($student['demo_batch_id'] ?? '');
+                                $ins->bind_param('ssii', $studentDataMode, $demoBatchId, $exists['id'], $student['id']);
+                                if (!$ins->execute() || $ins->affected_rows <= 0) {
+                                    throw new RuntimeException('Lỗi đăng ký lại: ' . $conn->error);
+                                }
+                            } else {
+                                $ins = $conn->prepare("INSERT INTO student_subjects (student_id, course_section_id, status, data_mode, demo_batch_id) VALUES (?,?,'registered',?,?)");
+                                $demoBatchId = (string)($student['demo_batch_id'] ?? '');
+                                $ins->bind_param('iiss', $student['id'], $section_id, $studentDataMode, $demoBatchId);
+                                if (!$ins->execute()) {
+                                    throw new RuntimeException('Lỗi đăng ký: ' . $conn->error);
+                                }
                             }
                             $ins->close();
 
@@ -229,24 +310,33 @@ function parseScheduleTextToSlots(string $text): array {
     return $slots;
 }
 
+$semesterModeSql = $studentDataMode === 'test'
+    ? "AND (sm.data_mode = 'test' OR LOWER(sm.semester_name) LIKE '%test%')"
+    : "AND COALESCE(sm.data_mode, 'system') = 'system' AND LOWER(sm.semester_name) NOT LIKE '%test%'";
+
 // Lấy học kỳ đang mở đăng ký (ưu tiên học kỳ có lớp học phần)
 $semester = $conn->query("
     SELECT sm.* FROM semesters sm
     WHERE sm.status = 'open'
       AND sm.register_start <= NOW()
       AND sm.register_end >= NOW()
+      $semesterModeSql
       AND EXISTS (SELECT 1 FROM course_sections cs WHERE cs.semester_id = sm.id AND cs.status != 'closed')
     ORDER BY sm.id DESC LIMIT 1
 ")->fetch_assoc();
 
 // Nếu không có học kỳ nào đang mở đăng ký có lớp HP, lấy học kỳ mở bất kỳ
 if (!$semester) {
-    $semester = $conn->query("SELECT * FROM semesters WHERE status='open' ORDER BY id DESC LIMIT 1")->fetch_assoc();
+    $semesterNameSql = $studentDataMode === 'test'
+        ? "AND (data_mode = 'test' OR LOWER(semester_name) LIKE '%test%')"
+        : "AND COALESCE(data_mode, 'system') = 'system' AND LOWER(semester_name) NOT LIKE '%test%'";
+    $semester = $conn->query("SELECT * FROM semesters WHERE status='open' $semesterNameSql ORDER BY id DESC LIMIT 1")->fetch_assoc();
 }
 
 $now = time();
 $regOpen = false;
 $regMsg  = '';
+$autoRegistrationLocked = false;
 
 if ($semester) {
     $rs = $semester['register_start'] ? strtotime($semester['register_start']) : 0;
@@ -260,34 +350,70 @@ if ($semester) {
     } else {
         $regMsg = 'Chưa thiết lập thời gian đăng ký. Vui lòng liên hệ phòng đào tạo.';
     }
+    $semesterOrder = !empty($student['enrollment_year'])
+        ? academicPolicyCurriculumSemesterOrder((int)$student['enrollment_year'], $semester)
+        : null;
+    $autoRegistrationLocked = $semesterOrder === 1;
 }
 
 // Danh sách lớp học phần có thể đăng ký
 $sections = [];
 if ($semester) {
     $stmt = $conn->prepare("
-        SELECT cs.*, s.subject_name, s.credits, s.subject_type,
+        SELECT cs.*, s.subject_code, s.subject_name, s.credits, s.subject_type,
+               (
+                   SELECT ss_state.status
+                   FROM student_subjects ss_state
+                   WHERE ss_state.student_id = ? AND ss_state.course_section_id = cs.id
+                   ORDER BY ss_state.id DESC
+                   LIMIT 1
+               ) AS my_status,
+               (
+                   SELECT ss_state.id
+                   FROM student_subjects ss_state
+                   WHERE ss_state.student_id = ? AND ss_state.course_section_id = cs.id
+                   ORDER BY ss_state.id DESC
+                   LIMIT 1
+               ) AS my_ss_id,
+               EXISTS (
+                   SELECT 1 FROM student_subjects ss_pass
+                   JOIN course_sections cs_pass ON cs_pass.id = ss_pass.course_section_id
+                   JOIN grades g_pass ON g_pass.student_subject_id = ss_pass.id
+                   WHERE ss_pass.student_id = ? AND cs_pass.subject_id = cs.subject_id AND g_pass.final_score >= 5
+                   LIMIT 1
+               ) AS has_passed,
+               EXISTS (
+                   SELECT 1 FROM student_subjects ss_fail
+                   JOIN course_sections cs_fail ON cs_fail.id = ss_fail.course_section_id
+                   JOIN grades g_fail ON g_fail.student_subject_id = ss_fail.id
+                   WHERE ss_fail.student_id = ? AND cs_fail.subject_id = cs.subject_id AND g_fail.final_score < 5
+                   LIMIT 1
+               ) AS has_failed,
                u.full_name as teacher_name, t.degree,
-               cs.start_date, cs.end_date
+               cs.start_date, cs.end_date,
+               tc.cohort_code, tc.enrollment_year, tc.duration_years,
+               tm.major_name AS target_major_name
         FROM course_sections cs
         JOIN subjects s ON cs.subject_id = s.id
         JOIN teachers t ON cs.teacher_id = t.id
         JOIN users u ON t.user_id = u.id
-        LEFT JOIN curriculum cur ON cur.subject_id = cs.subject_id
-             AND cur.major_id = (SELECT cl.major_id FROM classes cl WHERE cl.id = ? LIMIT 1)
-             AND cur.deleted_at IS NULL
+        LEFT JOIN training_cohorts tc ON cs.target_cohort_id = tc.id
+        LEFT JOIN majors tm ON tc.major_id = tm.id
         WHERE cs.semester_id = ?
+          AND COALESCE(cs.data_mode, 'system') = ?
           AND cs.status IN ('open','full')
           AND (cs.target_cohort_id IS NULL OR cs.target_cohort_id = ?)
-          AND cur.id IS NOT NULL
-          AND cs.id NOT IN (
-              SELECT course_section_id FROM student_subjects
-              WHERE student_id = ? AND status != 'cancelled'
+          AND EXISTS (
+              SELECT 1
+              FROM curriculum cur
+              WHERE cur.subject_id = cs.subject_id
+                AND cur.major_id = (SELECT cl.major_id FROM classes cl WHERE cl.id = ? LIMIT 1)
+                AND cur.deleted_at IS NULL
           )
-        ORDER BY s.subject_name
+        ORDER BY s.subject_name, cs.section_code, cs.id
     ");
     $studentCohortForList = (int)($student['cohort_id'] ?? 0);
-    $stmt->bind_param('iiii', $student['class_id'], $semester['id'], $studentCohortForList, $student['id']);
+    $stmt->bind_param('iiiiisii', $student['id'], $student['id'], $student['id'], $student['id'], $semester['id'], $studentDataMode, $studentCohortForList, $student['class_id']);
     $stmt->execute();
     $sections = $stmt->get_result();
     $stmt->close();
@@ -299,6 +425,7 @@ if ($semester && (!$sections || $sections->num_rows == 0)) {
         SELECT DISTINCT sm.* FROM semesters sm
         JOIN course_sections cs ON cs.semester_id = sm.id
         WHERE sm.status = 'open'
+          AND COALESCE(sm.data_mode, 'system') = '" . $conn->real_escape_string($studentDataMode) . "'
         ORDER BY sm.id DESC LIMIT 1
     ")->fetch_assoc();
     if ($altSem && $altSem['id'] != $semester['id']) {
@@ -307,31 +434,94 @@ if ($semester && (!$sections || $sections->num_rows == 0)) {
         $re = $semester['register_end']   ? strtotime($semester['register_end'])   : 0;
         $regOpen = $rs && $re && $now >= $rs && $now <= $re;
         $stmt = $conn->prepare("
-            SELECT cs.*, s.subject_name, s.credits, s.subject_type,
+            SELECT cs.*, s.subject_code, s.subject_name, s.credits, s.subject_type,
+                   (
+                       SELECT ss_state.status
+                       FROM student_subjects ss_state
+                       WHERE ss_state.student_id = ? AND ss_state.course_section_id = cs.id
+                       ORDER BY ss_state.id DESC
+                       LIMIT 1
+                   ) AS my_status,
+                   (
+                       SELECT ss_state.id
+                       FROM student_subjects ss_state
+                       WHERE ss_state.student_id = ? AND ss_state.course_section_id = cs.id
+                       ORDER BY ss_state.id DESC
+                       LIMIT 1
+                   ) AS my_ss_id,
+                   EXISTS (
+                       SELECT 1 FROM student_subjects ss_pass
+                       JOIN course_sections cs_pass ON cs_pass.id = ss_pass.course_section_id
+                       JOIN grades g_pass ON g_pass.student_subject_id = ss_pass.id
+                       WHERE ss_pass.student_id = ? AND cs_pass.subject_id = cs.subject_id AND g_pass.final_score >= 5
+                       LIMIT 1
+                   ) AS has_passed,
+                   EXISTS (
+                       SELECT 1 FROM student_subjects ss_fail
+                       JOIN course_sections cs_fail ON cs_fail.id = ss_fail.course_section_id
+                       JOIN grades g_fail ON g_fail.student_subject_id = ss_fail.id
+                       WHERE ss_fail.student_id = ? AND cs_fail.subject_id = cs.subject_id AND g_fail.final_score < 5
+                       LIMIT 1
+                   ) AS has_failed,
                    u.full_name as teacher_name, t.degree,
-                   cs.start_date, cs.end_date
+                   cs.start_date, cs.end_date,
+                   tc.cohort_code, tc.enrollment_year, tc.duration_years,
+                   tm.major_name AS target_major_name
             FROM course_sections cs
             JOIN subjects s ON cs.subject_id = s.id
             JOIN teachers t ON cs.teacher_id = t.id
             JOIN users u ON t.user_id = u.id
-            LEFT JOIN curriculum cur ON cur.subject_id = cs.subject_id
-                 AND cur.major_id = (SELECT cl.major_id FROM classes cl WHERE cl.id = ? LIMIT 1)
-                 AND cur.deleted_at IS NULL
+            LEFT JOIN training_cohorts tc ON cs.target_cohort_id = tc.id
+            LEFT JOIN majors tm ON tc.major_id = tm.id
             WHERE cs.semester_id = ?
+              AND COALESCE(cs.data_mode, 'system') = ?
               AND cs.status IN ('open','full')
               AND (cs.target_cohort_id IS NULL OR cs.target_cohort_id = ?)
-              AND cur.id IS NOT NULL
-              AND cs.id NOT IN (
-                  SELECT course_section_id FROM student_subjects
-                  WHERE student_id = ? AND status != 'cancelled'
+              AND EXISTS (
+                  SELECT 1
+                  FROM curriculum cur
+                  WHERE cur.subject_id = cs.subject_id
+                    AND cur.major_id = (SELECT cl.major_id FROM classes cl WHERE cl.id = ? LIMIT 1)
+                    AND cur.deleted_at IS NULL
               )
-            ORDER BY s.subject_name
+            ORDER BY s.subject_name, cs.section_code, cs.id
         ");
         $studentCohortForList = (int)($student['cohort_id'] ?? 0);
-        $stmt->bind_param('iiii', $student['class_id'], $semester['id'], $studentCohortForList, $student['id']);
+        $stmt->bind_param('iiiiisii', $student['id'], $student['id'], $student['id'], $student['id'], $semester['id'], $studentDataMode, $studentCohortForList, $student['class_id']);
         $stmt->execute();
         $sections = $stmt->get_result();
         $stmt->close();
+    }
+}
+
+$availableSections = $sections instanceof mysqli_result ? $sections->fetch_all(MYSQLI_ASSOC) : [];
+$registeredSubjects = [];
+$registeredCredits = 0;
+$registeredFee = 0;
+if ($semester) {
+    $stmtRegList = $conn->prepare("
+        SELECT ss.id AS ss_id, ss.status AS reg_status, ss.register_date,
+               cs.id AS section_id, cs.section_code, cs.day_sessions, cs.schedule_data, cs.schedule_text,
+               cs.room, cs.tuition_fee, cs.start_date, cs.end_date,
+               s.subject_code, s.subject_name, s.credits, s.subject_type,
+               u.full_name AS teacher_name, t.degree
+        FROM student_subjects ss
+        JOIN course_sections cs ON ss.course_section_id = cs.id
+        JOIN subjects s ON cs.subject_id = s.id
+        JOIN teachers t ON cs.teacher_id = t.id
+        JOIN users u ON t.user_id = u.id
+        WHERE ss.student_id = ?
+          AND ss.status IN ('registered','auto_enrolled')
+          AND cs.semester_id = ?
+        ORDER BY s.subject_name, cs.section_code
+    ");
+    $stmtRegList->bind_param('ii', $student['id'], $semester['id']);
+    $stmtRegList->execute();
+    $registeredSubjects = $stmtRegList->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmtRegList->close();
+    foreach ($registeredSubjects as $regSub) {
+        $registeredCredits += (int)$regSub['credits'];
+        $registeredFee += (float)$regSub['tuition_fee'];
     }
 }
 ?>
@@ -368,6 +558,9 @@ if ($semester && (!$sections || $sections->num_rows == 0)) {
                     <?php if ($regOpen): ?>
                     &bull; <span class="fw-bold text-success">Đang mở đăng ký</span>
                     &bull; Hạn đăng ký: <strong><?php echo date('d/m/Y H:i', strtotime($semester['register_end'])); ?></strong>
+                    <?php if ($autoRegistrationLocked): ?>
+                    &bull; <span class="fw-bold text-primary">HK1 năm nhất được đăng ký tự động</span>
+                    <?php endif; ?>
                     <?php else: ?>
                     &bull; <span class="fw-bold text-danger">Chưa mở đăng ký</span>
                     <?php if ($regMsg): ?>&bull; <?php echo $regMsg; ?><?php endif; ?>
@@ -378,8 +571,25 @@ if ($semester && (!$sections || $sections->num_rows == 0)) {
             <div class="alert alert-warning"><i class="bi bi-exclamation-triangle me-2"></i>Hiện tại chưa có học kỳ nào đang mở.</div>
             <?php endif; ?>
 
-            <div class="card">
-                <div class="card-header"><i class="bi bi-journal-plus me-2"></i>Danh sách học phần có thể đăng ký</div>
+            <div class="card mb-4">
+                <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2">
+                    <span><i class="bi bi-journal-plus me-2"></i>Danh sách học phần có thể đăng ký</span>
+                    <div class="d-flex flex-wrap gap-2">
+                        <input type="search" id="courseSearch" class="form-control form-control-sm" style="width:220px" placeholder="Tìm mã môn, tên môn, nhóm...">
+                        <select id="courseFilter" class="form-select form-select-sm" style="width:190px">
+                            <option value="all">Tất cả môn mở</option>
+                            <option value="registered">Đã đăng ký</option>
+                            <option value="cohort">Mở đúng khóa/lớp</option>
+                            <option value="ctdt">Chưa học trong CTĐT</option>
+                            <option value="failed">Đã rớt - học lại</option>
+                            <option value="available">Còn chỗ</option>
+                            <option value="conflict">Trùng lịch</option>
+                        </select>
+                        <select id="groupFilter" class="form-select form-select-sm" style="width:150px">
+                            <option value="all">Tất cả nhóm/tổ</option>
+                        </select>
+                    </div>
+                </div>
                 <div class="card-body p-0">
                     <div class="table-responsive">
                         <table class="table table-hover mb-0">
@@ -387,6 +597,7 @@ if ($semester && (!$sections || $sections->num_rows == 0)) {
                                 <tr>
                                     <th>Mã HP</th>
                                     <th>Tên môn học</th>
+                                    <th>Dành cho</th>
                                     <th>TC</th>
                                     <th>Giảng viên</th>
                                     <th>Lịch học (6 buổi × 5 tiết)</th>
@@ -420,7 +631,7 @@ if ($semester && (!$sections || $sections->num_rows == 0)) {
                                         SELECT cs.day_sessions, cs.schedule_data, cs.schedule_text
                                         FROM student_subjects ss
                                         JOIN course_sections cs ON ss.course_section_id=cs.id
-                                        WHERE ss.student_id=? AND ss.status='registered' AND cs.semester_id=?
+                                        WHERE ss.student_id=? AND ss.status IN ('registered','auto_enrolled') AND cs.semester_id=?
                                     ");
                                     if ($myReg) {
                                         $myReg->bind_param('ii', $student['id'], $semester['id']);
@@ -443,8 +654,12 @@ if ($semester && (!$sections || $sections->num_rows == 0)) {
                                     }
                                 }
 
-                                if ($sections && $sections->num_rows > 0): while ($sec = $sections->fetch_assoc()):
+                                if (!empty($availableSections)): foreach ($availableSections as $sec):
                                 $isFull = $sec['current_students'] >= $sec['max_students'];
+                                $isCohort = !empty($sec['target_cohort_id']);
+                                $isFailed = !empty($sec['has_failed']);
+                                $isPassed = !empty($sec['has_passed']);
+                                $isRegistered = ($sec['my_status'] ?? '') === 'registered';
 
                                 // Lấy lịch của lớp này — ưu tiên day_sessions mới
                                 $secDayMap = []; // [day => session]
@@ -468,11 +683,28 @@ if ($semester && (!$sections || $sections->num_rows == 0)) {
                                     }
                                 }
                                 ?>
-                                <tr class="<?php echo $isFull ? 'table-secondary' : ($hasConflict ? 'table-warning' : ''); ?>">
+                                <tr class="course-row <?php echo $isRegistered ? 'table-success' : ($isFull ? 'table-secondary' : ($hasConflict ? 'table-warning' : '')); ?>"
+                                    data-search="<?php echo htmlspecialchars(mb_strtolower(($sec['subject_code'] ?? '') . ' ' . $sec['subject_name'] . ' ' . $sec['section_code'] . ' ' . ($sec['cohort_code'] ?? '') . ' ' . ($sec['target_major_name'] ?? ''), 'UTF-8')); ?>"
+                                    data-group="<?php echo htmlspecialchars($sec['section_code']); ?>"
+                                    data-cohort="<?php echo $isCohort ? '1' : '0'; ?>"
+                                    data-failed="<?php echo $isFailed ? '1' : '0'; ?>"
+                                    data-passed="<?php echo $isPassed ? '1' : '0'; ?>"
+                                    data-registered="<?php echo $isRegistered ? '1' : '0'; ?>"
+                                    data-full="<?php echo $isFull ? '1' : '0'; ?>"
+                                    data-conflict="<?php echo $hasConflict ? '1' : '0'; ?>">
                                     <td class="fw-bold text-navy small"><?php echo htmlspecialchars($sec['section_code']); ?></td>
                                     <td>
                                         <div class="fw-bold"><?php echo htmlspecialchars($sec['subject_name']); ?></div>
                                         <span class="badge bg-<?php echo $sec['subject_type']=='Bắt buộc'?'danger':'info'; ?> small"><?php echo $sec['subject_type']; ?></span>
+                                        <?php if ($isFailed): ?><span class="badge bg-warning text-dark small">Học lại</span><?php endif; ?>
+                                    </td>
+                                    <td class="small">
+                                        <?php if (!empty($sec['cohort_code'])): ?>
+                                        <div class="fw-semibold"><?php echo htmlspecialchars($sec['cohort_code']); ?></div>
+                                        <div class="text-muted"><?php echo htmlspecialchars($sec['target_major_name'] ?? ''); ?></div>
+                                        <?php else: ?>
+                                        <span class="text-muted">Theo CTĐT ngành của bạn</span>
+                                        <?php endif; ?>
                                     </td>
                                     <td class="text-center"><span class="badge bg-navy"><?php echo $sec['credits']; ?></span></td>
                                     <td class="small"><?php echo htmlspecialchars($sec['degree'] . '. ' . $sec['teacher_name']); ?></td>
@@ -521,17 +753,20 @@ if ($semester && (!$sections || $sections->num_rows == 0)) {
                                     </td>
                                     <td class="small text-success fw-bold"><?php echo number_format($sec['tuition_fee'],0,',','.'); ?>đ</td>
                                     <td>
-                                        <?php if ($hasConflict): ?>
+                                        <?php if ($isRegistered): ?>
+                                        <span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Đã đăng ký</span>
+                                        <?php elseif ($hasConflict): ?>
                                         <span class="badge bg-danger" title="<?php echo implode(', ', $conflictDetails); ?>">
                                             ⚠ Trùng lịch
                                         </span>
+                                        <?php elseif ($autoRegistrationLocked): ?>
+                                        <span class="badge bg-info text-dark">HK1 đăng ký tự động</span>
                                         <?php elseif (!$isFull && $regOpen): ?>
                                         <form method="POST">
                                             <?php echo csrfField(); ?>
                                             <input type="hidden" name="action" value="register">
                                             <input type="hidden" name="section_id" value="<?php echo $sec['id']; ?>">
-                                            <button type="submit" class="btn btn-sm btn-gold"
-                                                onclick="return confirm('Đăng ký học phần <?php echo htmlspecialchars($sec['subject_name']); ?>?')">
+                                            <button type="submit" class="btn btn-sm btn-gold">
                                                 <i class="bi bi-plus-circle me-1"></i>Đăng ký
                                             </button>
                                         </form>
@@ -542,15 +777,106 @@ if ($semester && (!$sections || $sections->num_rows == 0)) {
                                         <?php endif; ?>
                                     </td>
                                 </tr>
-                                <?php endwhile; else: ?>
-                                <tr><td colspan="9" class="text-center text-muted py-4">
+                                <?php endforeach; else: ?>
+                                <tr><td colspan="10" class="text-center text-muted py-4">
                                     <i class="bi bi-inbox fs-3 d-block mb-2"></i>
                                     Không có học phần nào để đăng ký
                                 </td></tr>
                                 <?php endif; ?>
+                                <tr id="noFilterRows" style="display:none"><td colspan="10" class="text-center text-muted py-4">Không có học phần phù hợp bộ lọc.</td></tr>
                             </tbody>
                         </table>
                     </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+                    <span><i class="bi bi-journal-check me-2"></i>Học phần đã đăng ký</span>
+                    <span class="badge bg-success fs-6"><?php echo $registeredCredits; ?> tín chỉ</span>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Mã môn</th>
+                                    <th>Tên môn học</th>
+                                    <th>Nhóm/tổ</th>
+                                    <th>TC</th>
+                                    <th>Giảng viên</th>
+                                    <th>Lịch học</th>
+                                    <th>Phòng</th>
+                                    <th>Học phí</th>
+                                    <th>Trạng thái</th>
+                                    <th>Thao tác</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php if (!empty($registeredSubjects)): foreach ($registeredSubjects as $sub):
+                                    $dayMap = [];
+                                    if (!empty($sub['day_sessions'])) {
+                                        $dayMap = parseDaySessionsReg($sub['day_sessions']);
+                                    } elseif (!empty($sub['schedule_data'])) {
+                                        $slots = json_decode($sub['schedule_data'], true) ?: [];
+                                        foreach ($slots as $sl) $dayMap[(int)$sl['day']] = $sl['session'];
+                                    } elseif (!empty($sub['schedule_text'])) {
+                                        $slots = parseScheduleTextToSlots($sub['schedule_text']);
+                                        foreach ($slots as $sl) $dayMap[(int)$sl['day']] = $sl['session'];
+                                    }
+                                ?>
+                                <tr>
+                                    <td class="fw-bold text-navy small"><?php echo htmlspecialchars($sub['subject_code']); ?></td>
+                                    <td>
+                                        <div class="fw-bold"><?php echo htmlspecialchars($sub['subject_name']); ?></div>
+                                        <span class="badge bg-<?php echo $sub['subject_type']=='Bắt buộc'?'danger':'info'; ?> small"><?php echo htmlspecialchars($sub['subject_type']); ?></span>
+                                    </td>
+                                    <td class="small"><?php echo htmlspecialchars($sub['section_code']); ?></td>
+                                    <td class="text-center"><span class="badge bg-navy"><?php echo (int)$sub['credits']; ?></span></td>
+                                    <td class="small"><?php echo htmlspecialchars($sub['degree'] . '. ' . $sub['teacher_name']); ?></td>
+                                    <td class="small">
+                                        <?php foreach ($dayMap as $d => $s): ?>
+                                        <span class="badge me-1" style="background:<?php echo $sessionColors[$s] ?? '#666'; ?>"><?php echo ($dayNames[$d] ?? 'N'.$d) . ' ' . ($sessionLabels[$s] ?? $s); ?></span>
+                                        <?php endforeach; ?>
+                                        <?php if (!empty($sub['start_date']) || !empty($sub['end_date'])): ?>
+                                        <div class="text-muted" style="font-size:.7rem"><?php echo !empty($sub['start_date']) ? date('d/m/Y', strtotime($sub['start_date'])) : '--'; ?> → <?php echo !empty($sub['end_date']) ? date('d/m/Y', strtotime($sub['end_date'])) : '--'; ?></div>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="small"><?php echo htmlspecialchars($sub['room']); ?></td>
+                                    <td class="small text-success fw-bold"><?php echo number_format((float)$sub['tuition_fee'],0,',','.'); ?>đ</td>
+                                    <td>
+                                        <?php if (($sub['reg_status'] ?? '') === 'auto_enrolled'): ?>
+                                        <span class="badge bg-success">Tự động HK1</span>
+                                        <?php else: ?>
+                                        <span class="badge bg-primary">Đã đăng ký</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <?php if ($regOpen && ($sub['reg_status'] ?? '') === 'registered'): ?>
+                                        <form method="POST">
+                                            <?php echo csrfField(); ?>
+                                            <input type="hidden" name="action" value="cancel">
+                                            <input type="hidden" name="ss_id" value="<?php echo (int)$sub['ss_id']; ?>">
+                                            <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-x-circle me-1"></i>Hủy</button>
+                                        </form>
+                                        <?php else: ?>
+                                        <span class="text-muted small">Chỉ xem</span>
+                                        <?php endif; ?>
+                                    </td>
+                                </tr>
+                                <?php endforeach; else: ?>
+                                <tr><td colspan="10" class="text-center text-muted py-4">Chưa đăng ký học phần nào trong học kỳ này.</td></tr>
+                                <?php endif; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                    <?php if (!empty($registeredSubjects)): ?>
+                    <div class="border-top px-4 py-3 bg-light d-flex flex-wrap gap-4">
+                        <div><span class="text-muted small">Tổng môn:</span> <strong><?php echo count($registeredSubjects); ?></strong></div>
+                        <div><span class="text-muted small">Tổng tín chỉ:</span> <strong><?php echo $registeredCredits; ?></strong></div>
+                        <div><span class="text-muted small">Tạm tính học phí:</span> <strong class="text-success"><?php echo number_format($registeredFee,0,',','.'); ?>đ</strong></div>
+                    </div>
+                    <?php endif; ?>
                 </div>
             </div>
         </div>
@@ -559,6 +885,50 @@ if ($semester && (!$sections || $sections->num_rows == 0)) {
 </div>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script src="/university/assets/js/main.js"></script>
+<script>
+const courseRows = [...document.querySelectorAll('.course-row')];
+const searchInput = document.getElementById('courseSearch');
+const courseFilter = document.getElementById('courseFilter');
+const groupFilter = document.getElementById('groupFilter');
+const emptyRow = document.getElementById('noFilterRows');
+
+if (groupFilter) {
+    const groups = [...new Set(courseRows.map(row => row.dataset.group).filter(Boolean))].sort();
+    groups.forEach(group => {
+        const option = document.createElement('option');
+        option.value = group;
+        option.textContent = group;
+        groupFilter.appendChild(option);
+    });
+}
+
+function applyCourseFilters() {
+    const keyword = (searchInput?.value || '').trim().toLowerCase();
+    const mode = courseFilter?.value || 'all';
+    const group = groupFilter?.value || 'all';
+    let visible = 0;
+
+    courseRows.forEach(row => {
+        let ok = true;
+        if (keyword && !row.dataset.search.includes(keyword)) ok = false;
+        if (group !== 'all' && row.dataset.group !== group) ok = false;
+        if (mode === 'cohort' && row.dataset.cohort !== '1') ok = false;
+        if (mode === 'registered' && row.dataset.registered !== '1') ok = false;
+        if (mode === 'ctdt' && row.dataset.passed === '1') ok = false;
+        if (mode === 'failed' && row.dataset.failed !== '1') ok = false;
+        if (mode === 'available' && row.dataset.full === '1') ok = false;
+        if (mode === 'conflict' && row.dataset.conflict !== '1') ok = false;
+        row.style.display = ok ? '' : 'none';
+        if (ok) visible++;
+    });
+    if (emptyRow) emptyRow.style.display = visible === 0 && courseRows.length > 0 ? '' : 'none';
+}
+
+[searchInput, courseFilter, groupFilter].forEach(el => el?.addEventListener('input', applyCourseFilters));
+[courseFilter, groupFilter].forEach(el => el?.addEventListener('change', applyCourseFilters));
+applyCourseFilters();
+</script>
 <?php include_once __DIR__ . "/../includes/analytics_widget.php"; ?>
 </body>
 </html>
+

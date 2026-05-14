@@ -1,6 +1,7 @@
-<?php
+﻿<?php
 /** API: /api/course-sections */
 requireApiAuth();
+require_once __DIR__ . '/../../includes/AcademicPolicy.php';
 
 // GET /api/course-sections
 if ($method === 'GET' && !$action) {
@@ -78,7 +79,7 @@ if ($method === 'GET' && $id && !$action) {
          LEFT JOIN faculties f ON m.faculty_id=f.id
          LEFT JOIN teachers t ON cs.teacher_id=t.id
          LEFT JOIN users ut ON t.user_id=ut.id
-         LEFT JOIN student_subjects ss ON ss.course_section_id=cs.id AND ss.status='registered'
+         LEFT JOIN student_subjects ss ON ss.course_section_id=cs.id AND ss.status IN ('registered','auto_enrolled')
          WHERE cs.id=?
          GROUP BY cs.id"
     );
@@ -100,7 +101,7 @@ if ($method === 'GET' && $id && $action === 'students') {
          JOIN students st ON ss.student_id=st.id
          JOIN users u ON st.user_id=u.id
          LEFT JOIN grades g ON g.student_subject_id=ss.id
-         WHERE ss.course_section_id=? AND ss.status='registered'
+         WHERE ss.course_section_id=? AND ss.status IN ('registered','auto_enrolled')
          ORDER BY u.full_name"
     );
     $stmt->bind_param('i', $id);
@@ -128,13 +129,14 @@ if ($method === 'POST' && !$action) {
         apiError('subject_id, semester_id, section_code là bắt buộc');
     }
 
+    $demoContext = academicPolicySemesterDemoContext($conn, $semesterId);
     $stmt = $conn->prepare(
         "INSERT INTO course_sections
          (subject_id, teacher_id, semester_id, section_code, room, max_students,
-          current_students, status, day_sessions, teaching_mode, expected_students)
-         VALUES (?,?,?,?,?,?,0,?,?,?,?)"
+          current_students, status, data_mode, demo_batch_id, day_sessions, teaching_mode, expected_students)
+         VALUES (?,?,?,?,?,?,0,?,?,?,?,?,?)"
     );
-    $stmt->bind_param('iiissiissi', $subjectId,$teacherId,$semesterId,$code,$room,$maxStu,$status,$daySession,$mode,$expStu);
+    $stmt->bind_param('iiississsssi', $subjectId,$teacherId,$semesterId,$code,$room,$maxStu,$status,$demoContext['data_mode'],$demoContext['demo_batch_id'],$daySession,$mode,$expStu);
     if ($stmt->execute()) {
         $newId = $conn->insert_id;
         $stmt->close();
@@ -217,3 +219,4 @@ if ($method === 'POST' && $id && $action === 'reject') {
     $stmt->close();
     apiOk(['id' => $id, 'status' => 'cancelled'], 'Đã từ chối đề xuất');
 }
+

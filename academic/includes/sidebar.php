@@ -59,6 +59,15 @@
             <span class="badge bg-warning text-dark ms-auto"><?php echo $cnt2; ?></span>
             <?php endif; ?>
         </a>
+        <a href="/university/academic/pending_enrollments.php"
+           class="sidebar-link <?php echo $cur==='pending_enrollments.php'?'active':''; ?>">
+            <i class="bi bi-hourglass-split"></i> Dang ky tu dong cho xu ly
+            <?php
+            $pendingCnt = $conn->query("SELECT COUNT(*) AS c FROM pending_enrollments WHERE status='pending'")->fetch_assoc()['c'] ?? 0;
+            if ($pendingCnt > 0): ?>
+            <span class="badge bg-warning text-dark ms-auto"><?php echo $pendingCnt; ?></span>
+            <?php endif; ?>
+        </a>
         <a href="/university/academic/timetable.php"
            class="sidebar-link <?php echo $cur==='timetable.php'?'active':''; ?>">
             <i class="bi bi-table"></i> Thời khóa biểu

@@ -58,6 +58,7 @@ function getStaffRedirectUrl(int $userId, $conn): string {
 }
 
 if (isset($_GET['logout'])) {
+    closeCurrentVisitSession($conn);
     session_destroy();
     header('Location: /university/login.php?msg=logout');
     exit();
@@ -156,7 +157,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // Nếu có nhiều hơn 1 role → cho chọn
                 // Nếu chỉ có 1 role → redirect thẳng
                 // Nếu không có role phòng ban → redirect theo role hệ thống
-                if (count($deptRoles) > 1) {
+                if ($_SESSION['role'] === 'teacher' && count($deptRoles) >= 1) {
+                    $_SESSION['_pending_roles'] = $deptRoles;
+                    header('Location: /university/role_select.php');
+                    exit();
+                } elseif (count($deptRoles) > 1) {
                     // Lưu danh sách roles vào session để trang chọn dùng
                     $_SESSION['_pending_roles'] = $deptRoles;
                     header('Location: /university/role_select.php');
@@ -186,6 +191,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     exit();
                 } else {
                     // Không có department role → redirect theo role hệ thống
+                    if ($user['role'] === 'teacher') {
+                        $_SESSION['_active_role'] = '__teacher__';
+                    }
                     switch ($user['role']) {
                         case 'admin':
                             header('Location: /university/admin/');

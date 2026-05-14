@@ -8,12 +8,15 @@ include __DIR__ . '/includes/header.php';
 $filter_major  = intval($_GET['major_id'] ?? 0);
 $filter_status = trim($_GET['status'] ?? 'approved');
 $filter_search = trim($_GET['q'] ?? '');
+$filter_mode   = trim($_GET['mode'] ?? 'system');
+if (!in_array($filter_mode, ['system','test'], true)) $filter_mode = 'system';
 $perPage = 20;
 $page    = max(1, intval($_GET['page'] ?? 1));
 $offset  = ($page - 1) * $perPage;
 
 $where = ["aa.status IN ('approved','rejected','enrolled')"];
 $params = []; $types = '';
+if ($filter_mode !== 'all') { $where[] = 'aa.data_mode=?'; $params[] = $filter_mode; $types .= 's'; }
 if ($filter_status && in_array($filter_status, ['approved','rejected','enrolled'])) {
     $where[] = 'aa.status=?'; $params[] = $filter_status; $types .= 's';
 }
@@ -46,9 +49,10 @@ $stmt->close();
 $majors = $conn->query("SELECT id, major_name FROM majors ORDER BY major_name");
 
 // Summary stats
-$sumApproved = $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='approved'")->fetch_assoc()['c'] ?? 0;
-$sumRejected = $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='rejected'")->fetch_assoc()['c'] ?? 0;
-$sumEnrolled = $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='enrolled'")->fetch_assoc()['c'] ?? 0;
+$modeSql = $filter_mode === 'all' ? '1=1' : "data_mode='" . $conn->real_escape_string($filter_mode) . "'";
+$sumApproved = $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='approved' AND $modeSql")->fetch_assoc()['c'] ?? 0;
+$sumRejected = $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='rejected' AND $modeSql")->fetch_assoc()['c'] ?? 0;
+$sumEnrolled = $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='enrolled' AND $modeSql")->fetch_assoc()['c'] ?? 0;
 ?>
 
 <!-- Summary -->
@@ -79,12 +83,18 @@ $sumEnrolled = $conn->query("SELECT COUNT(*) as c FROM admission_applications WH
 <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-trophy-fill me-2"></i>Kết quả xét tuyển</span>
-        <a href="?<?php echo http_build_query(['status'=>$filter_status,'major_id'=>$filter_major,'q'=>$filter_search,'export'=>1]); ?>"
+        <a href="?<?php echo http_build_query(['mode'=>$filter_mode,'status'=>$filter_status,'major_id'=>$filter_major,'q'=>$filter_search,'export'=>1]); ?>"
            class="btn btn-sm" style="background:#28a745;color:#fff"><i class="bi bi-file-earmark-csv me-1"></i>Xuất CSV</a>
     </div>
     <!-- Filter -->
     <div class="card-body border-bottom py-2">
         <form method="GET" class="d-flex gap-2 flex-wrap align-items-end">
+            <div>
+                <select name="mode" class="form-select form-select-sm" style="width:150px">
+                    <option value="system" <?php echo $filter_mode==='system'?'selected':''; ?>>Dữ liệu thật</option>
+                    <option value="test" <?php echo $filter_mode==='test'?'selected':''; ?>>Test / Demo</option>
+                                    </select>
+            </div>
             <div>
                 <input type="text" name="q" class="form-control form-control-sm" placeholder="Tên, CCCD..." value="<?php echo htmlspecialchars($filter_search); ?>" style="width:180px">
             </div>
@@ -105,7 +115,7 @@ $sumEnrolled = $conn->query("SELECT COUNT(*) as c FROM admission_applications WH
                 </select>
             </div>
             <button type="submit" class="btn btn-sm btn-navy"><i class="bi bi-search me-1"></i>Lọc</button>
-            <?php if ($filter_status || $filter_major || $filter_search): ?>
+            <?php if ($filter_status || $filter_major || $filter_search || $filter_mode !== 'system'): ?>
             <a href="results.php" class="btn btn-sm btn-outline-secondary"><i class="bi bi-x me-1"></i>Xóa lọc</a>
             <?php endif; ?>
         </form>
@@ -152,7 +162,7 @@ $sumEnrolled = $conn->query("SELECT COUNT(*) as c FROM admission_applications WH
         <nav><ul class="pagination pagination-sm mb-0">
             <?php for ($p = max(1,$page-2); $p <= min($totalPages,$page+2); $p++): ?>
             <li class="page-item <?php echo $p==$page?'active':''; ?>">
-                <a class="page-link" href="?status=<?php echo urlencode($filter_status); ?>&major_id=<?php echo $filter_major; ?>&q=<?php echo urlencode($filter_search); ?>&page=<?php echo $p; ?>"><?php echo $p; ?></a>
+                <a class="page-link" href="?mode=<?php echo urlencode($filter_mode); ?>&status=<?php echo urlencode($filter_status); ?>&major_id=<?php echo $filter_major; ?>&q=<?php echo urlencode($filter_search); ?>&page=<?php echo $p; ?>"><?php echo $p; ?></a>
             </li>
             <?php endfor; ?>
         </ul></nav>

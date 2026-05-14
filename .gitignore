@@ -32,6 +32,7 @@ admissions/uploads/*
 *.cache
 .phpunit.result.cache
 storage/logs/
+storage/backups/
 storage/cache/
 storage/sessions/
 

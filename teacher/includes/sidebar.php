@@ -3,7 +3,25 @@
  * Teacher Sidebar — dùng chung cho tất cả trang trong university/teacher/
  * Yêu cầu: $teacher array đã được load trước khi include file này
  */
+require_once __DIR__ . '/../../includes/AcademicPolicy.php';
 $_cur = basename($_SERVER['PHP_SELF']);
+$teachingWishSemesterId = 0;
+if (isset($conn) && $conn instanceof mysqli) {
+    $semRes = $conn->query(
+        "SELECT id FROM semesters
+         WHERE proposal_start IS NOT NULL AND proposal_end IS NOT NULL
+         ORDER BY COALESCE(start_date, created_at) DESC, id DESC"
+    );
+    if ($semRes) {
+        while ($sem = $semRes->fetch_assoc()) {
+            $window = academicPolicyCheckFacultyProposalWindow($conn, (int)$sem['id']);
+            if ($window['ok']) {
+                $teachingWishSemesterId = (int)$sem['id'];
+                break;
+            }
+        }
+    }
+}
 ?>
 <div class="student-sidebar">
     <div class="sidebar-brand">
@@ -42,6 +60,12 @@ $_cur = basename($_SERVER['PHP_SELF']);
            class="sidebar-link <?php echo $_cur === 'evaluation.php' ? 'active' : ''; ?>">
             <i class="bi bi-star-fill"></i> Kết quả đánh giá
         </a>
+        <?php if ($teachingWishSemesterId > 0): ?>
+        <a href="/university/faculty/teaching_wishes.php?semester_id=<?php echo $teachingWishSemesterId; ?>"
+           class="sidebar-link">
+            <i class="bi bi-hand-index-fill"></i> Đăng ký nguyện vọng dạy
+        </a>
+        <?php endif; ?>
         <hr class="my-2">
         <?php if (canSwitchRole()): ?>
         <a href="/university/switch_role.php" class="sidebar-link text-warning">

@@ -3,6 +3,8 @@ require_once '../config/database.php';
 require_once '../includes/auth.php';
 require_once '../includes/AcademicPolicy.php';
 require_once '../includes/teacher_assignment_rules.php';
+require_once '../app/Services/RoomSchedulingService.php';
+require_once '../app/Services/TeacherAssignmentService.php';
 require_once 'includes/academic_helpers.php';
 requireAnyRole(['academic_manager','academic_staff']);
 $pageTitle = 'Quản lý Lớp học phần';
@@ -16,10 +18,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $_SESSION['_flash'] = ['type'=>'danger','message'=>'Chỉ Trưởng phòng mới có quyền.']; header('Location: course_sections.php'); exit();
     }
     $action = trim($_POST['action'] ?? '');
+    if ($action === 'schedule_change') {
+        $sectionId = (int)($_POST['section_id'] ?? 0);
+        $originalDate = trim($_POST['original_date'] ?? '');
+        $newDate = trim($_POST['new_date'] ?? '');
+        $newDaySession = trim($_POST['new_day_session'] ?? '');
+        $room = trim($_POST['room'] ?? '');
+        $reason = trim($_POST['reason'] ?? '');
+        if ($sectionId && $originalDate && $newDate && $newDaySession) {
+            $sectionWindow = $conn->query(
+                "SELECT sm.start_date, sm.end_date
+                 FROM course_sections cs
+                 JOIN semesters sm ON sm.id = cs.semester_id
+                 WHERE cs.id = " . (int)$sectionId . " LIMIT 1"
+            )->fetch_assoc();
+            if (!$sectionWindow
+                || $originalDate < $sectionWindow['start_date'] || $originalDate > $sectionWindow['end_date']
+                || $newDate < $sectionWindow['start_date'] || $newDate > $sectionWindow['end_date']) {
+                $_SESSION['_flash']=['type'=>'danger','message'=>'Ngày gốc và ngày học thay thế phải nằm trong thời gian bắt đầu và kết thúc học kỳ.'];
+                header('Location: course_sections.php'); exit();
+            }
+            academicEnsureScheduleChangesTable($conn);
+            $demoContext = academicPolicySectionDemoContext($conn, $sectionId);
+            $stmt = $conn->prepare(
+                "INSERT INTO course_section_schedule_changes
+                 (course_section_id, original_date, new_date, new_day_session, room, reason, data_mode, demo_batch_id, approved_by)
+                 VALUES (?,?,?,?,?,?,?,?,?)"
+            );
+            $stmt->bind_param('isssssssi', $sectionId, $originalDate, $newDate, $newDaySession, $room, $reason, $demoContext['data_mode'], $demoContext['demo_batch_id'], $userId);
+            $stmt->execute()
+                ? $_SESSION['_flash']=['type'=>'success','message'=>'Đã cập nhật lịch đổi cho buổi học. Lịch gốc của lớp không thay đổi.']
+                : $_SESSION['_flash']=['type'=>'danger','message'=>'Loi: '.$conn->error];
+            $stmt->close();
+        } else {
+            $_SESSION['_flash']=['type'=>'danger','message'=>'Vui lòng nhập đủ ngày gốc, ngày học bù và buổi học mới.'];
+        }
+        header('Location: course_sections.php'); exit();
+    }
     if ($action === 'add') {
         $subjectId   = (int)($_POST['subject_id'] ?? 0);
         $teacherId   = (int)($_POST['teacher_id'] ?? 0) ?: null;
         $semesterId  = (int)($_POST['semester_id'] ?? 0);
+        $targetCohortId = (int)($_POST['target_cohort_id'] ?? 0) ?: null;
         $code        = trim($_POST['section_code'] ?? '');
         $room        = trim($_POST['room'] ?? '');
         $maxStudents = max(1,(int)($_POST['max_students'] ?? 40));
@@ -29,14 +69,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $endDate     = trim($_POST['end_date'] ?? '') ?: null;
         $mode        = trim($_POST['teaching_mode'] ?? 'offline');
         if ($subjectId && $semesterId && $code) {
+            $demoContext = academicPolicySemesterDemoContext($conn, $semesterId);
             if ($teacherId) {
-                $assignmentCheck = validateTeacherAssignment($conn, $teacherId, $subjectId, $semesterId);
+                $assignmentCheck = TeacherAssignmentService::validate($conn, $teacherId, $subjectId, $semesterId);
                 if (!$assignmentCheck['ok']) {
                     $_SESSION['_flash'] = ['type'=>'danger','message'=>$assignmentCheck['message']];
                     header('Location: course_sections.php'); exit();
                 }
             }
-            $scheduleCheck = academicPolicyValidateTeachingSchedule($mode, $daySession);
+            $scheduleCheck = RoomSchedulingService::validateTeachingSchedule($mode, $daySession);
             if (!$scheduleCheck['ok']) {
                 $_SESSION['_flash'] = ['type'=>'danger','message'=>$scheduleCheck['message']];
                 header('Location: course_sections.php'); exit();
@@ -45,7 +86,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($mode === 'online') {
                 $room = '';
             } else {
-                $availableRooms = academicPolicyFindAvailableClassrooms($conn, 0, $semesterId, $subjectId, $maxStudents, $mode, $daySession);
+                $availableRooms = RoomSchedulingService::findAvailableClassrooms($conn, 0, $semesterId, $subjectId, $maxStudents, $mode, $daySession);
                 if (empty($availableRooms)) {
                     $_SESSION['_flash'] = ['type'=>'danger','message'=>'Không còn phòng học trống và phù hợp với lịch/sĩ số/môn học đã chọn.'];
                     header('Location: course_sections.php'); exit();
@@ -68,8 +109,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $classroomId = (int)$selectedRoom['id'];
                 }
             }
-            $stmt = $conn->prepare("INSERT INTO course_sections (subject_id,teacher_id,semester_id,section_code,room,classroom_id,max_students,current_students,status,day_sessions,start_date,end_date,teaching_mode) VALUES (?,?,?,?,?,?,?,0,?,?,?,?,?)");
-            $stmt->bind_param('iiissiisssss', $subjectId,$teacherId,$semesterId,$code,$room,$classroomId,$maxStudents,$status,$daySession,$startDate,$endDate,$mode);
+            if ($targetCohortId) {
+                $stmtCohort = $conn->prepare(
+                    "SELECT tc.id
+                     FROM training_cohorts tc
+                     JOIN curriculum cur ON cur.major_id = tc.major_id AND cur.subject_id = ? AND cur.deleted_at IS NULL
+                     WHERE tc.id = ? LIMIT 1"
+                );
+                $stmtCohort->bind_param('ii', $subjectId, $targetCohortId);
+                $stmtCohort->execute();
+                $validCohort = $stmtCohort->get_result()->num_rows > 0;
+                $stmtCohort->close();
+                if (!$validCohort) {
+                    $_SESSION['_flash'] = ['type'=>'danger','message'=>'Khóa/ngành được chọn không có môn này trong CTĐT.'];
+                    header('Location: course_sections.php'); exit();
+                }
+            }
+            $stmt = $conn->prepare("INSERT INTO course_sections (subject_id,teacher_id,semester_id,target_cohort_id,section_code,room,classroom_id,max_students,current_students,status,data_mode,demo_batch_id,day_sessions,start_date,end_date,teaching_mode) VALUES (?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?)");
+            $stmt->bind_param('iiiissiisssssss', $subjectId,$teacherId,$semesterId,$targetCohortId,$code,$room,$classroomId,$maxStudents,$status,$demoContext['data_mode'],$demoContext['demo_batch_id'],$daySession,$startDate,$endDate,$mode);
             $stmt->execute() ? $_SESSION['_flash']=['type'=>'success','message'=>'Thêm lớp học phần thành công.']
                              : $_SESSION['_flash']=['type'=>'danger','message'=>'Loi: '.$conn->error];
             $stmt->close();
@@ -97,13 +154,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 header('Location: course_sections.php'); exit();
             }
             if ($teacherId) {
-                $assignmentCheck = validateTeacherAssignmentForSection($conn, $teacherId, $id);
+                $assignmentCheck = TeacherAssignmentService::validateForSection($conn, $teacherId, $id);
                 if (!$assignmentCheck['ok']) {
                     $_SESSION['_flash'] = ['type'=>'danger','message'=>$assignmentCheck['message']];
                     header('Location: course_sections.php'); exit();
                 }
             }
-            $scheduleCheck = academicPolicyValidateTeachingSchedule($mode, $daySession);
+            $scheduleCheck = RoomSchedulingService::validateTeachingSchedule($mode, $daySession);
             if (!$scheduleCheck['ok']) {
                 $_SESSION['_flash'] = ['type'=>'danger','message'=>$scheduleCheck['message']];
                 header('Location: course_sections.php'); exit();
@@ -112,7 +169,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($mode === 'online') {
                 $room = '';
             } else {
-                $availableRooms = academicPolicyFindAvailableClassrooms(
+                $availableRooms = RoomSchedulingService::findAvailableClassrooms(
                     $conn,
                     $id,
                     (int)$sectionForRoom['semester_id'],
@@ -182,19 +239,23 @@ if ($filterSem > 0)    { $where[] = 'cs.semester_id=?'; $types .= 'i'; $params[]
 if ($filterFaculty > 0){ $where[] = 'f.id=?'; $types .= 'i'; $params[] = $filterFaculty; }
 if ($filterStatus !== ''){ $where[] = 'cs.status=?'; $types .= 's'; $params[] = $filterStatus; }
 if ($search !== '')    { $where[] = '(s.subject_name LIKE ? OR cs.section_code LIKE ?)'; $like="%$search%"; $types .= 'ss'; $params[] = $like; $params[] = $like; }
+$where[] = "cs.data_mode = COALESCE((SELECT data_mode FROM semesters WHERE id = cs.semester_id LIMIT 1), 'system')";
 $whereSQL = implode(' AND ', $where);
 
-$stmtCnt = $conn->prepare("SELECT COUNT(*) AS c FROM course_sections cs JOIN subjects s ON cs.subject_id=s.id LEFT JOIN majors m ON s.major_id=m.id LEFT JOIN faculties f ON m.faculty_id=f.id WHERE $whereSQL");
+$stmtCnt = $conn->prepare("SELECT COUNT(*) AS c FROM course_sections cs JOIN subjects s ON cs.subject_id=s.id LEFT JOIN majors m ON s.major_id=m.id LEFT JOIN faculties f ON m.faculty_id=f.id LEFT JOIN training_cohorts tc ON cs.target_cohort_id=tc.id WHERE $whereSQL");
 if ($types) $stmtCnt->bind_param($types,...$params); $stmtCnt->execute();
 $total = (int)($stmtCnt->get_result()->fetch_assoc()['c'] ?? 0); $stmtCnt->close();
 $pag = paginateAcademic($total, $page, $perPage);
 
 $stmtData = $conn->prepare("SELECT cs.id, cs.section_code, cs.status, cs.max_students, cs.current_students, cs.room, cs.day_sessions, cs.start_date, cs.end_date, cs.teaching_mode, cs.proposal_status,
        s.subject_name, s.credits, f.faculty_name,
+       tc.cohort_code, tc.enrollment_year, tc.duration_years, tm.major_name AS target_major_name,
        ut.full_name AS teacher_name, t.teacher_code, sm.semester_name
 FROM course_sections cs JOIN subjects s ON cs.subject_id=s.id
 JOIN semesters sm ON cs.semester_id=sm.id
 LEFT JOIN majors m ON s.major_id=m.id LEFT JOIN faculties f ON m.faculty_id=f.id
+LEFT JOIN training_cohorts tc ON cs.target_cohort_id=tc.id
+LEFT JOIN majors tm ON tc.major_id=tm.id
 LEFT JOIN teachers t ON cs.teacher_id=t.id LEFT JOIN users ut ON t.user_id=ut.id
 WHERE $whereSQL ORDER BY f.faculty_name, s.subject_name LIMIT ? OFFSET ?");
 $allTypes = $types.'ii'; $allParams = array_merge($params,[$pag['per_page'],$pag['offset']]);
@@ -205,6 +266,7 @@ $subjects  = $conn->query("SELECT id, subject_code, subject_name FROM subjects O
 $teachers  = $conn->query("SELECT t.id, t.teacher_code, u.full_name, f.faculty_name FROM teachers t JOIN users u ON t.user_id=u.id LEFT JOIN faculties f ON t.faculty_id=f.id ORDER BY f.faculty_name, u.full_name")->fetch_all(MYSQLI_ASSOC);
 $semesters = $conn->query("SELECT id, semester_name, school_year FROM semesters ORDER BY id DESC")->fetch_all(MYSQLI_ASSOC);
 $faculties = $conn->query("SELECT id, faculty_name FROM faculties ORDER BY faculty_name")->fetch_all(MYSQLI_ASSOC);
+$cohorts   = $conn->query("SELECT tc.id, tc.cohort_code, tc.enrollment_year, tc.duration_years, m.major_name FROM training_cohorts tc JOIN majors m ON tc.major_id=m.id WHERE tc.status IN ('planned','active') ORDER BY m.major_name, tc.enrollment_year DESC")->fetch_all(MYSQLI_ASSOC);
 
 $statusLabels = ['open'=>['success','Mở'],'proposed'=>['warning','Đề xuất'],'draft'=>['secondary','Nháp'],'full'=>['info','Đầy'],'closed'=>['dark','Đóng'],'cancelled'=>['danger','Hủy']];
 $modeLabels   = ['offline'=>'Offline','online'=>'Online','hybrid'=>'Hybrid'];
@@ -258,7 +320,7 @@ include 'includes/header.php'; include 'includes/sidebar.php';
     <?php else: ?>
     <div class="table-responsive">
         <table class="table table-sm table-hover mb-0">
-            <thead class="table-light"><tr><th>Mã lớp / Môn học</th><th>Khoa</th><th>Giảng viên</th><th class="text-center">Sĩ số</th><th>Lịch học</th><th>Hình thức</th><th>Trạng thái</th><th class="text-center">Thao tác</th></tr></thead>
+            <thead class="table-light"><tr><th>Mã lớp / Môn học</th><th>Khoa</th><th>Dành cho</th><th>Giảng viên</th><th class="text-center">Sĩ số</th><th>Lịch học</th><th>Hình thức</th><th>Trạng thái</th><th class="text-center">Thao tác</th></tr></thead>
             <tbody>
             <?php foreach ($sections as $cs):
                 [$sColor,$sLabel] = $statusLabels[$cs['status']] ?? ['secondary',$cs['status']];
@@ -268,6 +330,14 @@ include 'includes/header.php'; include 'includes/sidebar.php';
                 <td><div class="fw-semibold small"><?php echo htmlspecialchars($cs['section_code']); ?></div>
                     <small class="text-muted"><?php echo htmlspecialchars($cs['subject_name']); ?> · <?php echo $cs['credits']; ?> TC</small></td>
                 <td class="small"><?php echo htmlspecialchars($cs['faculty_name']??'—'); ?></td>
+                <td class="small">
+                    <?php if (!empty($cs['cohort_code'])): ?>
+                    <span class="fw-semibold"><?php echo htmlspecialchars($cs['cohort_code']); ?></span><br>
+                    <span class="text-muted"><?php echo htmlspecialchars($cs['target_major_name'] ?? ''); ?></span>
+                    <?php else: ?>
+                    <span class="text-muted">Theo CTĐT ngành</span>
+                    <?php endif; ?>
+                </td>
                 <td class="small"><?php echo htmlspecialchars($cs['teacher_name']??'<span class="text-warning">Chưa có</span>'); ?></td>
                 <td class="text-center">
                     <span class="badge bg-<?php echo $pct>=100?'danger':($pct>=80?'warning':'success'); ?>"><?php echo $cs['current_students']; ?>/<?php echo $cs['max_students']; ?></span></td>
@@ -288,6 +358,13 @@ include 'includes/header.php'; include 'includes/sidebar.php';
                             data-end="<?php echo $cs['end_date']??''; ?>"
                             data-mode="<?php echo $cs['teaching_mode']??'offline'; ?>">
                         <i class="bi bi-pencil"></i>
+                    </button>
+                    <button class="btn btn-xs btn-outline-warning" style="font-size:.7rem;padding:2px 6px"
+                            data-bs-toggle="modal" data-bs-target="#changeScheduleModal"
+                            data-id="<?php echo $cs['id']; ?>"
+                            data-code="<?php echo htmlspecialchars($cs['section_code']); ?>"
+                            data-room="<?php echo htmlspecialchars($cs['room']??''); ?>">
+                        <i class="bi bi-calendar2-week"></i>
                     </button>
                     <form method="post" class="d-inline" onsubmit="return confirm('Xóa lớp học phần này?')">
                         <?php echo csrfField(); ?>
@@ -328,6 +405,25 @@ include 'includes/header.php'; include 'includes/sidebar.php';
             <select name="semester_id" class="form-select" required><option value="">-- Chọn học kỳ --</option>
             <?php foreach ($semesters as $sm): ?><option value="<?php echo $sm['id']; ?>" <?php echo $filterSem==$sm['id']?'selected':''; ?>><?php echo htmlspecialchars($sm['semester_name'].' '.$sm['school_year']); ?></option><?php endforeach; ?>
             </select></div>
+        <div class="col-md-6"><label class="form-label fw-semibold">Khóa/ngành áp dụng</label>
+            <select name="target_cohort_id" class="form-select">
+                <option value="">Theo CTĐT ngành, không giới hạn khóa</option>
+                <?php $lastMajor=''; foreach ($cohorts as $cohort): ?>
+                    <?php if ($cohort['major_name'] !== $lastMajor): ?>
+                        <?php if ($lastMajor !== '') echo '</optgroup>'; ?>
+                        <optgroup label="<?php echo htmlspecialchars($cohort['major_name']); ?>">
+                        <?php $lastMajor = $cohort['major_name']; ?>
+                    <?php endif; ?>
+                    <?php
+                        $gradYear = (int)$cohort['enrollment_year'] + (int)ceil((float)($cohort['duration_years'] ?? 4));
+                    ?>
+                    <option value="<?php echo (int)$cohort['id']; ?>">
+                        <?php echo htmlspecialchars($cohort['cohort_code'] . ' - Khóa ' . $cohort['enrollment_year'] . '-' . $gradYear); ?>
+                    </option>
+                <?php endforeach; if ($lastMajor !== '') echo '</optgroup>'; ?>
+            </select>
+            <div class="form-text">Sinh viên chỉ thấy lớp đúng CTĐT ngành và đúng khóa nếu chọn khóa cụ thể.</div>
+        </div>
         <div class="col-md-6"><label class="form-label fw-semibold">Giảng viên</label>
             <select name="teacher_id" class="form-select"><option value="">-- Chưa phân công --</option>
             <?php $lastF=''; foreach ($teachers as $t): if ($t['faculty_name']!==$lastF) { if ($lastF!=='') echo '</optgroup>'; echo '<optgroup label="'.htmlspecialchars($t['faculty_name']??'Khac').'">'; $lastF=$t['faculty_name']; } ?>
@@ -372,6 +468,31 @@ include 'includes/header.php'; include 'includes/sidebar.php';
     <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button><button type="submit" class="btn btn-navy"><i class="bi bi-save me-1"></i>Lưu</button></div>
     </form>
 </div></div></div>
+
+<!-- Modal Doi lich 1 buoi -->
+<div class="modal fade" id="changeScheduleModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title">Đổi lịch một buổi học</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <form method="post" action="course_sections.php"><?php echo csrfField(); ?><input type="hidden" name="action" value="schedule_change"><input type="hidden" name="section_id" id="chgSectionId">
+    <div class="modal-body">
+        <div class="alert alert-info py-2 small">Lịch đổi được lưu riêng, không thay đổi lịch học gốc của lớp.</div>
+        <div class="mb-3"><label class="form-label fw-semibold">Lớp học phần</label><input type="text" id="chgSectionCode" class="form-control" readonly></div>
+        <div class="row g-3">
+            <div class="col-md-6"><label class="form-label fw-semibold">Ngày gốc cần đổi</label><input type="date" name="original_date" class="form-control" required></div>
+            <div class="col-md-6"><label class="form-label fw-semibold">Ngày học thay thế</label><input type="date" name="new_date" class="form-control" required></div>
+            <div class="col-md-6"><label class="form-label fw-semibold">Buổi mới</label>
+                <select name="new_day_session" class="form-select" required>
+                    <option value="sang">Sáng</option>
+                    <option value="chieu">Chiều</option>
+                    <option value="toi">Tối</option>
+                </select>
+            </div>
+            <div class="col-md-6"><label class="form-label fw-semibold">Phòng</label><input type="text" name="room" id="chgRoom" class="form-control"></div>
+            <div class="col-12"><label class="form-label fw-semibold">Lý do</label><textarea name="reason" class="form-control" rows="2" placeholder="VD: nghỉ lễ, giảng viên xin đổi lịch, sự cố phòng học..."></textarea></div>
+        </div>
+    </div>
+    <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button><button type="submit" class="btn btn-navy"><i class="bi bi-save me-1"></i>Lưu lịch đổi</button></div>
+    </form>
+</div></div></div>
 <script>
 document.getElementById('editModal').addEventListener('show.bs.modal', function(e) {
     const b = e.relatedTarget;
@@ -383,6 +504,12 @@ document.getElementById('editModal').addEventListener('show.bs.modal', function(
     document.getElementById('editStart').value = b.dataset.start;
     document.getElementById('editEnd').value = b.dataset.end;
     document.getElementById('editMode').value = b.dataset.mode;
+});
+document.getElementById('changeScheduleModal').addEventListener('show.bs.modal', function(e) {
+    const b = e.relatedTarget;
+    document.getElementById('chgSectionId').value = b.dataset.id;
+    document.getElementById('chgSectionCode').value = b.dataset.code;
+    document.getElementById('chgRoom').value = b.dataset.room || '';
 });
 </script>
 <?php include 'includes/footer.php'; ?>

@@ -1,7 +1,8 @@
-﻿<?php
+<?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
 require_once '../includes/AcademicPolicy.php';
+require_once '../app/Services/RoomSchedulingService.php';
 require_once 'includes/academic_helpers.php';
 requireAnyRole(['academic_manager','academic_staff']);
 
@@ -51,6 +52,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $sectionStartDate = $window['start_date'];
         $sectionEndDate   = $window['end_date'];
+        $loadRow = $conn->query(
+            "SELECT COALESCE(NULLIF(total_periods,0), theory_periods + practice_periods, credits * 15, 45) AS total_periods
+             FROM subjects WHERE id = " . (int)$section['subject_id'] . " LIMIT 1"
+        )->fetch_assoc();
+        $totalPeriods = max(1, (int)($loadRow['total_periods'] ?? 45));
         $minStudents = max(1, (int)($section['min_students'] ?? 20));
         if ($maxStudents < $minStudents) {
             $_SESSION['_flash'] = ['type'=>'danger','message'=>"Sĩ số tối đa phải từ {$minStudents} sinh viên trở lên."];
@@ -60,7 +66,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['_flash'] = ['type'=>'danger','message'=>'Vui lòng nhập lịch học để kiểm tra trùng phòng/giảng viên.'];
             header('Location: proposals.php'); exit();
         }
-        $scheduleCheck = academicPolicyValidateTeachingSchedule($teachingMode, $daySessions);
+        $calculatedEndDate = academicScheduleSectionEndDate($sectionStartDate, $daySessions, $totalPeriods, $window['end_date']);
+        if ($calculatedEndDate) {
+            $sectionEndDate = $calculatedEndDate;
+        }
+        $scheduleCheck = RoomSchedulingService::validateTeachingSchedule($teachingMode, $daySessions);
         if (!$scheduleCheck['ok']) {
             $_SESSION['_flash'] = ['type'=>'danger','message'=>$scheduleCheck['message']];
             header('Location: proposals.php'); exit();
@@ -75,7 +85,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($teachingMode === 'online') {
             $room = '';
         } else {
-            $availableRooms = academicPolicyFindAvailableClassrooms(
+            $availableRooms = RoomSchedulingService::findAvailableClassrooms(
                 $conn,
                 $sectionId,
                 (int)$section['semester_id'],
@@ -111,7 +121,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
-        $roomCheck = academicPolicyValidateRoom($conn, $room, $maxStudents, (int)$section['subject_id'], $teachingMode, (string)($section['room_requirement'] ?? ''));
+        $roomCheck = RoomSchedulingService::validateRoom($conn, $room, $maxStudents, (int)$section['subject_id'], $teachingMode, (string)($section['room_requirement'] ?? ''));
         if (!$roomCheck['ok']) {
             $_SESSION['_flash'] = ['type'=>'danger','message'=>$roomCheck['message']];
             header('Location: proposals.php'); exit();
@@ -146,14 +156,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($info) {
                 sendAcademicNotification($conn, $userId, 'proposal_approved',
                     'De xuat mo lop duoc duyet',
-                    "Lop HP {$info['section_code']} ({$info['subject_name']}) da duoc Phong Dao tao duyet mo chinh thuc.",
+                    "Lớp HP {$info['section_code']} ({$info['subject_name']}) đã được Phòng Đào tạo duyệt mở chính thức.",
                     $info['faculty_id'] ?? null, null, $sectionId, 'course_section'
                 );
                 // Gui vao bang notifications cho Truong khoa
                 if ($info['open_proposed_by']) {
                     $title = "Lop HP duoc duyet: {$info['section_code']}";
-                    $content = "De xuat mo lop {$info['section_code']} ({$info['subject_name']}) da duoc Phong Dao tao phe duyet.";
-                    $stmtN = $conn->prepare("INSERT INTO notifications (user_id, title, content) VALUES (?,?,?)");
+                    $content = "Đề xuất mở lớp {$info['section_code']} ({$info['subject_name']}) đã được Phòng Đào tạo phê duyệt.";
+                    $stmtN = $conn->prepare("INSERT INTO system_notifications (user_id, title, content) VALUES (?,?,?)");
                     $stmtN->bind_param('iss', $info['open_proposed_by'], $title, $content);
                     $stmtN->execute(); $stmtN->close();
                 }
@@ -197,7 +207,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 );
                 if ($info['open_proposed_by']) {
                     $title = "De xuat bi tu choi: {$info['section_code']}";
-                    $stmtN = $conn->prepare("INSERT INTO notifications (user_id, title, content) VALUES (?,?,?)");
+                    $stmtN = $conn->prepare("INSERT INTO system_notifications (user_id, title, content) VALUES (?,?,?)");
                     $stmtN->bind_param('iss', $info['open_proposed_by'], $title, $reason);
                     $stmtN->execute(); $stmtN->close();
                 }
@@ -268,7 +278,9 @@ $dataSQL = "SELECT cs.id, cs.section_code, cs.status, cs.expected_students,
                    sm.semester_name, sm.school_year,
                    f.faculty_name, tc.cohort_code, tc.cohort_name,
                    up.full_name AS proposed_by_name,
-                   ur.full_name AS reviewed_by_name
+                   ur.full_name AS reviewed_by_name,
+                   pt.teacher_code AS proposed_teacher_code,
+                   ptu.full_name AS proposed_teacher_name
             FROM course_sections cs
             JOIN subjects s ON cs.subject_id = s.id
             JOIN semesters sm ON cs.semester_id = sm.id
@@ -277,6 +289,8 @@ $dataSQL = "SELECT cs.id, cs.section_code, cs.status, cs.expected_students,
             LEFT JOIN faculties f ON t.faculty_id = f.id
             LEFT JOIN users up ON cs.open_proposed_by = up.id
             LEFT JOIN users ur ON cs.open_reviewed_by = ur.id
+            LEFT JOIN teachers pt ON cs.proposed_teacher_id = pt.id
+            LEFT JOIN users ptu ON pt.user_id = ptu.id
             WHERE $whereSQL
             ORDER BY cs.open_proposed_at DESC
             LIMIT ? OFFSET ?";
@@ -309,6 +323,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'review' && isset($_GET['id'])
         "SELECT cs.*, s.subject_name, s.subject_code, s.credits,
                 sm.semester_name, sm.school_year,
                 f.faculty_name, tc.cohort_code, tc.cohort_name, up.full_name AS proposed_by_name,
+                pt.teacher_code AS proposed_teacher_code, ptu.full_name AS proposed_teacher_name,
                 maj.major_name
          FROM course_sections cs
          JOIN subjects s ON cs.subject_id = s.id
@@ -317,6 +332,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'review' && isset($_GET['id'])
          LEFT JOIN teachers t ON t.user_id = cs.open_proposed_by
          LEFT JOIN faculties f ON t.faculty_id = f.id
          LEFT JOIN users up ON cs.open_proposed_by = up.id
+         LEFT JOIN teachers pt ON cs.proposed_teacher_id = pt.id
+         LEFT JOIN users ptu ON pt.user_id = ptu.id
          LEFT JOIN majors maj ON s.major_id = maj.id
          WHERE cs.id = ? AND cs.status = 'proposed'
          LIMIT 1"
@@ -329,7 +346,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'review' && isset($_GET['id'])
     if ($reviewSection) {
         $reviewMode = (string)($reviewSection['teaching_mode'] ?: 'offline');
         $reviewMaxStudents = max(1, (int)($reviewSection['expected_students'] ?: $reviewSection['max_students'] ?: 40));
-        $reviewRoomOptions = academicPolicyFindAvailableClassrooms(
+        $reviewRoomOptions = RoomSchedulingService::findAvailableClassrooms(
             $conn,
             (int)$reviewSection['id'],
             (int)$reviewSection['semester_id'],
@@ -395,6 +412,15 @@ include 'includes/sidebar.php';
             <?php endif; ?>
             <div class="col-md-6"><small class="text-muted d-block">Lich hoc de xuat</small>
                 <?php echo htmlspecialchars($reviewSection['day_sessions'] ?? '—'); ?>
+            </div>
+            <div class="col-md-6"><small class="text-muted d-block">GV de xuat tu Khoa</small>
+                <?php if (!empty($reviewSection['proposed_teacher_name'])): ?>
+                    <strong><?php echo htmlspecialchars($reviewSection['proposed_teacher_name']); ?></strong>
+                    <span class="text-muted">(<?php echo htmlspecialchars($reviewSection['proposed_teacher_code'] ?? ''); ?>)</span>
+                    <span class="badge bg-warning text-dark ms-1">Cho duyet phan cong</span>
+                <?php else: ?>
+                    <span class="text-muted">Chua de xuat</span>
+                <?php endif; ?>
             </div>
             <?php if ($reviewSection['open_proposal_note']): ?>
             <div class="col-12"><small class="text-muted d-block">Ghi chu tu Khoa</small>
@@ -563,6 +589,7 @@ include 'includes/sidebar.php';
                     <th>Khoa</th>
                     <th>Khóa</th>
                     <th>Hoc ky</th>
+                    <th>GV de xuat</th>
                     <th class="text-center">Si so DK</th>
                     <th>Hinh thuc</th>
                     <th>Trang thai</th>
@@ -582,6 +609,14 @@ include 'includes/sidebar.php';
                 <td class="small"><?php echo htmlspecialchars($p['faculty_name']??'—'); ?></td>
                 <td class="small"><?php echo htmlspecialchars($p['cohort_code']??'—'); ?></td>
                 <td class="small"><?php echo htmlspecialchars($p['semester_name']); ?></td>
+                <td class="small">
+                    <?php if (!empty($p['proposed_teacher_name'])): ?>
+                    <span class="fw-semibold"><?php echo htmlspecialchars($p['proposed_teacher_name']); ?></span><br>
+                    <span class="text-muted"><?php echo htmlspecialchars($p['proposed_teacher_code'] ?? ''); ?></span>
+                    <?php else: ?>
+                    <span class="text-muted">—</span>
+                    <?php endif; ?>
+                </td>
                 <td class="text-center">
                     <span class="badge bg-light text-dark"><?php echo (int)$p['expected_students']; ?></span>
                 </td>
@@ -630,6 +665,6 @@ include 'includes/sidebar.php';
 </div>
 
 </div><!-- /.admin-content -->
-<div class="admin-footer">&copy; <?php echo date('Y'); ?> TDMU — Phong Dao tao</div>
+<div class="admin-footer">&copy; <?php echo date('Y'); ?> TDMU — Phòng Đào tạo</div>
 </div>
 <?php include 'includes/footer.php'; ?>

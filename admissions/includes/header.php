@@ -7,6 +7,17 @@ requireAnyRole(['admissions_manager', 'admissions_staff']);
 $_currentPage = basename($_SERVER['PHP_SELF']);
 $_userName    = $_SESSION['full_name'] ?? 'Nhân viên';
 $_userRoles   = getUserRoles();
+$_canSwitchRole = canSwitchRole();
+
+$_admMode = trim($_GET['mode'] ?? $_POST['mode'] ?? 'system');
+if (!in_array($_admMode, ['system', 'test'], true)) $_admMode = 'system';
+$_admModeLabel = $_admMode === 'test' ? 'Demo/Test' : 'Dữ liệu thật';
+$_admModeBadge = $_admMode === 'test' ? 'bg-warning text-dark' : 'bg-success';
+function admModeUrl(string $path, array $params = []): string {
+    global $_admMode;
+    $params = array_merge(['mode' => $_admMode], $params);
+    return $path . '?' . http_build_query($params);
+}
 ?>
 <!DOCTYPE html>
 <html lang="vi">
@@ -14,7 +25,7 @@ $_userRoles   = getUserRoles();
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
-    <title><?php echo isset($pageTitle) ? htmlspecialchars($pageTitle) . ' — ' : ''; ?>Tuyển sinh · TDMU</title>
+    <title><?php echo isset($pageTitle) ? htmlspecialchars($pageTitle) . ' - ' : ''; ?>Tuyển sinh · TDMU</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
     <style>
@@ -156,8 +167,9 @@ $_userRoles   = getUserRoles();
 
 <?php
 // Pending count for badge
-$_pendingCount = $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='new'")->fetch_assoc()['c'] ?? 0;
-$_enrollCount  = $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='approved'")->fetch_assoc()['c'] ?? 0;
+$_admModeSql = "data_mode='" . $conn->real_escape_string($_admMode) . "'";
+$_pendingCount = $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='new' AND $_admModeSql")->fetch_assoc()['c'] ?? 0;
+$_enrollCount  = $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='approved' AND $_admModeSql")->fetch_assoc()['c'] ?? 0;
 ?>
 
 <div class="adm-sidebar" id="admSidebar">
@@ -184,54 +196,59 @@ $_enrollCount  = $conn->query("SELECT COUNT(*) as c FROM admission_applications 
     </div>
     <nav class="sidebar-nav">
         <div class="sidebar-sec">Tổng quan</div>
-        <a href="/university/admissions/index.php" class="sidebar-link <?php echo $_currentPage==='index.php'?'active':''; ?>" data-tooltip="Dashboard">
+        <a href="<?php echo admModeUrl('/university/admissions/index.php'); ?>" class="sidebar-link <?php echo $_currentPage==='index.php'?'active':''; ?>" data-tooltip="Dashboard">
             <i class="bi bi-speedometer2"></i><span class="link-text"> Dashboard</span>
         </a>
 
         <div class="sidebar-sec">Hồ sơ</div>
-        <a href="/university/admissions/applications.php" class="sidebar-link <?php echo in_array($_currentPage,['applications.php','application_detail.php'])?'active':''; ?>" data-tooltip="Quản lý hồ sơ">
+        <a href="<?php echo admModeUrl('/university/admissions/applications.php'); ?>" class="sidebar-link <?php echo in_array($_currentPage,['applications.php','application_detail.php'])?'active':''; ?>" data-tooltip="Quản lý hồ sơ">
             <i class="bi bi-file-earmark-person-fill"></i><span class="link-text"> Quản lý hồ sơ</span>
             <?php if($_pendingCount>0): ?><span class="bc"><?php echo $_pendingCount; ?></span><?php endif; ?>
         </a>
 
         <?php if(hasRole('admissions_manager')): ?>
         <div class="sidebar-sec">Xét tuyển</div>
-        <a href="/university/admissions/auto_review.php" class="sidebar-link <?php echo $_currentPage==='auto_review.php'?'active':''; ?>" data-tooltip="Xét tuyển tự động">
+        <a href="<?php echo admModeUrl('/university/admissions/auto_review.php'); ?>" class="sidebar-link <?php echo $_currentPage==='auto_review.php'?'active':''; ?>" data-tooltip="Xét tuyển tự động">
             <i class="bi bi-robot"></i><span class="link-text"> Xét tuyển tự động</span>
         </a>
-        <a href="/university/admissions/results.php" class="sidebar-link <?php echo $_currentPage==='results.php'?'active':''; ?>" data-tooltip="Kết quả xét tuyển">
+        <a href="<?php echo admModeUrl('/university/admissions/results.php'); ?>" class="sidebar-link <?php echo $_currentPage==='results.php'?'active':''; ?>" data-tooltip="Kết quả xét tuyển">
             <i class="bi bi-trophy-fill"></i><span class="link-text"> Kết quả xét tuyển</span>
         </a>
         <?php endif; ?>
 
         <div class="sidebar-sec">Nhập học</div>
-        <a href="/university/admissions/enrollment.php" class="sidebar-link <?php echo $_currentPage==='enrollment.php'?'active':''; ?>" data-tooltip="Thủ tục nhập học">
+        <a href="<?php echo admModeUrl('/university/admissions/enrollment.php'); ?>" class="sidebar-link <?php echo $_currentPage==='enrollment.php'?'active':''; ?>" data-tooltip="Thủ tục nhập học">
             <i class="bi bi-person-check-fill"></i><span class="link-text"> Thủ tục nhập học</span>
             <?php if($_enrollCount>0): ?><span class="bc"><?php echo $_enrollCount; ?></span><?php endif; ?>
         </a>
         <?php if(hasRole('admissions_manager') || $_SESSION['role']==='admin'): ?>
-        <a href="/university/admissions/auto_assign.php" class="sidebar-link <?php echo $_currentPage==='auto_assign.php'?'active':''; ?>" data-tooltip="Phân lớp tự động">
+        <a href="<?php echo admModeUrl('/university/admissions/auto_assign.php'); ?>" class="sidebar-link <?php echo $_currentPage==='auto_assign.php'?'active':''; ?>" data-tooltip="Phân lớp tự động">
             <i class="bi bi-diagram-3-fill"></i><span class="link-text"> Phân lớp tự động</span>
         </a>
         <?php endif; ?>
 
         <?php if(hasRole('admissions_manager')): ?>
         <div class="sidebar-sec">Quản lý</div>
-        <a href="/university/admissions/rounds.php" class="sidebar-link <?php echo $_currentPage==='rounds.php'?'active':''; ?>" data-tooltip="Đợt tuyển sinh">
+        <a href="<?php echo admModeUrl('/university/admissions/rounds.php'); ?>" class="sidebar-link <?php echo $_currentPage==='rounds.php'?'active':''; ?>" data-tooltip="Đợt tuyển sinh">
             <i class="bi bi-calendar-range-fill"></i><span class="link-text"> Đợt tuyển sinh</span>
         </a>
-        <a href="/university/admissions/methods.php" class="sidebar-link <?php echo $_currentPage==='methods.php'?'active':''; ?>" data-tooltip="Phương thức xét tuyển">
+        <a href="<?php echo admModeUrl('/university/admissions/methods.php'); ?>" class="sidebar-link <?php echo $_currentPage==='methods.php'?'active':''; ?>" data-tooltip="Phương thức xét tuyển">
             <i class="bi bi-list-check"></i><span class="link-text"> Phương thức xét tuyển</span>
         </a>
-        <a href="/university/admissions/news.php" class="sidebar-link <?php echo $_currentPage==='news.php'?'active':''; ?>" data-tooltip="Tin tức tuyển sinh">
+        <a href="<?php echo admModeUrl('/university/admissions/news.php'); ?>" class="sidebar-link <?php echo $_currentPage==='news.php'?'active':''; ?>" data-tooltip="Tin tức tuyển sinh">
             <i class="bi bi-newspaper"></i><span class="link-text"> Tin tức tuyển sinh</span>
         </a>
-        <a href="/university/admissions/reports.php" class="sidebar-link <?php echo $_currentPage==='reports.php'?'active':''; ?>" data-tooltip="Báo cáo thống kê">
+        <a href="<?php echo admModeUrl('/university/admissions/reports.php'); ?>" class="sidebar-link <?php echo $_currentPage==='reports.php'?'active':''; ?>" data-tooltip="Báo cáo thống kê">
             <i class="bi bi-bar-chart-fill"></i><span class="link-text"> Báo cáo thống kê</span>
         </a>
         <?php endif; ?>
 
         <div class="sidebar-divider"></div>
+        <?php if($_canSwitchRole): ?>
+        <a href="/university/switch_role.php" class="sidebar-link text-warning" data-tooltip="Chuyển vai trò">
+            <i class="bi bi-arrow-left-right"></i><span class="link-text"> Chuyển vai trò</span>
+        </a>
+        <?php endif; ?>
         <?php if($_SESSION['role']==='admin'): ?>
         <a href="/university/admin/" class="sidebar-link" data-tooltip="Về Admin chính">
             <i class="bi bi-arrow-left-circle"></i><span class="link-text"> Về Admin chính</span>
@@ -254,12 +271,27 @@ $_enrollCount  = $conn->query("SELECT COUNT(*) as c FROM admission_applications 
             <span class="pt"><?php echo isset($pageTitle)?htmlspecialchars($pageTitle):'Dashboard'; ?></span>
         </div>
         <div class="d-flex align-items-center gap-2">
-            <a href="/university/admissions/applications.php?status=new" class="btn btn-sm btn-outline-warning position-relative">
+            <span class="badge <?php echo $_admModeBadge; ?> d-none d-md-inline-flex align-items-center gap-1 px-3 py-2">
+                <i class="bi <?php echo $_admMode === 'test' ? 'bi-flask' : 'bi-database-check'; ?>"></i>
+                <?php echo htmlspecialchars($_admModeLabel); ?>
+            </span>
+            <div class="btn-group btn-group-sm" role="group" aria-label="Chuyển chế độ dữ liệu">
+                <a class="btn <?php echo $_admMode === 'system' ? 'btn-navy' : 'btn-outline-secondary'; ?>"
+                   href="<?php echo admModeUrl($_SERVER['PHP_SELF'], ['mode' => 'system']); ?>">Thật</a>
+                <a class="btn <?php echo $_admMode === 'test' ? 'btn-warning' : 'btn-outline-secondary'; ?>"
+                   href="<?php echo admModeUrl($_SERVER['PHP_SELF'], ['mode' => 'test']); ?>">Demo</a>
+            </div>
+            <a href="<?php echo admModeUrl('/university/admissions/applications.php', ['status' => 'new']); ?>" class="btn btn-sm btn-outline-warning position-relative">
                 <i class="bi bi-bell"></i>
                 <?php if($_pendingCount>0): ?>
                 <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="font-size:.6rem"><?php echo $_pendingCount; ?></span>
                 <?php endif; ?>
             </a>
+            <?php if($_canSwitchRole): ?>
+            <a href="/university/switch_role.php" class="btn btn-sm btn-outline-secondary d-none d-lg-inline-flex align-items-center gap-1">
+                <i class="bi bi-arrow-left-right"></i><span>Chuyển vai trò</span>
+            </a>
+            <?php endif; ?>
             <span class="text-muted small d-none d-md-inline"><i class="bi bi-person-circle me-1"></i><?php echo htmlspecialchars($_userName); ?></span>
         </div>
     </div>

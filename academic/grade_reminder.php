@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
 require_once 'includes/academic_helpers.php';
@@ -22,7 +22,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($info) {
             $title = 'Nhac nho: Vui long nhap diem day du';
             $content = 'Phong Dao tao nhac ban kiem tra va nhap day du diem cho cac lop HP chua co diem. Han nop diem da qua.';
-            $stmtN = $conn->prepare("INSERT INTO notifications (user_id, title, content) VALUES (?,?,?)");
+            $stmtN = $conn->prepare("INSERT INTO system_notifications (user_id, title, content) VALUES (?,?,?)");
             $stmtN->bind_param('iss', $info['user_id'], $title, $content);
             $stmtN->execute(); $stmtN->close();
             sendAcademicNotification($conn, $userId, 'grade_reminder', $title, $content, null, $teacherId);
@@ -52,7 +52,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $count = 0;
         $title = 'Nhac nho: Vui long nhap diem day du';
         $content = 'Phong Dao tao nhac ban kiem tra va nhap day du diem cho cac lop HP chua co diem.';
-        $stmtN = $conn->prepare("INSERT INTO notifications (user_id, title, content) VALUES (?,?,?)");
+        $stmtN = $conn->prepare("INSERT INTO system_notifications (user_id, title, content) VALUES (?,?,?)");
         foreach ($gvList as $gv) {
             $stmtN->bind_param('iss', $gv['user_id'], $title, $content);
             $stmtN->execute();

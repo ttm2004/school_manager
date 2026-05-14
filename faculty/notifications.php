@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
 require_once 'includes/faculty_helpers.php';
@@ -150,7 +150,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         // Insert notifications
-        $stmtIns = $conn->prepare("INSERT INTO notifications (user_id, title, content, is_read, created_at) VALUES (?, ?, ?, 0, NOW())");
+        $stmtIns = $conn->prepare("INSERT INTO system_notifications (user_id, title, content, is_read, created_at) VALUES (?, ?, ?, 0, NOW())");
         $insertCount = 0;
         foreach ($recipientUserIds as $uid) {
             $stmtIns->bind_param('iss', $uid, $title, $content);
@@ -178,7 +178,7 @@ $perPage = 20;
 
 // Lay lich su thong bao (gui boi user trong khoa)
 $stmtCount = $conn->prepare(
-    "SELECT COUNT(*) AS c FROM notifications n
+    "SELECT COUNT(*) AS c FROM system_notifications n
      JOIN users u ON n.user_id = u.id
      WHERE n.user_id IN (
          SELECT u2.id FROM teachers t JOIN users u2 ON t.user_id = u2.id WHERE t.faculty_id = ?
@@ -196,7 +196,7 @@ $pag = paginate($totalNotifs, $page, $perPage);
 $stmtNotifs = $conn->prepare(
     "SELECT n.id, n.title, n.content, n.is_read, n.created_at,
             u.full_name AS recipient_name
-     FROM notifications n
+     FROM system_notifications n
      JOIN users u ON n.user_id = u.id
      WHERE n.user_id IN (
          SELECT u2.id FROM teachers t JOIN users u2 ON t.user_id = u2.id WHERE t.faculty_id = ?

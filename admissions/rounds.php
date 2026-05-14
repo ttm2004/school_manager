@@ -3,15 +3,20 @@ require_once '../config/database.php';
 require_once '../includes/auth.php';
 requireAnyRole(['admissions_manager']);
 $pageTitle = 'Quản lý Đợt Tuyển sinh';
+$filter_mode = (($_GET['mode'] ?? 'system') === 'test') ? 'test' : 'system';
+$modeLabel = $filter_mode === 'test' ? 'Demo/Test' : 'Dữ liệu thật';
 
-$rounds = $conn->query("SELECT * FROM admission_rounds ORDER BY year DESC");
+$rs = $conn->prepare("SELECT * FROM admission_rounds WHERE data_mode=? ORDER BY year DESC, id DESC");
+$rs->bind_param('s', $filter_mode);
+$rs->execute();
+$rounds = $rs->get_result();
 
 // Edit view
 $editRound = null;
 if (isset($_GET['edit'])) {
     $eid = (int)$_GET['edit'];
-    $es  = $conn->prepare("SELECT * FROM admission_rounds WHERE id=?");
-    $es->bind_param('i', $eid); $es->execute();
+    $es  = $conn->prepare("SELECT * FROM admission_rounds WHERE id=? AND data_mode=?");
+    $es->bind_param('is', $eid, $filter_mode); $es->execute();
     $editRound = $es->get_result()->fetch_assoc(); $es->close();
 }
 
@@ -38,9 +43,9 @@ $flash = getFlash();
 <!-- Form thêm/sửa -->
 <div class="card mb-4">
     <div class="card-header d-flex justify-content-between align-items-center">
-        <span><i class="bi bi-calendar-plus me-2"></i><?php echo $editRound ? 'Chỉnh sửa đợt tuyển sinh' : 'Tạo đợt tuyển sinh mới'; ?></span>
+        <span><i class="bi bi-calendar-plus me-2"></i><?php echo $editRound ? 'Chỉnh sửa đợt tuyển sinh' : 'Tạo đợt tuyển sinh mới'; ?> <span class="badge <?php echo $filter_mode === 'test' ? 'bg-warning text-dark' : 'bg-success'; ?> ms-2"><?php echo $modeLabel; ?></span></span>
         <?php if ($editRound): ?>
-        <a href="rounds.php" class="btn btn-sm btn-outline-light"><i class="bi bi-plus me-1"></i>Tạo mới</a>
+        <a href="rounds.php?mode=<?php echo urlencode($filter_mode); ?>" class="btn btn-sm btn-outline-light"><i class="bi bi-plus me-1"></i>Tạo mới</a>
         <?php endif; ?>
     </div>
     <div class="card-body">
@@ -130,7 +135,7 @@ $flash = getFlash();
                 <i class="bi bi-save me-1"></i><?php echo $editRound ? 'Cập nhật' : 'Tạo đợt tuyển sinh'; ?>
             </button>
             <?php if ($editRound): ?>
-            <a href="rounds.php" class="btn btn-outline-secondary">Hủy</a>
+            <a href="rounds.php?mode=<?php echo urlencode($filter_mode); ?>" class="btn btn-outline-secondary">Hủy</a>
             <?php endif; ?>
         </div>
     </div>
@@ -182,7 +187,7 @@ $flash = getFlash();
                     </td>
                     <td>
                         <div class="d-flex gap-1">
-                            <a href="?edit=<?php echo $r['id']; ?>" class="btn btn-sm btn-outline-primary" title="Sửa"><i class="bi bi-pencil-fill"></i></a>
+                            <a href="?mode=<?php echo urlencode($filter_mode); ?>&edit=<?php echo $r['id']; ?>" class="btn btn-sm btn-outline-primary" title="Sửa"><i class="bi bi-pencil-fill"></i></a>
                             <button class="btn btn-sm btn-outline-danger" onclick="deleteRound(<?php echo $r['id']; ?>, this)" title="Xóa"><i class="bi bi-trash-fill"></i></button>
                         </div>
                     </td>
@@ -200,11 +205,13 @@ $flash = getFlash();
 <script>
 const CSRF    = document.querySelector('meta[name="csrf-token"]')?.content || '';
 const editId  = <?php echo $editRound ? (int)$editRound['id'] : 'null'; ?>;
+const DATA_MODE = <?php echo json_encode($filter_mode); ?>;
 
 function admFetch(data) {
     const fd = new FormData();
     fd.append('_csrf_token', CSRF);
     fd.append('module', 'rounds');
+    fd.append('data_mode', DATA_MODE);
     Object.entries(data).forEach(([k, v]) => { if (v !== null && v !== undefined) fd.append(k, v); });
     return fetch('/university/admissions/api/actions.php', {
         method: 'POST', body: fd, credentials: 'same-origin'
@@ -254,7 +261,7 @@ document.getElementById('btnSaveRound').addEventListener('click', function() {
         this.innerHTML = '<i class="bi bi-save me-1"></i>' + (editId ? 'Cập nhật' : 'Tạo đợt tuyển sinh');
         if (res.success) {
             showToast('success', res.message);
-            setTimeout(() => window.location.href = 'rounds.php', 800);
+            setTimeout(() => window.location.href = 'rounds.php?mode=' + encodeURIComponent(DATA_MODE), 800);
         } else {
             showToast('error', res.message);
         }

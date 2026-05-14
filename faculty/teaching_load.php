@@ -16,7 +16,7 @@ if ($facultyId <= 0 && ($_SESSION['role'] ?? '') !== 'admin') {
 
 // ── Lấy danh sách học kỳ ─────────────────────────────────────
 $semesters = [];
-$stmtSem = $conn->prepare("SELECT id, semester_name, status FROM semesters ORDER BY id DESC");
+$stmtSem = $conn->prepare("SELECT id, semester_name, school_year, status FROM semesters ORDER BY school_year DESC, id DESC");
 $stmtSem->execute();
 $semResult = $stmtSem->get_result();
 while ($row = $semResult->fetch_assoc()) {
@@ -138,7 +138,7 @@ include 'includes/sidebar.php';
                             <?php foreach ($semesters as $sem): ?>
                             <option value="<?php echo (int)$sem['id']; ?>"
                                 <?php echo $selectedSemId === (int)$sem['id'] ? 'selected' : ''; ?>>
-                                <?php echo htmlspecialchars($sem['semester_name']); ?>
+                                <?php echo htmlspecialchars($sem['semester_name'] . ' - ' . ($sem['school_year'] ?? '')); ?>
                                 <?php if ($sem['status'] === 'active'): ?>(Hiện tại)<?php endif; ?>
                             </option>
                             <?php endforeach; ?>

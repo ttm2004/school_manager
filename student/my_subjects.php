@@ -53,7 +53,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'cance
                 throw new RuntimeException('Đã hết thời gian hủy đăng ký học phần.');
             }
 
-            $updReg = $conn->prepare("UPDATE student_subjects SET status='cancelled' WHERE id=? AND student_id=? AND status='registered'");
+            $updReg = $conn->prepare("UPDATE student_subjects SET status='cancelled' WHERE id=? AND student_id=? AND status = 'registered'");
             $updReg->bind_param('ii', $ss_id, $student['id']);
             $updReg->execute();
             if ($updReg->affected_rows <= 0) {
@@ -93,7 +93,8 @@ $stmt = $conn->prepare("
            cs.section_code, cs.schedule_text, cs.schedule_data, cs.day_sessions,
            cs.start_date, cs.end_date, cs.room, cs.tuition_fee,
            s.subject_name, s.credits,
-           sm.semester_name, sm.school_year,
+           sm.id as semester_id, sm.semester_name, sm.school_year,
+           sm.status as semester_status, sm.register_start, sm.register_end,
            u.full_name as teacher_name
     FROM student_subjects ss
     JOIN course_sections cs ON ss.course_section_id = cs.id
@@ -108,8 +109,6 @@ $stmt->bind_param('i', $student['id']);
 $stmt->execute();
 $subjects = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 $stmt->close();
-
-$regOpen = $conn->query("SELECT id FROM semesters WHERE status='open' AND register_start <= NOW() AND register_end >= NOW() LIMIT 1")->fetch_assoc();
 
 // Seed lịch học cho các section chưa có day_sessions/schedule_data
 $colCheck = $conn->query("SHOW COLUMNS FROM course_sections LIKE 'schedule_data'");
@@ -189,7 +188,7 @@ if ($allSections) {
                             </thead>
                             <tbody>
                                 <?php
-                                $statusMap = ['registered'=>['Đã đăng ký','primary'],'cancelled'=>['Đã hủy','secondary'],'completed'=>['Hoàn thành','success']];
+                                $statusMap = ['registered'=>['Đã đăng ký','primary'],'auto_enrolled'=>['Tự động HK1','success'],'cancelled'=>['Đã hủy','secondary'],'completed'=>['Hoàn thành','success']];
                                 $dayNames    = [2=>'T2',3=>'T3',4=>'T4',5=>'T5',6=>'T6',7=>'T7',8=>'CN'];
                                 $sessionColors = ['sang'=>'#f57c00','chieu'=>'#1976d2','toi'=>'#7b1fa2'];
                                 $sessionLabels = ['sang'=>'Sáng','chieu'=>'Chiều','toi'=>'Tối'];
@@ -206,7 +205,7 @@ if ($allSections) {
 
                                 $totalCredits = 0; $totalFee = 0; $totalCount = 0;
                                 if (!empty($subjects)): $idx=1; foreach ($subjects as $sub):
-                                if ($sub['reg_status'] === 'registered') {
+                                if (in_array($sub['reg_status'], ['registered','auto_enrolled'], true)) {
                                     $totalCredits += $sub['credits'];
                                     $totalFee     += $sub['tuition_fee'];
                                     $totalCount++;
@@ -263,7 +262,14 @@ if ($allSections) {
                                     <td class="small text-success"><?php echo number_format($sub['tuition_fee'],0,',','.'); ?>đ</td>
                                     <td><span class="badge bg-<?php echo $s[1]; ?>"><?php echo $s[0]; ?></span></td>
                                     <td>
-                                        <?php if ($sub['reg_status'] === 'registered' && $regOpen): ?>
+                                        <?php
+                                            $rowRegOpen = $sub['semester_status'] === 'open'
+                                                && !empty($sub['register_start'])
+                                                && !empty($sub['register_end'])
+                                                && strtotime($sub['register_start']) <= time()
+                                                && strtotime($sub['register_end']) >= time();
+                                        ?>
+                                        <?php if ($sub['reg_status'] === 'registered' && $rowRegOpen): ?>
                                         <form method="POST" onsubmit="return confirm('Hủy đăng ký môn này?')">
                                             <?php echo csrfField(); ?>
                                             <input type="hidden" name="action" value="cancel">
@@ -315,3 +321,4 @@ if ($allSections) {
 <?php include_once __DIR__ . "/../includes/analytics_widget.php"; ?>
 </body>
 </html>
+

@@ -3,6 +3,14 @@ require_once __DIR__ . '/../config.php';
 adm_require_auth();
 header('Content-Type: application/json');
 
+// Verify CSRF
+$csrfToken = $_POST['_csrf_token'] ?? ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? '');
+if (!empty($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!verifyCSRFToken($csrfToken)) {
+        adm_json(false, 'Yêu cầu không hợp lệ (CSRF).');
+    }
+}
+
 $data   = json_decode(file_get_contents('php://input'), true);
 $id     = intval($data['id'] ?? 0);
 $action = $data['action'] ?? '';

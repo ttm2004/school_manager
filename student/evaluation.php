@@ -28,7 +28,6 @@ $conn->query("
         UNIQUE KEY unique_extra (student_id, course_section_id, period_id)
     )
 ");
-
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'submit_evaluation') {
     $period_id  = intval($_POST['period_id'] ?? 0);
     $section_id = intval($_POST['course_section_id'] ?? 0);
@@ -44,7 +43,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'submi
         $error = 'Đợt đánh giá đã đóng hoặc không hợp lệ.';
     } else {
         $chkSec = $conn->prepare("SELECT ss.id FROM student_subjects ss
-            WHERE ss.student_id=? AND ss.course_section_id=? AND ss.status='registered'");
+            WHERE ss.student_id=? AND ss.course_section_id=? AND ss.status IN ('registered','auto_enrolled')");
         $chkSec->bind_param('ii', $student['id'], $section_id);
         $chkSec->execute();
         $validSec = $chkSec->get_result()->fetch_assoc();
@@ -55,6 +54,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'submi
         } else {
             $qRes = $conn->query("SELECT * FROM evaluation_questions WHERE status='show' ORDER BY id ASC");
             $allQuestions = $qRes->fetch_all(MYSQLI_ASSOC);
+            $studentDataMode = (($student['data_mode'] ?? 'system') === 'test') ? 'test' : 'system';
+            $demoBatchId = (string)($student['demo_batch_id'] ?? '');
             $conn->begin_transaction();
             try {
                 foreach ($allQuestions as $q) {
@@ -70,9 +71,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'submi
                         $comment = trim($_POST['comment_' . $qid] ?? '') ?: null;
                     }
                     $ins = $conn->prepare("INSERT INTO student_evaluations
-                        (student_id, course_section_id, teacher_id, period_id, question_id, rating, comment)
-                        VALUES (?,?,?,?,?,?,?)");
-                    $ins->bind_param('iiiiids', $student['id'], $section_id, $teacher_id, $period_id, $qid, $rating, $comment);
+                        (student_id, course_section_id, teacher_id, period_id, question_id, rating, comment, data_mode, demo_batch_id)
+                        VALUES (?,?,?,?,?,?,?,?,?)");
+                    $ins->bind_param('iiiiidsss', $student['id'], $section_id, $teacher_id, $period_id, $qid, $rating, $comment, $studentDataMode, $demoBatchId);
                     if (!$ins->execute()) {
                         if ($conn->errno == 1062) throw new Exception('Bạn đã đánh giá lớp học phần này rồi.');
                         throw new Exception('Lỗi lưu dữ liệu: ' . $conn->error);
@@ -85,16 +86,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'submi
                 if ($extraComment !== '') {
                     $insExtra = $conn->prepare("
                         INSERT INTO student_extra_comments
-                            (student_id, course_section_id, teacher_id, period_id, comment)
-                        VALUES (?, ?, ?, ?, ?)
+                            (student_id, course_section_id, teacher_id, period_id, comment, data_mode, demo_batch_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                         ON DUPLICATE KEY UPDATE
                             comment = VALUES(comment),
                             teacher_id = VALUES(teacher_id),
+                            data_mode = VALUES(data_mode),
+                            demo_batch_id = VALUES(demo_batch_id),
                             updated_at = CURRENT_TIMESTAMP
                     ");
                     if ($insExtra) {
-                        $insExtra->bind_param('iiiis',
-                            $student['id'], $section_id, $teacher_id, $period_id, $extraComment);
+                        $insExtra->bind_param('iiiisss',
+                            $student['id'], $section_id, $teacher_id, $period_id, $extraComment, $studentDataMode, $demoBatchId);
                         $insExtra->execute();
                         $insExtra->close();
                     }
@@ -150,7 +153,7 @@ foreach ($openPeriodList as $period) {
         JOIN teachers t ON cs.teacher_id = t.id
         JOIN users u ON t.user_id = u.id
         LEFT JOIN faculties f ON t.faculty_id = f.id
-        WHERE ss.student_id = ? AND ss.status = 'registered'
+        WHERE ss.student_id = ? AND ss.status IN ('registered','auto_enrolled')
           AND cs.semester_id = ?
         ORDER BY s.subject_name
     ");
@@ -704,3 +707,4 @@ document.getElementById('evalForm')?.addEventListener('submit', function(e) {
 <?php include_once __DIR__ . "/../includes/analytics_widget.php"; ?>
 </body>
 </html>
+

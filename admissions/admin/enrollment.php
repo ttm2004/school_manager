@@ -1,6 +1,7 @@
 <?php
 require_once '../../config/database.php';
 require_once '../../includes/auth.php';
+require_once '../../app/Services/AdmissionsEnrollmentService.php';
 requireAnyRole(['admissions_manager', 'admissions_staff']);
 $pageTitle = 'Thu tuc Nhap hoc';
 include __DIR__ . '/../includes/header.php';
@@ -81,8 +82,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $student_code = trim($_POST['student_code'] ?? '');
             $username    = trim($_POST['username'] ?? '');
             $password    = trim($_POST['password'] ?? '');
+            $autoEnrollMode = ($_POST['auto_enroll_mode'] ?? 'system') === 'test' ? 'test' : 'system';
 
-            if (!$app_id || !$class_id || !$student_code || !$username || !$password) {
+            if (!$app_id || !$class_id || !$student_code) {
                 $error = 'Vui long dien day du thong tin.';
             } else {
                 // Lay thong tin ho so
@@ -93,6 +95,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!$app) {
                     $error = 'Khong tim thay ho so hoac ho so chua duoc xac nhan nhap hoc.';
                 } else {
+                    $classContext = AdmissionsEnrollmentService::getClassAcademicContext($conn, $class_id);
+                    if (!$classContext) {
+                        $error = 'Lop hanh chinh khong hop le.';
+                    } else {
+                    $enrollmentYear = (int)($classContext['enrollment_year'] ?: date('Y', strtotime($app['created_at'] ?? 'now')));
+                    if ($enrollmentYear >= 2000 && preg_match('/^\d{4}/', $student_code)) {
+                        $student_code = $enrollmentYear . substr($student_code, 4);
+                    }
+                    $username = strtolower($student_code);
+                    $password = $student_code;
+
                     // Kiem tra username trung
                     $chk = $conn->prepare("SELECT id FROM users WHERE username=?");
                     $chk->bind_param('s', $username); $chk->execute();
@@ -109,14 +122,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $userId = $conn->insert_id;
                             $uStmt->close();
 
-                            // Tao student record
-                            $sStmt = $conn->prepare("INSERT INTO students (user_id, student_code, class_id, address, birthday, gender) VALUES (?,?,?,?,?,?)");
-                            $birthday = $app['birthday'] ?? null;
-                            $gender   = $app['gender'] ?? '';
-                            $address  = $app['address'] ?? '';
-                            $sStmt->bind_param('isisss', $userId, $student_code, $class_id, $address, $birthday, $gender);
-                            if (!$sStmt->execute()) throw new Exception('Loi tao ho so sinh vien: ' . $conn->error);
-                            $sStmt->close();
+                            $studentId = AdmissionsEnrollmentService::createStudentProfile($conn, $userId, $student_code, $class_id, $app, $classContext, $autoEnrollMode);
+                            AdmissionsEnrollmentService::notifyFinanceNewEnrollment($conn, $studentId, $student_code, $app['full_name']);
 
                             $conn->commit();
                             $success = "Cap tai khoan thanh cong! MSSV: <strong>$student_code</strong> | TK: <strong>$username</strong> | MK: <strong>$password</strong>";
@@ -126,6 +133,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         }
                     }
                     $chk->close();
+                    }
                 }
             }
         }
@@ -133,13 +141,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // Stats
-$approvedCount = $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='approved'")->fetch_assoc()['c'] ?? 0;
-$enrolledCount = $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='enrolled'")->fetch_assoc()['c'] ?? 0;
+$filter_mode = trim($_GET['mode'] ?? 'system');
+if (!in_array($filter_mode, ['system','test'], true)) $filter_mode = 'system';
+$modeSql = $filter_mode === 'all' ? '1=1' : "data_mode='" . $conn->real_escape_string($filter_mode) . "'";
+$approvedCount = $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='approved' AND $modeSql")->fetch_assoc()['c'] ?? 0;
+$enrolledCount = $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='enrolled' AND $modeSql")->fetch_assoc()['c'] ?? 0;
 // Dem so sinh vien da co tai khoan (da cap)
 $accountedCount = $conn->query("
     SELECT COUNT(*) as c FROM admission_applications aa
     JOIN users u ON aa.email = u.email AND u.role='student'
-    WHERE aa.status='enrolled'
+    WHERE aa.status='enrolled' AND $modeSql
 ")->fetch_assoc()['c'] ?? 0;
 
 $tab          = $_GET['tab'] ?? 'approved';
@@ -150,6 +161,7 @@ $perPage = 15; $page = max(1, intval($_GET['page'] ?? 1)); $offset = ($page-1)*$
 $statusFilter = $tab === 'enrolled' ? 'enrolled' : 'approved';
 $where = ["aa.status = '$statusFilter'"];
 $params = []; $types = '';
+if ($filter_mode !== 'all') { $where[] = 'aa.data_mode=?'; $params[] = $filter_mode; $types .= 's'; }
 if ($filter_major)  { $where[] = 'aa.major_id=?'; $params[] = $filter_major; $types .= 'i'; }
 if ($filter_search) { $where[] = '(aa.full_name LIKE ? OR aa.email LIKE ? OR aa.citizen_id LIKE ?)'; $like = "%$filter_search%"; $params = array_merge($params, [$like,$like,$like]); $types .= 'sss'; }
 $whereSQL = 'WHERE ' . implode(' AND ', $where);
@@ -171,7 +183,7 @@ $stmt = $conn->prepare($dSQL); $stmt->bind_param($allT, ...$allP); $stmt->execut
 $applications = $stmt->get_result(); $stmt->close();
 
 $majors  = $conn->query("SELECT id, major_name FROM majors ORDER BY major_name");
-$classes = $conn->query("SELECT c.id, c.class_name, c.class_code, c.school_year, m.major_name FROM classes c LEFT JOIN majors m ON c.major_id=m.id ORDER BY c.school_year DESC, c.class_name");
+$classes = $conn->query("SELECT c.id, c.class_name, c.class_code, c.school_year, COALESCE(c.enrollment_year, tc.enrollment_year) AS enrollment_year, m.major_name FROM classes c LEFT JOIN majors m ON c.major_id=m.id LEFT JOIN training_cohorts tc ON c.cohort_id=tc.id ORDER BY c.school_year DESC, c.class_name");
 ?>
 
 <?php if ($success): ?><div class="alert alert-success auto-dismiss alert-dismissible fade show"><i class="bi bi-check-circle-fill me-2"></i><?php echo $success; ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div><?php endif; ?>
@@ -210,13 +222,13 @@ $classes = $conn->query("SELECT c.id, c.class_name, c.class_code, c.school_year,
     <div class="card-header p-0">
         <ul class="nav nav-tabs border-0">
             <li class="nav-item">
-                <a class="nav-link <?php echo $tab!='enrolled'?'active':''; ?> rounded-0 border-0 px-4 py-3" href="?tab=approved">
+                <a class="nav-link <?php echo $tab!='enrolled'?'active':''; ?> rounded-0 border-0 px-4 py-3" href="?tab=approved&mode=<?php echo urlencode($filter_mode); ?>">
                     <i class="bi bi-clock-history me-1"></i>Cho nhap hoc
                     <span class="badge bg-success ms-1"><?php echo $approvedCount; ?></span>
                 </a>
             </li>
             <li class="nav-item">
-                <a class="nav-link <?php echo $tab=='enrolled'?'active':''; ?> rounded-0 border-0 px-4 py-3" href="?tab=enrolled">
+                <a class="nav-link <?php echo $tab=='enrolled'?'active':''; ?> rounded-0 border-0 px-4 py-3" href="?tab=enrolled&mode=<?php echo urlencode($filter_mode); ?>">
                     <i class="bi bi-person-check me-1"></i>Da nhap hoc — Cap tai khoan
                     <span class="badge bg-navy ms-1"><?php echo $enrolledCount; ?></span>
                     <?php if ($enrolledCount - $accountedCount > 0): ?>
@@ -231,15 +243,19 @@ $classes = $conn->query("SELECT c.id, c.class_name, c.class_code, c.school_year,
     <div class="card-body border-bottom py-2">
         <form method="GET" class="d-flex gap-2 flex-wrap align-items-end">
             <input type="hidden" name="tab" value="<?php echo htmlspecialchars($tab); ?>">
+            <select name="mode" class="form-select form-select-sm" style="width:150px">
+                <option value="system" <?php echo $filter_mode==='system'?'selected':''; ?>>Dữ liệu thật</option>
+                <option value="test" <?php echo $filter_mode==='test'?'selected':''; ?>>Test / Demo</option>
+                            </select>
             <input type="text" name="q" class="form-control form-control-sm" placeholder="Tim ten, email, CCCD..." value="<?php echo htmlspecialchars($filter_search); ?>" style="width:220px">
             <select name="major_id" class="form-select form-select-sm" style="width:200px">
-                <option value="">Tat ca nganh</option>
+                <option value="">Tất cả nganh</option>
                 <?php if ($majors): while ($mj=$majors->fetch_assoc()): ?>
                 <option value="<?php echo $mj['id']; ?>" <?php echo $filter_major==$mj['id']?'selected':''; ?>><?php echo htmlspecialchars($mj['major_name']); ?></option>
                 <?php endwhile; endif; ?>
             </select>
             <button type="submit" class="btn btn-sm btn-navy"><i class="bi bi-search me-1"></i>Loc</button>
-            <?php if ($filter_major || $filter_search): ?>
+            <?php if ($filter_major || $filter_search || $filter_mode !== 'system'): ?>
             <a href="?tab=<?php echo $tab; ?>" class="btn btn-sm btn-outline-secondary"><i class="bi bi-x me-1"></i>Xoa loc</a>
             <?php endif; ?>
         </form>
@@ -254,7 +270,7 @@ $classes = $conn->query("SELECT c.id, c.class_name, c.class_code, c.school_year,
                     <i class="bi bi-person-check-fill me-1"></i>Xac nhan nhap hoc (da chon)
                 </button>
                 <?php endif; ?>
-                <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" onclick="toggleAll()">Chon tat ca</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" onclick="toggleAll()">Chon Tất cả</button>
             </div>
         <?php endif; ?>
 
@@ -391,7 +407,7 @@ $classes = $conn->query("SELECT c.id, c.class_name, c.class_code, c.school_year,
                                 <option value="">-- Chon lop --</option>
                                 <?php
                                 if ($classes) { $classes->data_seek(0); while ($c=$classes->fetch_assoc()): ?>
-                                <option value="<?php echo $c['id']; ?>" data-major="<?php echo $c['major_name']; ?>">
+                                <option value="<?php echo $c['id']; ?>" data-major="<?php echo $c['major_name']; ?>" data-year="<?php echo (int)($c['enrollment_year'] ?: date('Y')); ?>" data-code="<?php echo htmlspecialchars($c['class_code'] ?? ''); ?>">
                                     <?php echo htmlspecialchars($c['class_name'].' ('.$c['school_year'].')'); ?> — <?php echo htmlspecialchars($c['major_name']); ?>
                                 </option>
                                 <?php endwhile; } ?>
@@ -399,17 +415,36 @@ $classes = $conn->query("SELECT c.id, c.class_name, c.class_code, c.school_year,
                         </div>
                         <div class="col-md-6">
                             <label class="form-label fw-semibold">Ten dang nhap <span class="text-danger">*</span></label>
-                            <input type="text" name="username" id="accUsername" class="form-control" required placeholder="VD: sv2024001234">
+                            <input type="text" name="username" id="accUsername" class="form-control" required readonly placeholder="MSSV">
                         </div>
                         <div class="col-md-6">
                             <label class="form-label fw-semibold">Mat khau <span class="text-danger">*</span></label>
                             <div class="input-group">
-                                <input type="text" name="password" id="accPassword" class="form-control" required>
-                                <button type="button" class="btn btn-outline-secondary" onclick="genPassword()">
+                                <input type="text" name="password" id="accPassword" class="form-control" required readonly>
+                                <button type="button" class="btn btn-outline-secondary" onclick="genPassword()" title="Mat khau mac dinh bang MSSV">
                                     <i class="bi bi-arrow-repeat"></i>
                                 </button>
                             </div>
-                            <div class="form-text">Ghi lai mat khau de thong bao cho sinh vien.</div>
+                            <div class="form-text">Mat khau mac dinh bang MSSV.</div>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-semibold">Che do dang ky HK1 tu dong</label>
+                            <div class="row g-2">
+                                <div class="col-md-6">
+                                    <label class="form-check border rounded p-2 h-100">
+                                        <input class="form-check-input" type="radio" name="auto_enroll_mode" value="system" checked>
+                                        <span class="form-check-label fw-semibold">Theo Dữ liệu thật</span>
+                                        <div class="small text-muted">Tim HK1 dung khoa/nam hoc.</div>
+                                    </label>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-check border rounded p-2 h-100">
+                                        <input class="form-check-input" type="radio" name="auto_enroll_mode" value="test">
+                                        <span class="form-check-label fw-semibold">Theo hoc ky Test</span>
+                                        <div class="small text-muted">Dung hoc ky Test de demo nhanh.</div>
+                                    </label>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -450,27 +485,32 @@ function openAccountModal(data) {
     document.getElementById('accStudentInfo').innerHTML =
         `<i class="bi bi-person-fill me-2"></i><strong>${data.name}</strong> &mdash; ${data.email} &mdash; Nganh: ${data.major}`;
 
-    // Auto-gen MSSV va username
+    // Auto-gen MSSV, username va mat khau mac dinh theo MSSV.
     genStudentCode();
-    const code = document.getElementById('accStudentCode').value;
-    document.getElementById('accUsername').value = 'sv' + code.toLowerCase().replace(/[^a-z0-9]/g,'');
     genPassword();
 
     new bootstrap.Modal(document.getElementById('accountModal')).show();
 }
 
 function genStudentCode() {
-    const year = new Date().getFullYear();
+    const classSelect = document.getElementById('accClassId');
+    const selected = classSelect?.selectedOptions?.[0];
+    const year = selected?.dataset?.year || new Date().getFullYear();
+    const classCode = selected?.dataset?.code || '';
+    const classDigits = classCode.replace(/\D/g, '').slice(-2);
     const rand = String(Math.floor(Math.random() * 9000) + 1000);
-    document.getElementById('accStudentCode').value = year + rand;
-    document.getElementById('accUsername').value = 'sv' + year + rand;
+    const code = year + classDigits + rand;
+    document.getElementById('accStudentCode').value = code;
+    document.getElementById('accUsername').value = code.toLowerCase();
+    document.getElementById('accPassword').value = code;
 }
 
 function genPassword() {
-    const chars = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789@#';
-    let pw = '';
-    for (let i = 0; i < 10; i++) pw += chars[Math.floor(Math.random() * chars.length)];
-    document.getElementById('accPassword').value = pw;
+    const code = document.getElementById('accStudentCode').value.trim();
+    document.getElementById('accPassword').value = code;
+    document.getElementById('accUsername').value = code.toLowerCase();
 }
+document.getElementById('accClassId')?.addEventListener('change', genStudentCode);
+document.getElementById('accStudentCode')?.addEventListener('input', genPassword);
 </script>
 <?php include __DIR__ . '/includes/footer.php'; ?>

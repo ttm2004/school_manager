@@ -25,7 +25,7 @@ $courseCount->execute();
 $courseCount = $courseCount->get_result()->fetch_assoc()['c'];
 
 // Số sinh viên đang dạy
-$stuCount = $conn->prepare("SELECT COUNT(DISTINCT ss.student_id) as c FROM student_subjects ss JOIN course_sections cs ON ss.course_section_id=cs.id WHERE cs.teacher_id=? AND ss.status='registered'");
+$stuCount = $conn->prepare("SELECT COUNT(DISTINCT ss.student_id) as c FROM student_subjects ss JOIN course_sections cs ON ss.course_section_id=cs.id WHERE cs.teacher_id=? AND ss.status IN ('registered','auto_enrolled')");
 $stuCount->bind_param('i', $teacher['id']);
 $stuCount->execute();
 $stuCount = $stuCount->get_result()->fetch_assoc()['c'];
@@ -176,3 +176,4 @@ $openGradeSections = getTeacherOpenGradeSections($conn, (int)$teacher['id']);
 <?php include_once __DIR__ . "/../includes/analytics_widget.php"; ?>
 </body>
 </html>
+

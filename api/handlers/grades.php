@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 /** API: /api/grades */
 requireApiAuth();
 require_once __DIR__ . '/../../includes/grade_windows.php';
@@ -17,6 +17,23 @@ function calcGrade(float $p, float $m, float $f): array {
         default       => 'F',
     };
     return ['total_score' => $total, 'letter_grade' => $letter];
+}
+
+function gradeDemoContext(mysqli $conn, int $studentSubjectId): array {
+    $stmt = $conn->prepare("
+        SELECT ss.data_mode, ss.demo_batch_id
+        FROM student_subjects ss
+        WHERE ss.id = ?
+        LIMIT 1
+    ");
+    $stmt->bind_param('i', $studentSubjectId);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc() ?: [];
+    $stmt->close();
+    return [
+        'data_mode' => (($row['data_mode'] ?? 'system') === 'test') ? 'test' : 'system',
+        'demo_batch_id' => (string)($row['demo_batch_id'] ?? ''),
+    ];
 }
 
 // GET /api/grades?section_id=X
@@ -42,7 +59,7 @@ if ($method === 'GET' && !$action) {
              JOIN students st ON ss.student_id=st.id
              JOIN users u ON st.user_id=u.id
              LEFT JOIN grades g ON g.student_subject_id=ss.id
-             WHERE ss.course_section_id=? AND ss.status='registered'
+             WHERE ss.course_section_id=? AND ss.status IN ('registered','auto_enrolled')
              ORDER BY u.full_name"
         );
         $stmt->bind_param('i', $sectionId);
@@ -67,7 +84,7 @@ if ($method === 'GET' && !$action) {
              JOIN subjects s ON cs.subject_id=s.id
              JOIN semesters sm ON cs.semester_id=sm.id
              LEFT JOIN grades g ON g.student_subject_id=ss.id
-             WHERE ss.student_id=? AND ss.status='registered'
+             WHERE ss.student_id=? AND ss.status IN ('registered','auto_enrolled')
              ORDER BY sm.id DESC, s.subject_name"
         );
         $stmt->bind_param('i', $studentId);
@@ -134,17 +151,19 @@ if ($method === 'POST' && !$action) {
     $chk->close();
 
     if ($exists) {
+        $demoContext = gradeDemoContext($conn, $ssId);
         $stmt = $conn->prepare(
             "UPDATE grades SET process_score=?, midterm_score=?, final_score=?,
-             total_score=?, letter_grade=?, note=? WHERE student_subject_id=?"
+             total_score=?, letter_grade=?, note=?, data_mode=?, demo_batch_id=? WHERE student_subject_id=?"
         );
-        $stmt->bind_param('ddddssi', $process,$midterm,$final,$total,$letter,$note,$ssId);
+        $stmt->bind_param('ddddssssi', $process,$midterm,$final,$total,$letter,$note,$demoContext['data_mode'],$demoContext['demo_batch_id'],$ssId);
     } else {
+        $demoContext = gradeDemoContext($conn, $ssId);
         $stmt = $conn->prepare(
             "INSERT INTO grades (student_subject_id, process_score, midterm_score, final_score,
-             total_score, letter_grade, note) VALUES (?,?,?,?,?,?,?)"
+             total_score, letter_grade, note, data_mode, demo_batch_id) VALUES (?,?,?,?,?,?,?,?,?)"
         );
-        $stmt->bind_param('iddddss', $ssId,$process,$midterm,$final,$total,$letter,$note);
+        $stmt->bind_param('iddddssss', $ssId,$process,$midterm,$final,$total,$letter,$note,$demoContext['data_mode'],$demoContext['demo_batch_id']);
     }
 
     if ($stmt->execute()) {
@@ -201,11 +220,13 @@ if ($method === 'POST' && $action === 'batch') {
         $exists = $chk->get_result()->fetch_assoc(); $chk->close();
 
         if ($exists) {
-            $stmt = $conn->prepare("UPDATE grades SET process_score=?,midterm_score=?,final_score=?,total_score=?,letter_grade=?,note=? WHERE student_subject_id=?");
-            $stmt->bind_param('ddddssi', $process,$midterm,$final,$total,$letter,$note,$ssId);
+            $demoContext = gradeDemoContext($conn, $ssId);
+            $stmt = $conn->prepare("UPDATE grades SET process_score=?,midterm_score=?,final_score=?,total_score=?,letter_grade=?,note=?,data_mode=?,demo_batch_id=? WHERE student_subject_id=?");
+            $stmt->bind_param('ddddssssi', $process,$midterm,$final,$total,$letter,$note,$demoContext['data_mode'],$demoContext['demo_batch_id'],$ssId);
         } else {
-            $stmt = $conn->prepare("INSERT INTO grades (student_subject_id,process_score,midterm_score,final_score,total_score,letter_grade,note) VALUES (?,?,?,?,?,?,?)");
-            $stmt->bind_param('iddddss', $ssId,$process,$midterm,$final,$total,$letter,$note);
+            $demoContext = gradeDemoContext($conn, $ssId);
+            $stmt = $conn->prepare("INSERT INTO grades (student_subject_id,process_score,midterm_score,final_score,total_score,letter_grade,note,data_mode,demo_batch_id) VALUES (?,?,?,?,?,?,?,?,?)");
+            $stmt->bind_param('iddddssss', $ssId,$process,$midterm,$final,$total,$letter,$note,$demoContext['data_mode'],$demoContext['demo_batch_id']);
         }
         if ($stmt->execute()) $saved++;
         else $errors[] = "Error for ss_id=$ssId: " . $conn->error;
@@ -214,3 +235,4 @@ if ($method === 'POST' && $action === 'batch') {
 
     apiOk(['saved' => $saved, 'errors' => $errors], "Đã lưu $saved điểm");
 }
+

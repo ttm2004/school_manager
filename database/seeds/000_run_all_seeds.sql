@@ -39,6 +39,10 @@ SOURCE 006_exam_schedules_notifications.sql;
 -- Seed 007: Đánh giá + Học phí
 SOURCE 007_evaluation_tuition.sql;
 
+-- Seed 008: Thêm giảng viên mẫu theo ngành
+-- Chạy bằng CLI sau file SQL này:
+-- php database/seeds/008_more_teachers_by_major.php
+
 SET foreign_key_checks = 1;
 
 -- ── Kiểm tra tổng quan ────────────────────────────────────────

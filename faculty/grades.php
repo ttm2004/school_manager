@@ -18,7 +18,7 @@ $flash = getFlash();
 
 // Lay danh sach hoc ky
 $semesters = [];
-$stmtSem = $conn->prepare("SELECT id, semester_name, status FROM semesters ORDER BY id DESC");
+$stmtSem = $conn->prepare("SELECT id, semester_name, school_year, status FROM semesters ORDER BY school_year DESC, id DESC");
 $stmtSem->execute();
 $semesters = $stmtSem->get_result()->fetch_all(MYSQLI_ASSOC);
 $stmtSem->close();
@@ -166,7 +166,7 @@ include 'includes/sidebar.php';
                             <?php foreach ($semesters as $sem): ?>
                             <option value="<?php echo (int)$sem['id']; ?>"
                                 <?php echo $selectedSemId === (int)$sem['id'] ? 'selected' : ''; ?>>
-                                <?php echo htmlspecialchars($sem['semester_name']); ?>
+                                <?php echo htmlspecialchars($sem['semester_name'] . ' - ' . ($sem['school_year'] ?? '')); ?>
                                 <?php if ($sem['status'] === 'active'): ?>(Hien tai)<?php endif; ?>
                             </option>
                             <?php endforeach; ?>

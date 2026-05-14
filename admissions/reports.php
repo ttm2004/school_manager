@@ -7,6 +7,14 @@ include __DIR__ . '/includes/header.php';
 
 $from = $_GET['from'] ?? date('Y-m-01');
 $to   = $_GET['to']   ?? date('Y-m-d');
+$filter_mode = trim($_GET['mode'] ?? 'system');
+if (!in_array($filter_mode, ['system','test'], true)) $filter_mode = 'system';
+$modeSql = $filter_mode === 'all' ? '1=1' : "data_mode='" . $conn->real_escape_string($filter_mode) . "'";
+$modeJoinSql = $filter_mode === 'all' ? '1=1' : "aa.data_mode='" . $conn->real_escape_string($filter_mode) . "'";
+
+// Validate date format để tránh SQL injection
+if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $from)) $from = date('Y-m-01');
+if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $to))   $to   = date('Y-m-d');
 
 // Overview
 $overview = $conn->query("
@@ -18,7 +26,7 @@ $overview = $conn->query("
         SUM(status='rejected') as rejected_count,
         SUM(status='enrolled') as enrolled_count
     FROM admission_applications
-    WHERE DATE(created_at) BETWEEN '$from' AND '$to'
+    WHERE DATE(created_at) BETWEEN '$from' AND '$to' AND $modeSql
 ")->fetch_assoc();
 
 // By major
@@ -31,7 +39,7 @@ $byMajor = $conn->query("
         MAX(aa.math_score + aa.literature_score + aa.english_score) as max_score,
         MIN(aa.math_score + aa.literature_score + aa.english_score) as min_score
     FROM majors m
-    LEFT JOIN admission_applications aa ON aa.major_id = m.id AND DATE(aa.created_at) BETWEEN '$from' AND '$to'
+    LEFT JOIN admission_applications aa ON aa.major_id = m.id AND DATE(aa.created_at) BETWEEN '$from' AND '$to' AND $modeJoinSql
     GROUP BY m.id ORDER BY total DESC
 ");
 
@@ -40,7 +48,7 @@ $byMethod = $conn->query("
     SELECT am.method_name, COUNT(aa.id) as total,
         SUM(aa.status='approved') as approved
     FROM admission_methods am
-    LEFT JOIN admission_applications aa ON aa.method_id = am.id AND DATE(aa.created_at) BETWEEN '$from' AND '$to'
+    LEFT JOIN admission_applications aa ON aa.method_id = am.id AND DATE(aa.created_at) BETWEEN '$from' AND '$to' AND $modeJoinSql
     GROUP BY am.id ORDER BY total DESC
 ");
 
@@ -48,7 +56,7 @@ $byMethod = $conn->query("
 $daily = $conn->query("
     SELECT DATE(created_at) as d, COUNT(*) as cnt
     FROM admission_applications
-    WHERE DATE(created_at) BETWEEN '$from' AND '$to'
+    WHERE DATE(created_at) BETWEEN '$from' AND '$to' AND $modeSql
     GROUP BY DATE(created_at) ORDER BY d
 ");
 $dLabels = $dData = [];
@@ -59,6 +67,13 @@ while ($r = $daily->fetch_assoc()) { $dLabels[] = date('d/m', strtotime($r['d'])
 <div class="card mb-4">
     <div class="card-body py-3">
         <form method="GET" class="d-flex gap-3 align-items-end flex-wrap">
+            <div>
+                <label class="form-label small fw-semibold mb-1">Luồng</label>
+                <select name="mode" class="form-select form-select-sm">
+                    <option value="system" <?php echo $filter_mode==='system'?'selected':''; ?>>Hệ thống thật</option>
+                    <option value="test" <?php echo $filter_mode==='test'?'selected':''; ?>>Test / Demo</option>
+                                    </select>
+            </div>
             <div>
                 <label class="form-label small fw-semibold mb-1">Từ ngày</label>
                 <input type="date" name="from" class="form-control form-control-sm" value="<?php echo $from; ?>">

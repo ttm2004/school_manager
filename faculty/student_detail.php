@@ -55,10 +55,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exit();
         }
 
+        $stmtMode = $conn->prepare("SELECT data_mode, demo_batch_id FROM students WHERE id = ? LIMIT 1");
+        $stmtMode->bind_param('i', $studentId);
+        $stmtMode->execute();
+        $demoContext = $stmtMode->get_result()->fetch_assoc() ?: [];
+        $stmtMode->close();
+        $studentDataMode = (($demoContext['data_mode'] ?? 'system') === 'test') ? 'test' : 'system';
+        $demoBatchId = (string)($demoContext['demo_batch_id'] ?? '');
+
         $stmtWarn = $conn->prepare(
-            "INSERT INTO student_warnings (student_id, faculty_id, warning_type, note, created_by) VALUES (?, ?, ?, ?, ?)"
+            "INSERT INTO student_warnings (student_id, faculty_id, warning_type, note, data_mode, demo_batch_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)"
         );
-        $stmtWarn->bind_param('iissi', $studentId, $facultyId, $warningType, $note, $userId);
+        $stmtWarn->bind_param('iissssi', $studentId, $facultyId, $warningType, $note, $studentDataMode, $demoBatchId, $userId);
         $stmtWarn->execute();
         $newId = (int)$conn->insert_id;
         $stmtWarn->close();
@@ -297,7 +305,7 @@ include 'includes/sidebar.php';
                         <i class="bi bi-journal-text me-2" aria-hidden="true"></i>
                         Lớp học phần học kỳ hiện tại
                         <?php if ($activeSemester): ?>
-                        <span class="text-muted small ms-2"><?php echo htmlspecialchars($activeSemester['semester_name']); ?></span>
+                        <span class="text-muted small ms-2"><?php echo htmlspecialchars(($activeSemester['semester_name'] ?? '') . ' - ' . ($activeSemester['school_year'] ?? '')); ?></span>
                         <?php endif; ?>
                     </div>
                     <div class="card-body">

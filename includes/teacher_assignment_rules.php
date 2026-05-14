@@ -2,7 +2,9 @@
 
 function getSubjectFacultyId(mysqli $conn, int $subjectId): ?int
 {
-    if ($subjectId <= 0) return null;
+    if ($subjectId <= 0) {
+        return null;
+    }
 
     $stmt = $conn->prepare(
         "SELECT COALESCE(m.faculty_id, cm.faculty_id) AS faculty_id
@@ -14,7 +16,9 @@ function getSubjectFacultyId(mysqli $conn, int $subjectId): ?int
          ORDER BY m.faculty_id IS NULL ASC
          LIMIT 1"
     );
-    if (!$stmt) return null;
+    if (!$stmt) {
+        return null;
+    }
     $stmt->bind_param('i', $subjectId);
     $stmt->execute();
     $row = $stmt->get_result()->fetch_assoc();
@@ -25,7 +29,9 @@ function getSubjectFacultyId(mysqli $conn, int $subjectId): ?int
 
 function getSectionAssignmentContext(mysqli $conn, int $sectionId): ?array
 {
-    if ($sectionId <= 0) return null;
+    if ($sectionId <= 0) {
+        return null;
+    }
 
     $stmt = $conn->prepare(
         "SELECT cs.id, cs.subject_id, cs.semester_id,
@@ -39,7 +45,9 @@ function getSectionAssignmentContext(mysqli $conn, int $sectionId): ?array
          ORDER BY m.faculty_id IS NULL ASC
          LIMIT 1"
     );
-    if (!$stmt) return null;
+    if (!$stmt) {
+        return null;
+    }
     $stmt->bind_param('i', $sectionId);
     $stmt->execute();
     $row = $stmt->get_result()->fetch_assoc();
@@ -85,29 +93,27 @@ function validateTeacherAssignment(mysqli $conn, int $teacherId, int $subjectId,
     }
 
     $wishTable = $conn->query("SHOW TABLES LIKE 'teaching_wishes'");
-    if (!$wishTable || $wishTable->num_rows === 0) {
-        return ['ok' => false, 'message' => 'Chưa có bảng nguyện vọng giảng dạy, không thể phân công giảng viên.'];
-    }
+    if ($wishTable && $wishTable->num_rows > 0) {
+        $stmtWish = $conn->prepare(
+            "SELECT id, status FROM teaching_wishes
+             WHERE teacher_id = ?
+               AND subject_id = ?
+               AND semester_id = ?
+               AND faculty_id = ?
+               AND status IN ('faculty_approved', 'confirmed', 'faculty_rejected', 'dept_rejected', 'cancelled')
+             LIMIT 1"
+        );
+        if (!$stmtWish) {
+            return ['ok' => false, 'message' => 'Không kiểm tra được nguyện vọng giảng dạy của giảng viên.'];
+        }
+        $stmtWish->bind_param('iiii', $teacherId, $subjectId, $semesterId, $subjectFacultyId);
+        $stmtWish->execute();
+        $wish = $stmtWish->get_result()->fetch_assoc();
+        $stmtWish->close();
 
-    $stmtWish = $conn->prepare(
-        "SELECT id FROM teaching_wishes
-         WHERE teacher_id = ?
-           AND subject_id = ?
-           AND semester_id = ?
-           AND faculty_id = ?
-           AND status IN ('faculty_approved', 'confirmed')
-         LIMIT 1"
-    );
-    if (!$stmtWish) {
-        return ['ok' => false, 'message' => 'Không kiểm tra được nguyện vọng giảng dạy của giảng viên.'];
-    }
-    $stmtWish->bind_param('iiii', $teacherId, $subjectId, $semesterId, $subjectFacultyId);
-    $stmtWish->execute();
-    $hasWish = $stmtWish->get_result()->num_rows > 0;
-    $stmtWish->close();
-
-    if (!$hasWish) {
-        return ['ok' => false, 'message' => 'Giảng viên chưa có nguyện vọng giảng dạy đã được khoa duyệt cho môn học và học kỳ này.'];
+        if ($wish && in_array((string)$wish['status'], ['faculty_rejected', 'dept_rejected', 'cancelled'], true)) {
+            return ['ok' => false, 'message' => 'Nguyện vọng giảng dạy của giảng viên cho môn này đã bị từ chối hoặc đã hủy.'];
+        }
     }
 
     return ['ok' => true, 'message' => ''];

@@ -125,7 +125,7 @@ class NotificationService
     public static function getUnreadCount(mysqli $conn, int $userId): int
     {
         $stmt = $conn->prepare(
-            "SELECT COUNT(*) AS c FROM notifications WHERE user_id=? AND is_read=0"
+            "SELECT COUNT(*) AS c FROM system_notifications WHERE user_id=? AND is_read=0"
         );
         $stmt->bind_param('i', $userId);
         $stmt->execute();
@@ -139,10 +139,10 @@ class NotificationService
     public static function markRead(mysqli $conn, int $userId, ?int $notifId = null): void
     {
         if ($notifId) {
-            $stmt = $conn->prepare("UPDATE notifications SET is_read=1 WHERE id=? AND user_id=?");
+            $stmt = $conn->prepare("UPDATE system_notifications SET is_read=1 WHERE id=? AND user_id=?");
             $stmt->bind_param('ii', $notifId, $userId);
         } else {
-            $stmt = $conn->prepare("UPDATE notifications SET is_read=1 WHERE user_id=?");
+            $stmt = $conn->prepare("UPDATE system_notifications SET is_read=1 WHERE user_id=?");
             $stmt->bind_param('i', $userId);
         }
         $stmt->execute();
@@ -160,17 +160,17 @@ class NotificationService
         array  $meta    = []
     ): bool {
         // Kiểm tra cột type có tồn tại không (backward compat)
-        $hasType = $conn->query("SHOW COLUMNS FROM `notifications` LIKE 'type'")->num_rows > 0;
+        $hasType = $conn->query("SHOW COLUMNS FROM `system_notifications` LIKE 'type'")->num_rows > 0;
 
         if ($hasType) {
             $stmt = $conn->prepare(
-                "INSERT INTO notifications (user_id, title, content, is_read)
+                "INSERT INTO system_notifications (user_id, title, content, is_read)
                  VALUES (?, ?, ?, 0)"
             );
             $stmt->bind_param('iss', $userId, $title, $content);
         } else {
             $stmt = $conn->prepare(
-                "INSERT INTO notifications (user_id, title, content, is_read)
+                "INSERT INTO system_notifications (user_id, title, content, is_read)
                  VALUES (?, ?, ?, 0)"
             );
             $stmt->bind_param('iss', $userId, $title, $content);

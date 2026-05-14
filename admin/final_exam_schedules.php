@@ -1,6 +1,7 @@
-<?php
+﻿<?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
+require_once '../includes/AcademicPolicy.php';
 requireRole('admin');
 $pageTitle = 'Lịch thi cuối kỳ';
 
@@ -36,9 +37,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $error = 'Ngày thi <strong>' . date('d/m/Y', strtotime($exam_date)) . '</strong> phải sau ngày kết thúc học kỳ <strong>' . date('d/m/Y', strtotime($semRow['end_date'])) . '</strong>.';
             } else {
                 $stmt = $conn->prepare("INSERT INTO final_exam_schedules
-                    (course_section_id, exam_date, start_time, end_time, room, exam_form, note, status)
-                    VALUES (?,?,?,?,?,?,?,?)");
-                $stmt->bind_param('isssssss', $section_id, $exam_date, $start_time, $end_time, $room, $exam_form, $note, $status);
+                    (course_section_id, exam_date, start_time, end_time, room, exam_form, note, status, data_mode, demo_batch_id)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)");
+                $demoContext = academicPolicySectionDemoContext($conn, $section_id);
+                $stmt->bind_param('isssssssss', $section_id, $exam_date, $start_time, $end_time, $room, $exam_form, $note, $status, $demoContext['data_mode'], $demoContext['demo_batch_id']);
                 $stmt->execute() ? $success = 'Thêm lịch thi thành công!' : $error = 'Lỗi: ' . $conn->error;
                 $stmt->close();
             }
@@ -171,7 +173,7 @@ $exams = $conn->query("
     JOIN semesters sm ON cs.semester_id = sm.id
     JOIN teachers t ON cs.teacher_id = t.id
     JOIN users u ON t.user_id = u.id
-    LEFT JOIN student_subjects ss ON ss.course_section_id = cs.id AND ss.status = 'registered'
+    LEFT JOIN student_subjects ss ON ss.course_section_id = cs.id AND ss.status IN ('registered','auto_enrolled')
     $whereSQL
     GROUP BY f.id
     ORDER BY f.exam_date ASC, f.start_time ASC
@@ -824,3 +826,4 @@ document.addEventListener('change', function(e) {
 </script>
 </body>
 </html>
+

@@ -48,6 +48,119 @@ function calcLetterGrade(?float $total): ?string
     return 'F';
 }
 
+// --- TKB: tinh ngay hoc thuc te tu tong tiet va lich goc ---
+function academicScheduleNormalizeSession(string $session): string
+{
+    $value = mb_strtolower(trim($session), 'UTF-8');
+    $value = strtr($value, [
+        'á' => 'a', 'à' => 'a', 'ả' => 'a', 'ã' => 'a', 'ạ' => 'a',
+        'ă' => 'a', 'ắ' => 'a', 'ằ' => 'a', 'ẳ' => 'a', 'ẵ' => 'a', 'ặ' => 'a',
+        'â' => 'a', 'ấ' => 'a', 'ầ' => 'a', 'ẩ' => 'a', 'ẫ' => 'a', 'ậ' => 'a',
+        'é' => 'e', 'è' => 'e', 'ẻ' => 'e', 'ẽ' => 'e', 'ẹ' => 'e',
+        'ê' => 'e', 'ế' => 'e', 'ề' => 'e', 'ể' => 'e', 'ễ' => 'e', 'ệ' => 'e',
+        'í' => 'i', 'ì' => 'i', 'ỉ' => 'i', 'ĩ' => 'i', 'ị' => 'i',
+        'ó' => 'o', 'ò' => 'o', 'ỏ' => 'o', 'õ' => 'o', 'ọ' => 'o',
+        'ô' => 'o', 'ố' => 'o', 'ồ' => 'o', 'ổ' => 'o', 'ỗ' => 'o', 'ộ' => 'o',
+        'ơ' => 'o', 'ớ' => 'o', 'ờ' => 'o', 'ở' => 'o', 'ỡ' => 'o', 'ợ' => 'o',
+        'ú' => 'u', 'ù' => 'u', 'ủ' => 'u', 'ũ' => 'u', 'ụ' => 'u',
+        'ư' => 'u', 'ứ' => 'u', 'ừ' => 'u', 'ử' => 'u', 'ữ' => 'u', 'ự' => 'u',
+        'ý' => 'y', 'ỳ' => 'y', 'ỷ' => 'y', 'ỹ' => 'y', 'ỵ' => 'y',
+        'đ' => 'd',
+    ]);
+
+    return match ($value) {
+        'sang', 'morning', 'am' => 'sang',
+        'chieu', 'afternoon', 'pm' => 'chieu',
+        'toi', 'evening', 'night' => 'toi',
+        default => $value,
+    };
+}
+
+function academicScheduleParseDaySessions(?string $daySessions): array
+{
+    $items = [];
+    foreach (preg_split('/\s*,\s*/', trim((string)$daySessions), -1, PREG_SPLIT_NO_EMPTY) ?: [] as $token) {
+        [$day, $session] = array_pad(explode(':', trim($token), 2), 2, '');
+        $day = (int)preg_replace('/\D+/', '', $day);
+        $session = academicScheduleNormalizeSession($session);
+        if ($day >= 2 && $day <= 8 && in_array($session, ['sang', 'chieu', 'toi'], true)) {
+            $items[] = ['day' => $day, 'session' => $session];
+        }
+    }
+    return $items;
+}
+
+function academicScheduleSectionDates(?string $startDate, ?string $daySessions, int $totalPeriods, int $periodsPerMeeting = 5, ?string $limitEndDate = null): array
+{
+    $startTs = $startDate ? strtotime($startDate . ' 00:00:00') : false;
+    if (!$startTs) return [];
+
+    $meetings = academicScheduleParseDaySessions($daySessions);
+    if (!$meetings) return [];
+
+    $needed = max(1, (int)ceil(max(1, $totalPeriods) / max(1, $periodsPerMeeting)));
+    $limitTs = $limitEndDate ? strtotime($limitEndDate . ' 23:59:59') : strtotime('+1 year', $startTs);
+    $weekMonday = strtotime('monday this week', $startTs);
+    if ((int)date('N', $startTs) === 1) {
+        $weekMonday = $startTs;
+    }
+
+    $dates = [];
+    for ($week = 0; $week < 80 && count($dates) < $needed; $week++) {
+        foreach ($meetings as $meeting) {
+            $dayOffset = ((int)$meeting['day'] === 8) ? 6 : (int)$meeting['day'] - 2;
+            $dateTs = strtotime('+' . ($week * 7 + $dayOffset) . ' days', $weekMonday);
+            if ($dateTs < $startTs || $dateTs > $limitTs) continue;
+            $dates[] = date('Y-m-d', $dateTs);
+            if (count($dates) >= $needed) break;
+        }
+    }
+
+    return $dates;
+}
+
+function academicScheduleSectionEndDate(?string $startDate, ?string $daySessions, int $totalPeriods, ?string $limitEndDate = null): ?string
+{
+    $dates = academicScheduleSectionDates($startDate, $daySessions, $totalPeriods, 5, $limitEndDate);
+    return $dates ? end($dates) : ($startDate ?: null);
+}
+
+function academicEnsureScheduleChangesTable(mysqli $conn): void
+{
+    $conn->query(
+        "CREATE TABLE IF NOT EXISTS course_section_schedule_changes (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            course_section_id INT NOT NULL,
+            original_date DATE NOT NULL,
+            new_date DATE NOT NULL,
+            new_day_session VARCHAR(30) NOT NULL,
+            room VARCHAR(50) NULL,
+            reason TEXT NULL,
+            approved_by INT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_section_original (course_section_id, original_date),
+            INDEX idx_section_new (course_section_id, new_date)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+    );
+}
+
+function academicScheduleChangesBySection(mysqli $conn, array $sectionIds): array
+{
+    $sectionIds = array_values(array_unique(array_filter(array_map('intval', $sectionIds))));
+    if (!$sectionIds) return [];
+
+    academicEnsureScheduleChangesTable($conn);
+    $in = implode(',', $sectionIds);
+    $rows = $conn->query("SELECT * FROM course_section_schedule_changes WHERE course_section_id IN ($in) ORDER BY original_date, id")
+        ->fetch_all(MYSQLI_ASSOC);
+
+    $bySection = [];
+    foreach ($rows as $row) {
+        $bySection[(int)$row['course_section_id']][] = $row;
+    }
+    return $bySection;
+}
+
 // ── Lấy học kỳ active ────────────────────────────────────────
 
 function getActiveSemesterAcademic(mysqli $conn): ?array
@@ -82,6 +195,12 @@ function getAcademicDashboardStats(mysqli $conn): array
     // Lớp HP chưa có GV (đang mở)
     $r = $conn->query("SELECT COUNT(*) AS c FROM course_sections WHERE status='open' AND (teacher_id IS NULL OR teacher_id=0)");
     $stats['no_teacher'] = (int)($r ? $r->fetch_assoc()['c'] : 0);
+
+    $r = $conn->query("SELECT COUNT(*) AS c FROM course_sections WHERE status IN ('open','full') AND teaching_mode <> 'online' AND (day_sessions IS NULL OR day_sessions = '')");
+    $stats['no_schedule'] = (int)($r ? $r->fetch_assoc()['c'] : 0);
+
+    $r = $conn->query("SELECT COUNT(*) AS c FROM course_sections WHERE status IN ('open','full') AND teaching_mode <> 'online' AND (room IS NULL OR room = '')");
+    $stats['no_room'] = (int)($r ? $r->fetch_assoc()['c'] : 0);
 
     // Lớp HP chưa có lịch thi
     $r = $conn->query(

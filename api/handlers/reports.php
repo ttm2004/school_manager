@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 /** API: /api/reports */
 requireApiRole(['academic_manager', 'academic_staff', 'faculty_manager', 'faculty_staff', 'admin']);
 
@@ -21,7 +21,7 @@ if ($method === 'GET' && $action === 'dashboard') {
         $data['semester_id']       = $semId;
         $data['open_sections']     = (int)$conn->query("SELECT COUNT(*) AS c FROM course_sections WHERE semester_id=$semId AND status='open'")->fetch_assoc()['c'];
         $data['proposed_sections'] = (int)$conn->query("SELECT COUNT(*) AS c FROM course_sections WHERE semester_id=$semId AND status='proposed'")->fetch_assoc()['c'];
-        $data['total_enrollments'] = (int)$conn->query("SELECT COUNT(*) AS c FROM student_subjects ss JOIN course_sections cs ON ss.course_section_id=cs.id WHERE cs.semester_id=$semId AND ss.status='registered'")->fetch_assoc()['c'];
+        $data['total_enrollments'] = (int)$conn->query("SELECT COUNT(*) AS c FROM student_subjects ss JOIN course_sections cs ON ss.course_section_id=cs.id WHERE cs.semester_id=$semId AND ss.status IN ('registered','auto_enrolled')")->fetch_assoc()['c'];
         $data['no_teacher']        = (int)$conn->query("SELECT COUNT(*) AS c FROM course_sections WHERE semester_id=$semId AND status='open' AND (teacher_id IS NULL OR teacher_id=0)")->fetch_assoc()['c'];
         $data['no_exam']           = (int)$conn->query("SELECT COUNT(*) AS c FROM course_sections cs LEFT JOIN final_exam_schedules fes ON cs.id=fes.course_section_id WHERE cs.semester_id=$semId AND cs.status='open' AND fes.id IS NULL")->fetch_assoc()['c'];
         $data['pending_proposals'] = (int)$conn->query("SELECT COUNT(*) AS c FROM course_sections WHERE proposal_status='pending'")->fetch_assoc()['c'];
@@ -54,7 +54,7 @@ if ($method === 'GET' && $action === 'grade-stats') {
          LEFT JOIN faculties f ON m.faculty_id=f.id
          LEFT JOIN teachers t ON cs.teacher_id=t.id
          LEFT JOIN users ut ON t.user_id=ut.id
-         LEFT JOIN student_subjects ss ON ss.course_section_id=cs.id AND ss.status='registered'
+         LEFT JOIN student_subjects ss ON ss.course_section_id=cs.id AND ss.status IN ('registered','auto_enrolled')
          LEFT JOIN grades g ON g.student_subject_id=ss.id
          WHERE $whereSQL
          GROUP BY cs.id, cs.section_code, s.subject_name, f.faculty_name, ut.full_name
@@ -85,3 +85,4 @@ if ($method === 'GET' && $action === 'students-by-faculty') {
     )->fetch_all(MYSQLI_ASSOC);
     apiOk($rows);
 }
+

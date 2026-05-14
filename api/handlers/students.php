@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 /** API: /api/students */
 requireApiAuth();
 require_once __DIR__ . '/../../includes/AcademicPolicy.php';
@@ -83,7 +83,7 @@ if ($method === 'GET' && $id && $action === 'grades') {
             JOIN subjects s ON cs.subject_id=s.id
             JOIN semesters sm ON cs.semester_id=sm.id
             LEFT JOIN grades g ON g.student_subject_id=ss.id
-            WHERE ss.student_id=? AND ss.status='registered'";
+            WHERE ss.student_id=? AND ss.status IN ('registered','auto_enrolled')";
     $types = 'i'; $params = [$id];
     if ($semId) { $sql .= " AND cs.semester_id=?"; $types .= 'i'; $params[] = $semId; }
     $sql .= " ORDER BY sm.id DESC, s.subject_name";
@@ -144,7 +144,10 @@ if ($method === 'POST' && $id && $action === 'register') {
     if (!$sem) apiError('Hiện không trong thời gian đăng ký học phần');
 
     // Kiểm tra nợ học phí
-    $myStudentId = (int)$conn->query("SELECT id FROM students WHERE user_id={$_SESSION['user_id']} LIMIT 1")->fetch_assoc()['id'];
+    $studentRow = $conn->query("SELECT id, data_mode, demo_batch_id FROM students WHERE user_id={$_SESSION['user_id']} LIMIT 1")->fetch_assoc();
+    $myStudentId = (int)$studentRow['id'];
+    $studentDataMode = (($studentRow['data_mode'] ?? 'system') === 'test') ? 'test' : 'system';
+    $demoBatchId = (string)($studentRow['demo_batch_id'] ?? '');
     $policy = academicPolicyValidateStudentRegistration($conn, $myStudentId, $sectionId);
     if (!$policy['ok']) {
         apiError($policy['message']);
@@ -154,19 +157,25 @@ if ($method === 'POST' && $id && $action === 'register') {
     }
 
     // Kiểm tra đã đăng ký chưa
-    $chk = $conn->prepare("SELECT id FROM student_subjects WHERE student_id=? AND course_section_id=?");
+    $chk = $conn->prepare("SELECT id, status FROM student_subjects WHERE student_id=? AND course_section_id=? LIMIT 1");
     $chk->bind_param('ii', $myStudentId, $sectionId);
     $chk->execute();
-    if ($chk->get_result()->num_rows > 0) apiError('Bạn đã đăng ký lớp học phần này rồi');
+    $existing = $chk->get_result()->fetch_assoc();
     $chk->close();
+    if ($existing && $existing['status'] !== 'cancelled') apiError('Bạn đã đăng ký lớp học phần này rồi');
 
     // Kiểm tra còn chỗ
     $sec = $conn->query("SELECT max_students, current_students, status FROM course_sections WHERE id=$sectionId LIMIT 1")->fetch_assoc();
     if (!$sec || $sec['status'] !== 'open') apiError('Lớp học phần không mở đăng ký');
     if ($sec['current_students'] >= $sec['max_students']) apiError('Lớp học phần đã đầy');
 
-    $stmt = $conn->prepare("INSERT INTO student_subjects (student_id, course_section_id, status) VALUES (?,?,'registered')");
-    $stmt->bind_param('ii', $myStudentId, $sectionId);
+    if ($existing) {
+        $stmt = $conn->prepare("UPDATE student_subjects SET status='registered', register_date=NOW(), data_mode=?, demo_batch_id=? WHERE id=? AND student_id=? AND status='cancelled'");
+        $stmt->bind_param('ssii', $studentDataMode, $demoBatchId, $existing['id'], $myStudentId);
+    } else {
+        $stmt = $conn->prepare("INSERT INTO student_subjects (student_id, course_section_id, status, data_mode, demo_batch_id) VALUES (?,?,'registered',?,?)");
+        $stmt->bind_param('iiss', $myStudentId, $sectionId, $studentDataMode, $demoBatchId);
+    }
     if ($stmt->execute()) {
         $conn->query("UPDATE course_sections SET current_students=current_students+1 WHERE id=$sectionId");
         $stmt->close();
@@ -191,3 +200,4 @@ if ($method === 'DELETE' && $id && $action === 'register') {
     }
     apiError('Không tìm thấy đăng ký hoặc đã hủy rồi');
 }
+

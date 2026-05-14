@@ -18,7 +18,7 @@ $flash = getFlash();
 
 // Lay danh sach hoc ky
 $semesters = [];
-$stmtSem = $conn->prepare("SELECT id, semester_name, status FROM semesters ORDER BY id DESC");
+$stmtSem = $conn->prepare("SELECT id, semester_name, school_year, status FROM semesters ORDER BY school_year DESC, id DESC");
 $stmtSem->execute();
 $semesters = $stmtSem->get_result()->fetch_all(MYSQLI_ASSOC);
 $stmtSem->close();
@@ -71,7 +71,7 @@ if ($selectedSemId > 0) {
     $whereSQL = implode(' AND ', $whereParts);
 
     $stmtExams = $conn->prepare(
-        "SELECT fes.id, fes.exam_date, fes.exam_time_start, fes.exam_time_end, fes.room,
+        "SELECT fes.id, fes.exam_date, fes.start_time AS exam_time_start, fes.end_time AS exam_time_end, fes.room,
                 cs.section_code,
                 s.subject_name,
                 u.full_name AS teacher_name,
@@ -85,9 +85,9 @@ if ($selectedSemId > 0) {
          LEFT JOIN users u ON t.user_id = u.id
          LEFT JOIN student_subjects ss ON ss.course_section_id = cs.id
          WHERE {$whereSQL}
-         GROUP BY fes.id, fes.exam_date, fes.exam_time_start, fes.exam_time_end, fes.room,
+         GROUP BY fes.id, fes.exam_date, fes.start_time, fes.end_time, fes.room,
                   cs.section_code, s.subject_name, teacher_name
-         ORDER BY fes.exam_date ASC, fes.exam_time_start ASC"
+         ORDER BY fes.exam_date ASC, fes.start_time ASC"
     );
     $stmtExams->bind_param($bindTypes, ...$bindValues);
     $stmtExams->execute();
@@ -141,7 +141,7 @@ include 'includes/sidebar.php';
                             <?php foreach ($semesters as $sem): ?>
                             <option value="<?php echo (int)$sem['id']; ?>"
                                 <?php echo $selectedSemId === (int)$sem['id'] ? 'selected' : ''; ?>>
-                                <?php echo htmlspecialchars($sem['semester_name']); ?>
+                                <?php echo htmlspecialchars($sem['semester_name'] . ' - ' . ($sem['school_year'] ?? '')); ?>
                                 <?php if ($sem['status'] === 'active'): ?>(Hien tai)<?php endif; ?>
                             </option>
                             <?php endforeach; ?>

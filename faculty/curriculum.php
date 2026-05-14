@@ -19,8 +19,8 @@ function normalizeCurriculumType(?string $type): string
 {
     $type = trim((string)$type);
     return match ($type) {
-        'elective', 'tu chon', 'Tự chọn', 'Tá»± chá»n' => 'elective',
-        'general', 'dai cuong', 'Đại cương', 'Äáº¡i cÆ°Æ¡ng' => 'general',
+        'elective', 'tu chon', 'Tự chọn', 'Tự chọn' => 'elective',
+        'general', 'dai cuong', 'Đại cương', 'Đại cương' => 'general',
         default => 'required',
     };
 }
@@ -47,14 +47,15 @@ function displayUtf8(?string $value): string
     $value = (string)$value;
     if ($value === '') return '';
 
-    if (!preg_match('/(Ã|Æ|áº|á»|Ä)/u', $value)) {
+    $mojibakePattern = '/(\x{00C3}|\x{00C6}|\x{00E1}\x{00BA}|\x{00E1}\x{00BB}|\x{00C4})/u';
+    if (!preg_match($mojibakePattern, $value)) {
         return $value;
     }
 
     $bytes = @iconv('UTF-8', 'Windows-1252//IGNORE', $value);
     if ($bytes !== false && mb_check_encoding($bytes, 'UTF-8')) {
-        $badBefore = preg_match_all('/(Ã|Æ|áº|á»|Ä)/u', $value);
-        $badAfter  = preg_match_all('/(Ã|Æ|áº|á»|Ä)/u', $bytes);
+        $badBefore = preg_match_all($mojibakePattern, $value);
+        $badAfter  = preg_match_all($mojibakePattern, $bytes);
         if ($badAfter < $badBefore) return $bytes;
     }
 

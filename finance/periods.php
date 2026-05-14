@@ -29,23 +29,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($chkResult->num_rows > 0) {
                 $_SESSION['_flash'] = ['type'=>'danger','message'=>'Học kỳ này đã có đợt thu học phí.'];
             } else {
-                $ins = $conn->prepare("INSERT INTO tuition_periods (semester_id,title,open_date,due_date,note,created_by) VALUES (?,?,?,?,?,?)");
-                $ins->bind_param('issssi',$semId,$title,$open,$due,$note,$aid);
+                $demoContext = academicPolicySemesterDemoContext($conn, $semId);
+                $ins = $conn->prepare("INSERT INTO tuition_periods (semester_id,title,open_date,due_date,status,data_mode,demo_batch_id,note,created_by) VALUES (?,?,?,?,'draft',?,?,?,?)");
+                $ins->bind_param('issssssi',$semId,$title,$open,$due,$demoContext['data_mode'],$demoContext['demo_batch_id'],$note,$aid);
                 if ($ins->execute()) {
                     $pid = $conn->insert_id;
                     // Tự động tạo hóa đơn draft
-                    $res = $conn->query("SELECT ss.student_id, SUM(sub.credits) tc, m.tuition_per_credit up
+                    $res = $conn->query("SELECT ss.student_id, SUM(sub.credits) tc, m.tuition_per_credit up,
+                            st.data_mode, st.demo_batch_id
                         FROM student_subjects ss JOIN course_sections cs ON ss.course_section_id=cs.id
                         JOIN subjects sub ON cs.subject_id=sub.id
                         JOIN students st ON ss.student_id=st.id
                         JOIN classes cl ON st.class_id=cl.id JOIN majors m ON cl.major_id=m.id
                         WHERE cs.semester_id=$semId AND ss.status!='cancelled'
-                        GROUP BY ss.student_id, m.tuition_per_credit");
+                        GROUP BY ss.student_id, m.tuition_per_credit, st.data_mode, st.demo_batch_id");
                     $created = 0;
                     if ($res) while ($row = $res->fetch_assoc()) {
                         $sid=(int)$row['student_id']; $tc=(int)$row['tc']; $up=(float)$row['up']; $gross=$tc*$up;
-                        $i2=$conn->prepare("INSERT IGNORE INTO tuition_invoices (period_id,student_id,semester_id,total_credits,unit_price,gross_amount,discount,net_amount,paid_amount,status,created_by) VALUES (?,?,?,?,?,?,0,?,0,'draft',?)");
-                        $i2->bind_param('iiiidddi',$pid,$sid,$semId,$tc,$up,$gross,$gross,$aid);
+                        $dataMode=(($row['data_mode'] ?? 'system') === 'test') ? 'test' : 'system';
+                        $demoBatchId=(string)($row['demo_batch_id'] ?? '');
+                        $i2=$conn->prepare("INSERT IGNORE INTO tuition_invoices (period_id,student_id,semester_id,total_credits,unit_price,gross_amount,discount,net_amount,paid_amount,status,data_mode,demo_batch_id,created_by) VALUES (?,?,?,?,?,?,0,?,0,'draft',?,?,?)");
+                        $i2->bind_param('iiiidddssi',$pid,$sid,$semId,$tc,$up,$gross,$gross,$dataMode,$demoBatchId,$aid);
                         if ($i2->execute()) $created++; $i2->close();
                     }
                     $_SESSION['_flash'] = ['type'=>'success','message'=>"Tạo đợt thu thành công! Đã tạo $created hóa đơn nháp. Xem xét rồi xác nhận công bố."];
@@ -75,12 +79,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmtPeriod->close();
         if ($period) {
             $semId=(int)$period['semester_id'];
-            $stmtReg = $conn->prepare("SELECT ss.student_id, SUM(sub.credits) tc, m.tuition_per_credit up
+            $stmtReg = $conn->prepare("SELECT ss.student_id, SUM(sub.credits) tc, m.tuition_per_credit up,
+                    st.data_mode, st.demo_batch_id
                 FROM student_subjects ss JOIN course_sections cs ON ss.course_section_id=cs.id
                 JOIN subjects sub ON cs.subject_id=sub.id JOIN students st ON ss.student_id=st.id
                 JOIN classes cl ON st.class_id=cl.id JOIN majors m ON cl.major_id=m.id
                 WHERE cs.semester_id=? AND ss.status!='cancelled'
-                GROUP BY ss.student_id, m.tuition_per_credit");
+                GROUP BY ss.student_id, m.tuition_per_credit, st.data_mode, st.demo_batch_id");
             $stmtReg->bind_param('i', $semId);
             $stmtReg->execute();
             $res = $stmtReg->get_result();
@@ -88,13 +93,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $upd=$new=0;
             if ($res) while ($row=$res->fetch_assoc()) {
                 $sid=(int)$row['student_id']; $tc=(int)$row['tc']; $up=(float)$row['up']; $gross=$tc*$up;
+                $dataMode=(($row['data_mode'] ?? 'system') === 'test') ? 'test' : 'system';
+                $demoBatchId=(string)($row['demo_batch_id'] ?? '');
                 $chkInv=$conn->prepare("SELECT id FROM tuition_invoices WHERE period_id=? AND student_id=?");
                 $chkInv->bind_param('ii',$pid,$sid); $chkInv->execute();
                 $chkInvResult=$chkInv->get_result(); $chkInv->close();
                 if ($chkInvResult->num_rows>0) {
-                    $updInv=$conn->prepare("UPDATE tuition_invoices SET total_credits=?,unit_price=?,gross_amount=?,net_amount=?,updated_at=NOW() WHERE period_id=? AND student_id=? AND status='draft'");
-                    $updInv->bind_param('ddddii',$tc,$up,$gross,$gross,$pid,$sid); $updInv->execute(); $updInv->close(); $upd++;
-                } else { $i2=$conn->prepare("INSERT INTO tuition_invoices (period_id,student_id,semester_id,total_credits,unit_price,gross_amount,discount,net_amount,paid_amount,status,created_by) VALUES (?,?,?,?,?,?,0,?,0,'draft',?)"); $i2->bind_param('iiiidddi',$pid,$sid,$semId,$tc,$up,$gross,$gross,$aid); if ($i2->execute()) $new++; $i2->close(); }
+                    $updInv=$conn->prepare("UPDATE tuition_invoices SET total_credits=?,unit_price=?,gross_amount=?,net_amount=?,data_mode=?,demo_batch_id=?,updated_at=NOW() WHERE period_id=? AND student_id=? AND status='draft'");
+                    $updInv->bind_param('idddssii',$tc,$up,$gross,$gross,$dataMode,$demoBatchId,$pid,$sid); $updInv->execute(); $updInv->close(); $upd++;
+                } else { $i2=$conn->prepare("INSERT INTO tuition_invoices (period_id,student_id,semester_id,total_credits,unit_price,gross_amount,discount,net_amount,paid_amount,status,data_mode,demo_batch_id,created_by) VALUES (?,?,?,?,?,?,0,?,0,'draft',?,?,?)"); $i2->bind_param('iiiidddssi',$pid,$sid,$semId,$tc,$up,$gross,$gross,$dataMode,$demoBatchId,$aid); if ($i2->execute()) $new++; $i2->close(); }
             }
             $_SESSION['_flash']=['type'=>'success','message'=>"Đã cập nhật $upd, tạo mới $new hóa đơn nháp."];
         }

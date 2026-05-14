@@ -15,6 +15,66 @@ function academicPolicySemesterNumber(array $semester): int
     return 1;
 }
 
+function academicPolicyIsTestSemester(array $semester): bool
+{
+    if (($semester['data_mode'] ?? 'system') === 'test') {
+        return true;
+    }
+    $name = mb_strtolower((string)($semester['semester_name'] ?? ''), 'UTF-8');
+    return str_contains($name, 'test');
+}
+
+function academicPolicySemesterDemoContext(mysqli $conn, int $semesterId): array
+{
+    static $cache = [];
+
+    if (isset($cache[$semesterId])) {
+        return $cache[$semesterId];
+    }
+
+    if (!academicPolicyColumnExists($conn, 'semesters', 'data_mode')) {
+        return $cache[$semesterId] = ['data_mode' => 'system', 'demo_batch_id' => ''];
+    }
+    $batchSelect = academicPolicyColumnExists($conn, 'semesters', 'demo_batch_id') ? 'demo_batch_id' : "'' AS demo_batch_id";
+    $stmt = $conn->prepare("SELECT data_mode, $batchSelect FROM semesters WHERE id = ? LIMIT 1");
+    $stmt->bind_param('i', $semesterId);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc() ?: [];
+    $stmt->close();
+    return $cache[$semesterId] = [
+        'data_mode' => (($row['data_mode'] ?? 'system') === 'test') ? 'test' : 'system',
+        'demo_batch_id' => (string)($row['demo_batch_id'] ?? ''),
+    ];
+}
+
+function academicPolicySectionDemoContext(mysqli $conn, int $sectionId): array
+{
+    static $cache = [];
+
+    if (isset($cache[$sectionId])) {
+        return $cache[$sectionId];
+    }
+
+    if (!academicPolicyColumnExists($conn, 'course_sections', 'data_mode')) {
+        $stmt = $conn->prepare("SELECT semester_id FROM course_sections WHERE id = ? LIMIT 1");
+        $stmt->bind_param('i', $sectionId);
+        $stmt->execute();
+        $row = $stmt->get_result()->fetch_assoc() ?: [];
+        $stmt->close();
+        return $cache[$sectionId] = academicPolicySemesterDemoContext($conn, (int)($row['semester_id'] ?? 0));
+    }
+    $batchSelect = academicPolicyColumnExists($conn, 'course_sections', 'demo_batch_id') ? 'demo_batch_id' : "'' AS demo_batch_id";
+    $stmt = $conn->prepare("SELECT data_mode, $batchSelect FROM course_sections WHERE id = ? LIMIT 1");
+    $stmt->bind_param('i', $sectionId);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc() ?: [];
+    $stmt->close();
+    return $cache[$sectionId] = [
+        'data_mode' => (($row['data_mode'] ?? 'system') === 'test') ? 'test' : 'system',
+        'demo_batch_id' => (string)($row['demo_batch_id'] ?? ''),
+    ];
+}
+
 function academicPolicySchoolYearStart(array $semester): ?int
 {
     $schoolYear = (string)($semester['school_year'] ?? '');
@@ -88,9 +148,13 @@ function academicPolicyCurriculumSemesterOrder(int $enrollmentYear, array $semes
 
 function academicPolicyGetSemester(mysqli $conn, int $semesterId): ?array
 {
+    $modeSelect = academicPolicyColumnExists($conn, 'semesters', 'data_mode') ? ', data_mode' : ", 'system' AS data_mode";
+    $batchSelect = academicPolicyColumnExists($conn, 'semesters', 'demo_batch_id') ? ', demo_batch_id' : ", '' AS demo_batch_id";
     $stmt = $conn->prepare(
         "SELECT id, semester_name, school_year, start_date, end_date, status,
                 proposal_start, proposal_end, approval_start, approval_end, proposal_deadline
+                $modeSelect
+                $batchSelect
          FROM semesters WHERE id = ? LIMIT 1"
     );
     $stmt->bind_param('i', $semesterId);
@@ -183,17 +247,19 @@ function academicPolicyCheckFacultyProposalWindow(mysqli $conn, int $semesterId)
 
 function academicPolicyColumnExists(mysqli $conn, string $table, string $column): bool
 {
-    $stmt = $conn->prepare(
-        "SELECT COUNT(*) AS c
-         FROM information_schema.COLUMNS
-         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?"
-    );
-    $stmt->bind_param('ss', $table, $column);
-    $stmt->execute();
-    $exists = (int)($stmt->get_result()->fetch_assoc()['c'] ?? 0) > 0;
-    $stmt->close();
+    static $cache = [];
 
-    return $exists;
+    $key = $table . '.' . $column;
+    if (array_key_exists($key, $cache)) {
+        return $cache[$key];
+    }
+
+    $safeTable = $conn->real_escape_string($table);
+    $safeColumn = $conn->real_escape_string($column);
+    $res = $conn->query("SHOW COLUMNS FROM `$safeTable` LIKE '$safeColumn'");
+    $cache[$key] = $res && $res->num_rows > 0;
+
+    return $cache[$key];
 }
 
 function academicPolicyNormalizeScheduleSession(string $session): string
@@ -254,6 +320,11 @@ function academicPolicyHasScheduleConflict(mysqli $conn, int $sectionId, string 
         return false;
     }
 
+    $demoContext = $sectionId > 0
+        ? academicPolicySectionDemoContext($conn, $sectionId)
+        : academicPolicySemesterDemoContext($conn, $semesterId);
+    $modeSql = academicPolicyColumnExists($conn, 'course_sections', 'data_mode') ? " AND data_mode = ?" : "";
+
     $stmt = $conn->prepare(
         "SELECT id, day_sessions
          FROM course_sections
@@ -262,15 +333,24 @@ function academicPolicyHasScheduleConflict(mysqli $conn, int $sectionId, string 
            AND status IN ('open','full','closed')
            AND $field = ?
            AND day_sessions IS NOT NULL
-           AND day_sessions <> ''"
+           AND day_sessions <> ''
+           $modeSql"
     );
 
     if ($field === 'teacher_id') {
         $intValue = (int)$fieldValue;
-        $stmt->bind_param('iii', $sectionId, $semesterId, $intValue);
+        if ($modeSql) {
+            $stmt->bind_param('iiis', $sectionId, $semesterId, $intValue, $demoContext['data_mode']);
+        } else {
+            $stmt->bind_param('iii', $sectionId, $semesterId, $intValue);
+        }
     } else {
         $stringValue = (string)$fieldValue;
-        $stmt->bind_param('iis', $sectionId, $semesterId, $stringValue);
+        if ($modeSql) {
+            $stmt->bind_param('iiss', $sectionId, $semesterId, $stringValue, $demoContext['data_mode']);
+        } else {
+            $stmt->bind_param('iis', $sectionId, $semesterId, $stringValue);
+        }
     }
 
     $stmt->execute();
@@ -458,7 +538,7 @@ function academicPolicyValidateRoom(mysqli $conn, string $roomCode, int $maxStud
     return ['ok' => true, 'message' => '', 'classroom_id' => (int)$room['id']];
 }
 
-function academicPolicyFindEligibleOpenings(mysqli $conn, int $facultyId, int $semesterId, ?int $subjectId = null, ?int $cohortId = null): array
+function academicPolicyFindEligibleOpenings(mysqli $conn, int $facultyId, int $semesterId, ?int $subjectId = null, ?int $cohortId = null, ?int $maxRows = null): array
 {
     $semester = academicPolicyGetSemester($conn, $semesterId);
     if (!$semester) {
@@ -524,45 +604,92 @@ function academicPolicyFindEligibleOpenings(mysqli $conn, int $facultyId, int $s
     $rows = [];
     $seen = [];
 
-    $sql = "SELECT DISTINCT s.id AS subject_id, s.subject_code, s.subject_name, s.credits,
-                   c.suggested_semester, c.subject_type, m.id AS major_id, m.major_code, m.major_name
-            FROM curriculum c
-            JOIN subjects s ON c.subject_id = s.id
-            JOIN majors m ON c.major_id = m.id
-            WHERE c.major_id = ? AND c.suggested_semester = ? AND c.deleted_at IS NULL";
-    if ($hasCurriculumProgram) {
-        $sql .= " AND (c.program_id IS NULL OR c.program_id = ?)";
+    $isTestSemester = academicPolicyIsTestSemester($semester);
+    if ($isTestSemester && $subjectId === null && $cohortId === null) {
+        $testMajorCodes = ['CNTT' => true, 'KETOAN' => true, '7480201' => true, '7340301' => true];
+        $allowedMajorIds = [];
+        $filteredCohorts = [];
+        foreach ($cohorts as $cohort) {
+            $majorId = (int)($cohort['major_id'] ?? 0);
+            $majorCode = strtoupper((string)($cohort['major_code'] ?? ''));
+            if ($majorId <= 0 || !isset($testMajorCodes[$majorCode])) {
+                continue;
+            }
+            $allowedMajorIds[$majorId] = true;
+            $filteredCohorts[] = $cohort;
+        }
+        if (empty($filteredCohorts)) {
+            foreach ($cohorts as $cohort) {
+                $majorId = (int)($cohort['major_id'] ?? 0);
+                if ($majorId <= 0) {
+                    continue;
+                }
+                if (!isset($allowedMajorIds[$majorId]) && count($allowedMajorIds) >= 2) {
+                    continue;
+                }
+                $allowedMajorIds[$majorId] = true;
+                $filteredCohorts[] = $cohort;
+            }
+        }
+        $cohorts = $filteredCohorts;
     }
-    if ($subjectId !== null) {
-        $sql .= " AND s.id = ?";
-    }
-    $sql .= " ORDER BY s.subject_name ASC";
 
     foreach ($cohorts as $cohort) {
         $enrollmentYear = (int)$cohort['enrollment_year'];
         $semesterOrder = academicPolicyCurriculumSemesterOrder($enrollmentYear, $semester);
-        if ($semesterOrder === null || $semesterOrder < 1) {
+        if (!$isTestSemester && ($semesterOrder === null || $semesterOrder < 1)) {
             continue;
         }
 
         $majorId = (int)$cohort['major_id'];
         $programId = (int)($cohort['program_id'] ?? 0);
+        $sql = "SELECT DISTINCT s.id AS subject_id, s.subject_code, s.subject_name, s.credits,
+                       c.suggested_semester, c.subject_type, c.prerequisite_ids,
+                       m.id AS major_id, m.major_code, m.major_name
+                FROM curriculum c
+                JOIN subjects s ON c.subject_id = s.id
+                JOIN majors m ON c.major_id = m.id
+                WHERE c.major_id = ? AND c.deleted_at IS NULL";
+        if (!$isTestSemester) {
+            $sql .= " AND c.suggested_semester = ?";
+        }
+        if ($hasCurriculumProgram) {
+            $sql .= " AND (c.program_id IS NULL OR c.program_id = ?)";
+        }
+        if ($subjectId !== null) {
+            $sql .= " AND s.id = ?";
+        }
+        $sql .= " ORDER BY c.suggested_semester ASC, s.subject_name ASC";
+
         $stmtCur = $conn->prepare($sql);
-        if ($hasCurriculumProgram && $subjectId !== null) {
-            $stmtCur->bind_param('iiii', $majorId, $semesterOrder, $programId, $subjectId);
-        } elseif ($hasCurriculumProgram) {
-            $stmtCur->bind_param('iii', $majorId, $semesterOrder, $programId);
-        } elseif ($subjectId !== null) {
-            $stmtCur->bind_param('iii', $majorId, $semesterOrder, $subjectId);
+        if ($isTestSemester) {
+            if ($hasCurriculumProgram && $subjectId !== null) {
+                $stmtCur->bind_param('iii', $majorId, $programId, $subjectId);
+            } elseif ($hasCurriculumProgram) {
+                $stmtCur->bind_param('ii', $majorId, $programId);
+            } elseif ($subjectId !== null) {
+                $stmtCur->bind_param('ii', $majorId, $subjectId);
+            } else {
+                $stmtCur->bind_param('i', $majorId);
+            }
         } else {
-            $stmtCur->bind_param('ii', $majorId, $semesterOrder);
+            if ($hasCurriculumProgram && $subjectId !== null) {
+                $stmtCur->bind_param('iiii', $majorId, $semesterOrder, $programId, $subjectId);
+            } elseif ($hasCurriculumProgram) {
+                $stmtCur->bind_param('iii', $majorId, $semesterOrder, $programId);
+            } elseif ($subjectId !== null) {
+                $stmtCur->bind_param('iii', $majorId, $semesterOrder, $subjectId);
+            } else {
+                $stmtCur->bind_param('ii', $majorId, $semesterOrder);
+            }
         }
         $stmtCur->execute();
         $subjects = $stmtCur->get_result()->fetch_all(MYSQLI_ASSOC);
         $stmtCur->close();
 
         foreach ($subjects as $subject) {
-            $key = $subject['subject_id'] . ':' . $majorId . ':' . $semesterOrder . ':' . ($cohort['cohort_id'] ?? 'legacy');
+            $effectiveSemesterOrder = $isTestSemester ? (int)$subject['suggested_semester'] : (int)$semesterOrder;
+            $key = $subject['subject_id'] . ':' . $majorId . ':' . $effectiveSemesterOrder . ':' . ($cohort['cohort_id'] ?? 'legacy');
             if (isset($seen[$key])) {
                 continue;
             }
@@ -575,6 +702,9 @@ function academicPolicyFindEligibleOpenings(mysqli $conn, int $facultyId, int $s
             $subject['graduation_year'] = $enrollmentYear + (int)ceil((float)($cohort['duration_years'] ?? 4));
             $subject['semester_window'] = academicPolicySemesterWindowFromRow($semester);
             $rows[] = $subject;
+            if ($maxRows !== null && count($rows) >= $maxRows) {
+                return $rows;
+            }
         }
     }
 
@@ -683,7 +813,7 @@ function academicPolicyGetStudentContext(mysqli $conn, int $studentId): ?array
 {
     $stmt = $conn->prepare(
         "SELECT s.id, s.class_id, s.student_code, s.academic_status, s.enrollment_year,
-                s.cohort_id, s.training_program_id,
+                s.cohort_id, s.training_program_id, s.data_mode,
                 cl.major_id, cl.cohort_id AS class_cohort_id
          FROM students s
          JOIN classes cl ON s.class_id = cl.id
@@ -726,7 +856,7 @@ function academicPolicyRegisteredCredits(mysqli $conn, int $studentId, int $seme
          JOIN course_sections cs ON ss.course_section_id = cs.id
          JOIN subjects subj ON cs.subject_id = subj.id
          WHERE ss.student_id = ?
-           AND ss.status = 'registered'
+           AND ss.status IN ('registered','auto_enrolled')
            AND cs.semester_id = ?"
     );
     $stmt->bind_param('ii', $studentId, $semesterId);
@@ -766,7 +896,7 @@ function academicPolicyStudentScheduleConflict(mysqli $conn, int $studentId, int
          JOIN course_sections cs ON ss.course_section_id = cs.id
          JOIN subjects s ON cs.subject_id = s.id
          WHERE ss.student_id = ?
-           AND ss.status = 'registered'
+           AND ss.status IN ('registered','auto_enrolled')
            AND cs.semester_id = ?
            AND cs.id <> ?"
     );
@@ -869,8 +999,8 @@ function academicPolicyValidateExamSchedule(
                    JOIN course_sections cs ON cs.id = fes.course_section_id
                    JOIN subjects s ON s.id = cs.subject_id
                    WHERE ss_new.course_section_id = ?
-                     AND ss_new.status = 'registered'
-                     AND ss_old.status = 'registered'
+                     AND ss_new.status IN ('registered','auto_enrolled')
+                     AND ss_old.status IN ('registered','auto_enrolled')
                      AND ss_old.course_section_id <> ss_new.course_section_id
                      AND fes.exam_date = ?
                      AND fes.status IN ('scheduled','postponed')
@@ -907,7 +1037,7 @@ function academicPolicyValidateStudentRegistration(mysqli $conn, int $studentId,
     $stmt = $conn->prepare(
         "SELECT cs.id, cs.subject_id, cs.semester_id, cs.target_cohort_id, cs.current_students, cs.max_students,
                 cs.status, subj.credits,
-                sm.semester_name, sm.school_year
+                sm.semester_name, sm.school_year, sm.data_mode AS semester_data_mode
          FROM course_sections cs
          JOIN subjects subj ON cs.subject_id = subj.id
          JOIN semesters sm ON cs.semester_id = sm.id
@@ -921,6 +1051,14 @@ function academicPolicyValidateStudentRegistration(mysqli $conn, int $studentId,
 
     if (!$section || !in_array($section['status'], ['open','full'], true)) {
         return ['ok' => false, 'message' => 'Lớp học phần chưa mở đăng ký.'];
+    }
+    $studentDataMode = ($student['data_mode'] ?? 'system') === 'test' ? 'test' : 'system';
+    $isTestSemester = (($section['semester_data_mode'] ?? 'system') === 'test') || str_contains(strtolower((string)$section['semester_name']), 'test');
+    if ($studentDataMode === 'test' && !$isTestSemester) {
+        return ['ok' => false, 'message' => 'Tai khoan test chi duoc dang ky hoc phan trong hoc ky Test.'];
+    }
+    if ($studentDataMode !== 'test' && $isTestSemester) {
+        return ['ok' => false, 'message' => 'Hoc ky Test chi danh cho du lieu demo, khong ap dung cho sinh vien he thong that.'];
     }
     if ((int)$section['current_students'] >= (int)$section['max_students']) {
         return ['ok' => false, 'message' => 'Lớp học phần đã đủ sĩ số.'];
@@ -941,6 +1079,12 @@ function academicPolicyValidateStudentRegistration(mysqli $conn, int $studentId,
     $stmtRegistrationWindow->close();
     if (!$registrationOpen) {
         return ['ok' => false, 'message' => 'Hiện tại không trong thời gian đăng ký học phần của học kỳ này.'];
+    }
+
+    $enrollmentYear = (int)($student['enrollment_year'] ?? 0);
+    $semesterOrder = $enrollmentYear > 0 ? academicPolicyCurriculumSemesterOrder($enrollmentYear, $section) : null;
+    if ($semesterOrder === 1) {
+        return ['ok' => false, 'message' => 'Hoc ky 1 nam nhat duoc he thong dang ky tu dong. Ban chi co the xem danh sach hoc phan da duoc xep.'];
     }
 
     $studentCohortId = (int)($student['cohort_id'] ?: $student['class_cohort_id'] ?: 0);
@@ -1003,7 +1147,6 @@ function academicPolicyValidateStudentRegistration(mysqli $conn, int $studentId,
         }
     }
 
-    $enrollmentYear = (int)($student['enrollment_year'] ?? 0);
     $currentOrder = $enrollmentYear > 0 ? academicPolicyCurriculumSemesterOrder($enrollmentYear, $section) : null;
     if ($currentOrder !== null
         && (int)$curriculum['suggested_semester'] > $currentOrder

@@ -38,7 +38,7 @@ $gradeReminders = $conn->query(
      JOIN semesters sm ON cs.semester_id = sm.id
      LEFT JOIN teachers t ON cs.teacher_id = t.id
      LEFT JOIN users u ON t.user_id = u.id
-     LEFT JOIN student_subjects ss ON ss.course_section_id = cs.id AND ss.status='registered'
+     LEFT JOIN student_subjects ss ON ss.course_section_id = cs.id AND ss.status IN ('registered','auto_enrolled')
      LEFT JOIN grades g ON g.student_subject_id = ss.id
      WHERE cs.status IN ('open','closed')
        AND sm.grade_submit_deadline IS NOT NULL
@@ -108,7 +108,7 @@ include 'includes/sidebar.php';
 </div>
 
 <!-- Canh bao -->
-<?php $totalWarnings = $stats['no_teacher'] + $stats['no_exam'] + $stats['missing_grades'] + $stats['pending_assignments']; ?>
+<?php $totalWarnings = $stats['no_teacher'] + $stats['no_schedule'] + $stats['no_room'] + $stats['no_exam'] + $stats['missing_grades'] + $stats['pending_assignments']; ?>
 <?php if ($totalWarnings > 0): ?>
 <div class="row g-3 mb-4">
     <?php if ($stats['no_teacher'] > 0): ?>
@@ -120,6 +120,34 @@ include 'includes/sidebar.php';
                     <div class="fw-bold fs-4 text-danger"><?php echo $stats['no_teacher']; ?></div>
                     <div class="small text-muted">Lop HP chua co GV</div>
                     <a href="teacher_assignments.php?filter=no_teacher" class="btn btn-sm btn-outline-danger mt-1">Xu ly</a>
+                </div>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+    <?php if ($stats['no_schedule'] > 0): ?>
+    <div class="col-6 col-lg-3">
+        <div class="card border-warning h-100">
+            <div class="card-body d-flex align-items-center gap-3">
+                <i class="bi bi-calendar-week text-warning fs-2"></i>
+                <div>
+                    <div class="fw-bold fs-4 text-warning"><?php echo $stats['no_schedule']; ?></div>
+                    <div class="small text-muted">Lớp chưa có lịch học</div>
+                    <a href="course_sections.php" class="btn btn-sm btn-outline-warning mt-1">Xử lý</a>
+                </div>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+    <?php if ($stats['no_room'] > 0): ?>
+    <div class="col-6 col-lg-3">
+        <div class="card border-warning h-100">
+            <div class="card-body d-flex align-items-center gap-3">
+                <i class="bi bi-door-open-fill text-warning fs-2"></i>
+                <div>
+                    <div class="fw-bold fs-4 text-warning"><?php echo $stats['no_room']; ?></div>
+                    <div class="small text-muted">Lớp chưa có phòng</div>
+                    <a href="course_sections.php" class="btn btn-sm btn-outline-warning mt-1">Xử lý</a>
                 </div>
             </div>
         </div>
@@ -259,3 +287,4 @@ include 'includes/sidebar.php';
 <div class="admin-footer">&copy; <?php echo date('Y'); ?> TDMU — Phong Dao tao</div>
 </div><!-- /.admin-main -->
 <?php include 'includes/footer.php'; ?>
+

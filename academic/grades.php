@@ -7,6 +7,18 @@ requireAnyRole(['academic_manager','academic_staff']);
 $pageTitle = 'Quan ly Diem so';
 $userId    = (int)$_SESSION['user_id'];
 
+function academicGradeDemoContext(mysqli $conn, int $studentSubjectId): array {
+    $stmt = $conn->prepare("SELECT data_mode, demo_batch_id FROM student_subjects WHERE id = ? LIMIT 1");
+    $stmt->bind_param('i', $studentSubjectId);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc() ?: [];
+    $stmt->close();
+    return [
+        'data_mode' => (($row['data_mode'] ?? 'system') === 'test') ? 'test' : 'system',
+        'demo_batch_id' => (string)($row['demo_batch_id'] ?? ''),
+    ];
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verifyCSRFToken($_POST['_csrf_token'] ?? '')) {
         $_SESSION['_flash'] = ['type'=>'danger','message'=>'Yeu cau khong hop le.'];
@@ -35,13 +47,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $chk = $conn->prepare("SELECT id FROM grades WHERE student_subject_id=?");
         $chk->bind_param('i', $ssId); $chk->execute();
         $exists = $chk->get_result()->fetch_assoc(); $chk->close();
+        $demoContext = academicGradeDemoContext($conn, $ssId);
 
         if ($exists) {
-            $stmt = $conn->prepare("UPDATE grades SET process_score=?,midterm_score=?,final_score=?,total_score=?,letter_grade=?,note=? WHERE student_subject_id=?");
-            $stmt->bind_param('ddddssi', $process,$midterm,$final,$total,$letter,$note,$ssId);
+            $stmt = $conn->prepare("UPDATE grades SET process_score=?,midterm_score=?,final_score=?,total_score=?,letter_grade=?,note=?,data_mode=?,demo_batch_id=? WHERE student_subject_id=?");
+            $stmt->bind_param('ddddssssi', $process,$midterm,$final,$total,$letter,$note,$demoContext['data_mode'],$demoContext['demo_batch_id'],$ssId);
         } else {
-            $stmt = $conn->prepare("INSERT INTO grades (student_subject_id,process_score,midterm_score,final_score,total_score,letter_grade,note) VALUES (?,?,?,?,?,?,?)");
-            $stmt->bind_param('iddddss', $ssId,$process,$midterm,$final,$total,$letter,$note);
+            $stmt = $conn->prepare("INSERT INTO grades (student_subject_id,process_score,midterm_score,final_score,total_score,letter_grade,note,data_mode,demo_batch_id) VALUES (?,?,?,?,?,?,?,?,?)");
+            $stmt->bind_param('iddddssss', $ssId,$process,$midterm,$final,$total,$letter,$note,$demoContext['data_mode'],$demoContext['demo_batch_id']);
         }
         $stmt->execute() ? $_SESSION['_flash']=['type'=>'success','message'=>'Luu diem thanh cong.']
                          : $_SESSION['_flash']=['type'=>'danger','message'=>'Loi: '.$conn->error];
@@ -83,7 +96,7 @@ $stmtSec = $conn->prepare(
      LEFT JOIN faculties f ON m.faculty_id = f.id
      LEFT JOIN teachers t ON cs.teacher_id = t.id
      LEFT JOIN users ut ON t.user_id = ut.id
-     LEFT JOIN student_subjects ss ON ss.course_section_id = cs.id AND ss.status='registered'
+     LEFT JOIN student_subjects ss ON ss.course_section_id = cs.id AND ss.status IN ('registered','auto_enrolled')
      LEFT JOIN grades g ON g.student_subject_id = ss.id
      WHERE $sectionWhere
      GROUP BY cs.id, cs.section_code, cs.status, s.subject_name, f.faculty_name, ut.full_name
@@ -122,7 +135,7 @@ if ($filterSection > 0) {
          JOIN students st ON ss.student_id = st.id
          JOIN users u ON st.user_id = u.id
          LEFT JOIN grades g ON g.student_subject_id = ss.id
-         WHERE ss.course_section_id = ? AND ss.status = 'registered'
+         WHERE ss.course_section_id = ? AND ss.status IN ('registered','auto_enrolled')
          ORDER BY u.full_name ASC"
     );
     $stmtGr->bind_param('i', $filterSection);
@@ -377,3 +390,4 @@ document.getElementById('editGradeModal').addEventListener('show.bs.modal', func
 </script>
 <?php endif; ?>
 <?php include 'includes/footer.php'; ?>
+

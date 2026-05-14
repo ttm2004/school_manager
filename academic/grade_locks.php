@@ -23,8 +23,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $note = trim($_POST['note'] ?? '');
         $chk = $conn->query("SHOW TABLES LIKE 'grade_locks'");
         if ($chk && $chk->num_rows > 0) {
-            $stmt = $conn->prepare("INSERT IGNORE INTO grade_locks (course_section_id, locked_by, note) VALUES (?,?,?)");
-            $stmt->bind_param('iis', $sectionId, $userId, $note);
+            $demoContext = academicPolicySectionDemoContext($conn, $sectionId);
+            $stmt = $conn->prepare("INSERT IGNORE INTO grade_locks (course_section_id, locked_by, note, data_mode, demo_batch_id) VALUES (?,?,?,?,?)");
+            $stmt->bind_param('iisss', $sectionId, $userId, $note, $demoContext['data_mode'], $demoContext['demo_batch_id']);
             if ($stmt->execute()) {
                 // Thong bao cho GV
                 $info = $conn->query("SELECT cs.section_code, s.subject_name, t.user_id AS tuid
@@ -34,7 +35,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($info && $info['tuid']) {
                     $title = "Diem lop {$info['section_code']} da bi khoa";
                     $content = "Phong Dao tao da khoa diem lop {$info['section_code']} ({$info['subject_name']}). Khong the chinh sua them.";
-                    $stmtN = $conn->prepare("INSERT INTO notifications (user_id, title, content) VALUES (?,?,?)");
+                    $stmtN = $conn->prepare("INSERT INTO system_notifications (user_id, title, content) VALUES (?,?,?)");
                     $stmtN->bind_param('iss', $info['tuid'], $title, $content);
                     $stmtN->execute(); $stmtN->close();
                 }
@@ -81,7 +82,7 @@ if ($filterSem > 0) {
          LEFT JOIN faculties f ON m.faculty_id = f.id
          LEFT JOIN teachers t ON cs.teacher_id = t.id
          LEFT JOIN users ut ON t.user_id = ut.id
-         LEFT JOIN student_subjects ss ON ss.course_section_id = cs.id AND ss.status='registered'
+         LEFT JOIN student_subjects ss ON ss.course_section_id = cs.id AND ss.status IN ('registered','auto_enrolled')
          LEFT JOIN grades g ON g.student_subject_id = ss.id
          LEFT JOIN grade_locks gl ON gl.course_section_id = cs.id
          LEFT JOIN users ul ON gl.locked_by = ul.id
@@ -273,3 +274,4 @@ document.getElementById('lockModal').addEventListener('show.bs.modal', function(
 });
 </script>
 <?php include 'includes/footer.php'; ?>
+

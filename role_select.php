@@ -29,9 +29,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // Cho phép chọn __teacher__ nếu là teacher
         if ($selectedCode === '__teacher__' && $_SESSION['role'] === 'teacher') {
-            unset($_SESSION['_pending_roles'], $_SESSION['_active_role']);
+            $_SESSION['_active_role'] = '__teacher__';
+            $_SESSION['_user_role_codes'] = ['faculty_lecturer'];
+            $_SESSION['_roles_cached'] = true;
+            unset($_SESSION['_pending_roles']);
             unset($_SESSION['_faculty_id'], $_SESSION['_faculty_id_ts'],
-                  $_SESSION['_dept_id'], $_SESSION['_user_role_codes'], $_SESSION['_roles_cached']);
+                  $_SESSION['_dept_id']);
             header('Location: /university/teacher/');
             exit();
         }
@@ -54,19 +57,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             // Pre-cache role codes để requireAnyRole hoạt động ngay
             // Lấy tất cả roles của user (bao gồm cả faculty_lecturer)
-            $stmtCache = $conn->prepare(
-                "SELECT r.code FROM user_roles ur
-                 JOIN roles r ON ur.role_id = r.id
-                 WHERE ur.user_id = ? AND r.is_active = 1
-                   AND (ur.expires_at IS NULL OR ur.expires_at > NOW())"
-            );
-            $stmtCache->bind_param('i', $userId);
-            $stmtCache->execute();
-            $cachedCodes = [];
-            $res = $stmtCache->get_result();
-            while ($row = $res->fetch_assoc()) $cachedCodes[] = $row['code'];
-            $stmtCache->close();
-            $_SESSION['_user_role_codes'] = $cachedCodes;
+            $_SESSION['_user_role_codes'] = [$selectedCode];
             $_SESSION['_roles_cached']    = true;
 
             // Redirect theo role được chọn
@@ -81,6 +72,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 function getRedirectByRoleCode(string $roleCode, $conn): string
 {
     $map = [
+        '__teacher__'       => '/university/teacher/',
         'admissions_'      => '/university/admissions/',
         'academic_'        => '/university/academic/',
         'faculty_manager'  => '/university/faculty/',

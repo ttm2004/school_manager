@@ -1,0 +1,101 @@
+﻿full_name,gender,birthday,citizen_id,email,phone,address,high_school,graduation_year,major_code,method_id,math_score,literature_score,english_score,status
+Dương Anh Nhi,Nam,2008-10-02,099583827320,duonganhnhi.20260001@demo.tdmu.edu.vn,0938141158,An Giang,THPT Bến Cát,2026,7340301,1,5.87,6.9,5.22,approved
+Vũ Văn Ngân,Nam,2008-08-25,069525207191,vuvanngan.20260002@demo.tdmu.edu.vn,0950055387,An Giang,THPT Dĩ An,2026,7340301,3,5.64,8.95,5.32,new
+Đặng Quang Nhi,Nữ,2008-08-04,051638169240,dangquangnhi.20260003@demo.tdmu.edu.vn,0992848526,Bình Dương,THPT Bình Phú,2026,7340301,2,7.58,7.97,9.5,pending
+Ngô Thanh Trí,Nữ,2008-05-25,013127227418,ngothanhtri.20260004@demo.tdmu.edu.vn,0921012741,Bình Phước,THPT Phước Vĩnh,2026,7340301,1,6.55,9.32,5.61,pending
+Nguyễn Thị Mai,Nữ,2008-04-14,038296468346,nguyenthimai.20260005@demo.tdmu.edu.vn,0945373656,TP Hồ Chí Minh,THPT Bến Cát,2026,7340301,1,8.2,6.08,5.19,pending
+Nguyễn Trọng Trang,Nữ,2008-06-16,019469866415,nguyentrongtrang.20260006@demo.tdmu.edu.vn,0954811303,Đồng Nai,THPT Phước Vĩnh,2026,7480201,1,6.82,6.72,5.18,approved
+Đỗ Văn Quân,Nữ,2008-10-16,027952010355,dovanquan.20260007@demo.tdmu.edu.vn,0989858085,Long An,THPT Tân Phước Khánh,2026,7480201,1,7.2,9.14,8.81,approved
+Dương Hữu Giang,Nam,2008-11-22,061436092550,duonghuugiang.20260008@demo.tdmu.edu.vn,0972064263,Bà Rịa - Vũng Tàu,THPT Tân Phước Khánh,2026,7340301,1,8.61,5.41,9.46,approved
+Nguyễn Thị Châu,Nữ,2008-09-11,025165169151,nguyenthichau.20260009@demo.tdmu.edu.vn,0918070954,Bình Dương,THPT Phước Vĩnh,2026,7340301,1,8.97,8.11,6.95,new
+Huỳnh Văn Hùng,Nam,2008-03-14,015697935889,huynhvanhung.20260010@demo.tdmu.edu.vn,0975298176,Tiền Giang,THPT Dĩ An,2026,7340301,2,6.16,7.57,9.14,pending
+Bùi Văn Nam,Nam,2008-02-16,099155942057,buivannam.20260011@demo.tdmu.edu.vn,0999806973,TP Hồ Chí Minh,THPT Võ Minh Đức,2026,7340301,1,5.13,8.68,6.7,pending
+Vũ Trọng An,Nam,2008-06-30,011231842796,vutrongan.20260012@demo.tdmu.edu.vn,0984097557,Bình Phước,THPT Võ Minh Đức,2026,7480201,2,9.07,6.6,6.91,approved
+Nguyễn Văn Nhi,Nam,2008-02-11,027546653292,nguyenvannhi.20260013@demo.tdmu.edu.vn,0984388247,Bình Phước,THPT Tân Phước Khánh,2026,7340301,3,8.93,8.29,6.7,new
+Dương Thị Trang,Nữ,2008-05-13,081639941472,duongthitrang.20260014@demo.tdmu.edu.vn,0930947318,Bình Phước,THPT Bình Phú,2026,7480201,1,8.54,7.71,5.58,pending
+Đỗ Văn Hân,Nam,2008-07-03,063480777403,dovanhan.20260015@demo.tdmu.edu.vn,0949842941,Bà Rịa - Vũng Tàu,THPT Bình Phú,2026,7340301,1,9.4,8.99,5.67,approved
+Dương Văn Hân,Nam,2008-02-13,080559896434,duongvanhan.20260016@demo.tdmu.edu.vn,0926554120,TP Hồ Chí Minh,THPT chuyên Hùng Vương,2026,7480201,2,9.68,7.71,4.95,pending
+Trần Trọng Bình,Nam,2008-03-18,075281615591,trantrongbinh.20260017@demo.tdmu.edu.vn,0960310936,Bà Rịa - Vũng Tàu,THPT Nguyễn Trãi,2026,7480201,2,9.39,5.65,6.55,pending
+Bùi Văn Đạt,Nam,2008-04-20,026576272329,buivandat.20260018@demo.tdmu.edu.vn,0913566871,An Giang,THPT Dĩ An,2026,7340301,1,8.37,8.06,6.89,new
+Bùi Thị Ngân,Nữ,2008-03-06,062045231332,buithingan.20260019@demo.tdmu.edu.vn,0926625162,Đồng Nai,THPT chuyên Hùng Vương,2026,7340301,1,6.77,7.37,8.24,pending
+Vũ Quang Thảo,Nam,2008-01-13,037041656212,vuquangthao.20260020@demo.tdmu.edu.vn,0987628233,Tây Ninh,THPT Phước Vĩnh,2026,7480201,1,5.16,8.96,8.68,pending
+Đỗ Văn Vy,Nam,2008-01-22,059283288283,dovanvy.20260021@demo.tdmu.edu.vn,0939520598,TP Hồ Chí Minh,THPT Dĩ An,2026,7340301,3,6.7,8.86,8.68,new
+Dương Thị Hải,Nữ,2008-03-07,099431994921,duongthihai.20260022@demo.tdmu.edu.vn,0919983066,Tây Ninh,THPT Tân Phước Khánh,2026,7340301,1,7.32,8.18,7.26,approved
+Trần Văn Giang,Nam,2008-01-02,010292844440,tranvangiang.20260023@demo.tdmu.edu.vn,0987137552,TP Hồ Chí Minh,THPT chuyên Hùng Vương,2026,7480201,3,7.65,8.6,5.1,new
+Đặng Thị Thảo,Nữ,2008-08-26,057761919595,dangthithao.20260024@demo.tdmu.edu.vn,0942861295,Tiền Giang,THPT chuyên Hùng Vương,2026,7340301,1,5.09,7.15,5.97,pending
+Đỗ Thị Duy,Nữ,2008-03-25,047480642437,dothiduy.20260025@demo.tdmu.edu.vn,0932557485,Bà Rịa - Vũng Tàu,THPT Võ Minh Đức,2026,7340301,2,6.88,6.05,8.41,pending
+Bùi Thị Long,Nữ,2008-06-15,052606363038,buithilong.20260026@demo.tdmu.edu.vn,0974154366,Cần Thơ,THPT chuyên Hùng Vương,2026,7340301,2,5.27,8.67,6.37,approved
+Hồ Hữu Long,Nữ,2008-03-07,039123372181,hohuulong.20260027@demo.tdmu.edu.vn,0966342334,Tiền Giang,THPT Phước Vĩnh,2026,7480201,2,7.5,6.99,8.65,pending
+Ngô Văn Phong,Nam,2008-11-11,010472606102,ngovanphong.20260028@demo.tdmu.edu.vn,0994301884,Long An,THPT Phước Vĩnh,2026,7480201,1,7.01,8.73,9.52,new
+Phạm Gia Thảo,Nữ,2008-10-23,076830564032,phamgiathao.20260029@demo.tdmu.edu.vn,0947503196,Cần Thơ,THPT Trịnh Hoài Đức,2026,7340301,1,9.56,5.13,6.88,new
+Huỳnh Phương Linh,Nam,2008-12-03,037016236282,huynhphuonglinh.20260030@demo.tdmu.edu.vn,0970694639,Cần Thơ,THPT Trịnh Hoài Đức,2026,7480201,2,8.65,8.47,6.73,approved
+Lê Gia Giang,Nữ,2008-03-19,066544882273,legiagiang.20260031@demo.tdmu.edu.vn,0976170348,Cần Thơ,THPT Võ Minh Đức,2026,7340301,1,9.25,5.71,8.35,new
+Bùi Trọng Thảo,Nữ,2008-04-04,057061405717,buitrongthao.20260032@demo.tdmu.edu.vn,0973697337,Tây Ninh,THPT chuyên Hùng Vương,2026,7480201,1,6.11,6.13,9.61,new
+Phan Thanh Tâm,Nam,2008-05-31,029050009390,phanthanhtam.20260033@demo.tdmu.edu.vn,0950915082,Bình Dương,THPT chuyên Hùng Vương,2026,7480201,1,7.8,9.5,8.25,approved
+Huỳnh Thị Giang,Nữ,2008-04-07,093488170180,huynhthigiang.20260034@demo.tdmu.edu.vn,0969448869,Cần Thơ,THPT Lái Thiêu,2026,7340301,1,7.52,9.4,9.0,approved
+Đỗ Thị Duy,Nữ,2008-05-17,077723355236,dothiduy.20260035@demo.tdmu.edu.vn,0985448167,Bình Phước,THPT Bình Phú,2026,7480201,1,7.39,5.73,9.22,pending
+Nguyễn Thị Linh,Nữ,2008-06-20,057089915469,nguyenthilinh.20260036@demo.tdmu.edu.vn,0989033440,TP Hồ Chí Minh,THPT Nguyễn Trãi,2026,7480201,2,7.06,6.62,6.79,new
+Hồ Văn Quân,Nữ,2008-07-28,085721093324,hovanquan.20260037@demo.tdmu.edu.vn,0977234857,TP Hồ Chí Minh,THPT Phước Vĩnh,2026,7340301,3,8.21,8.78,8.79,new
+Bùi Anh Khánh,Nữ,2008-02-23,055513676815,buianhkhanh.20260038@demo.tdmu.edu.vn,0979306782,TP Hồ Chí Minh,THPT Tân Phước Khánh,2026,7340301,1,8.84,6.29,9.46,approved
+Nguyễn Gia Trang,Nữ,2008-05-03,012525624925,nguyengiatrang.20260039@demo.tdmu.edu.vn,0945224183,Bà Rịa - Vũng Tàu,THPT Bến Cát,2026,7480201,1,7.63,5.05,7.83,new
+Bùi Hoài Quân,Nữ,2008-10-05,090437954463,buihoaiquan.20260040@demo.tdmu.edu.vn,0959196135,Đồng Nai,THPT chuyên Hùng Vương,2026,7340301,3,7.78,6.84,7.99,approved
+Võ Ngọc Phong,Nam,2008-06-13,037661211310,vongocphong.20260041@demo.tdmu.edu.vn,0977751972,TP Hồ Chí Minh,THPT Lái Thiêu,2026,7340301,1,6.06,8.96,7.25,pending
+Hồ Thị Hùng,Nữ,2008-09-02,073076522065,hothihung.20260042@demo.tdmu.edu.vn,0912860070,TP Hồ Chí Minh,THPT Dĩ An,2026,7340301,2,9.18,6.61,5.88,pending
+Vũ Anh Hải,Nam,2008-06-04,081028718620,vuanhhai.20260043@demo.tdmu.edu.vn,0914002882,Bình Dương,THPT Nguyễn Trãi,2026,7340301,3,8.84,9.07,4.8,approved
+Hồ Thị Nam,Nữ,2008-07-08,018505854816,hothinam.20260044@demo.tdmu.edu.vn,0976981443,Bình Dương,THPT Võ Minh Đức,2026,7480201,1,5.67,8.12,9.46,pending
+Ngô Thị Khánh,Nữ,2008-07-13,063839368438,ngothikhanh.20260045@demo.tdmu.edu.vn,0973214568,Bình Phước,THPT Bến Cát,2026,7480201,3,5.15,5.16,6.41,new
+Huỳnh Văn Hà,Nữ,2008-11-20,075544684038,huynhvanha.20260046@demo.tdmu.edu.vn,0998479240,Bình Dương,THPT chuyên Hùng Vương,2026,7340301,2,7.57,5.16,6.15,approved
+Vũ Văn Giang,Nam,2008-07-22,058441453573,vuvangiang.20260047@demo.tdmu.edu.vn,0946863381,Đồng Nai,THPT Lái Thiêu,2026,7480201,1,8.42,5.58,8.21,new
+Bùi Văn Hà,Nam,2008-10-26,075611966776,buivanha.20260048@demo.tdmu.edu.vn,0913428890,An Giang,THPT Võ Minh Đức,2026,7480201,2,6.08,5.83,5.76,pending
+Dương Văn Trang,Nam,2008-07-26,028410462788,duongvantrang.20260049@demo.tdmu.edu.vn,0914598474,Tây Ninh,THPT Lái Thiêu,2026,7340301,3,8.52,5.54,9.14,pending
+Vũ Thị Hải,Nữ,2008-10-25,029777165401,vuthihai.20260050@demo.tdmu.edu.vn,0952226251,Long An,THPT chuyên Hùng Vương,2026,7340301,1,6.48,9.48,9.29,pending
+Nguyễn Văn Phong,Nam,2008-04-02,074647387472,nguyenvanphong.20260051@demo.tdmu.edu.vn,0961092337,An Giang,THPT Nguyễn Trãi,2026,7480201,3,8.79,5.06,5.58,new
+Đặng Phương Hân,Nam,2008-05-22,043216460115,dangphuonghan.20260052@demo.tdmu.edu.vn,0999150579,Long An,THPT Phước Vĩnh,2026,7480201,2,5.6,7.27,5.44,approved
+Phan Quang Hân,Nữ,2008-12-11,082710399138,phanquanghan.20260053@demo.tdmu.edu.vn,0981918921,Tây Ninh,THPT Trịnh Hoài Đức,2026,7480201,1,6.03,9.39,5.37,approved
+Vũ Ngọc Phúc,Nam,2008-09-10,059837444392,vungocphuc.20260054@demo.tdmu.edu.vn,0997003118,Bà Rịa - Vũng Tàu,THPT chuyên Hùng Vương,2026,7340301,2,8.25,5.69,8.52,new
+Võ Ngọc Nam,Nam,2008-12-19,095328520875,vongocnam.20260055@demo.tdmu.edu.vn,0912576340,Đồng Nai,THPT Nguyễn Trãi,2026,7480201,3,7.32,6.88,7.77,pending
+Đặng Phương Hải,Nam,2008-02-24,045479423318,dangphuonghai.20260056@demo.tdmu.edu.vn,0911156939,Tây Ninh,THPT Dĩ An,2026,7340301,1,8.14,5.02,9.5,pending
+Võ Trọng Giang,Nam,2008-10-07,032924064911,votronggiang.20260057@demo.tdmu.edu.vn,0943729600,TP Hồ Chí Minh,THPT Bến Cát,2026,7340301,1,9.08,7.74,8.44,pending
+Dương Thị Linh,Nữ,2008-06-03,038785759799,duongthilinh.20260058@demo.tdmu.edu.vn,0934801128,Tiền Giang,THPT Phước Vĩnh,2026,7480201,1,9.37,8.89,5.73,approved
+Vũ Trọng Hùng,Nữ,2008-05-12,021831803937,vutronghung.20260059@demo.tdmu.edu.vn,0918954831,Tây Ninh,THPT chuyên Hùng Vương,2026,7340301,3,9.12,5.56,5.15,new
+Vũ Hoài Duy,Nữ,2008-06-17,078052167867,vuhoaiduy.20260060@demo.tdmu.edu.vn,0955164647,Long An,THPT Tân Phước Khánh,2026,7340301,1,5.8,8.09,6.67,pending
+Phạm Anh Trang,Nữ,2008-11-15,070400340353,phamanhtrang.20260061@demo.tdmu.edu.vn,0943764181,Tiền Giang,THPT Tân Phước Khánh,2026,7480201,1,8.6,8.9,7.44,pending
+Đặng Thị Trang,Nữ,2008-12-27,082775277962,dangthitrang.20260062@demo.tdmu.edu.vn,0914517991,Bà Rịa - Vũng Tàu,THPT Bến Cát,2026,7340301,1,6.96,8.17,4.78,approved
+Đỗ Quang Khánh,Nữ,2008-04-14,060899350310,doquangkhanh.20260063@demo.tdmu.edu.vn,0942790946,Bà Rịa - Vũng Tàu,THPT Phước Vĩnh,2026,7340301,3,7.3,6.42,8.68,approved
+Huỳnh Gia Ngân,Nữ,2008-03-20,092852445143,huynhgiangan.20260064@demo.tdmu.edu.vn,0955458746,Bà Rịa - Vũng Tàu,THPT Phước Vĩnh,2026,7480201,1,7.65,7.42,6.07,new
+Trần Thị Phong,Nữ,2008-06-22,038529831376,tranthiphong.20260065@demo.tdmu.edu.vn,0998087338,Bình Dương,THPT Trịnh Hoài Đức,2026,7340301,1,8.0,8.94,4.52,new
+Huỳnh Trọng Tâm,Nam,2008-06-20,089131965230,huynhtrongtam.20260066@demo.tdmu.edu.vn,0999119266,TP Hồ Chí Minh,THPT Trịnh Hoài Đức,2026,7340301,2,6.49,5.93,7.66,pending
+Ngô Thị Thảo,Nữ,2008-03-30,024430356073,ngothithao.20260067@demo.tdmu.edu.vn,0980334291,Tây Ninh,THPT chuyên Hùng Vương,2026,7480201,3,9.78,7.79,7.45,pending
+Đỗ Văn Tâm,Nam,2008-07-15,062494173561,dovantam.20260068@demo.tdmu.edu.vn,0949318297,Long An,THPT Dĩ An,2026,7480201,1,8.7,6.57,4.98,pending
+Dương Phương Phúc,Nữ,2008-04-19,092080200113,duongphuongphuc.20260069@demo.tdmu.edu.vn,0948133355,An Giang,THPT Lái Thiêu,2026,7480201,1,7.63,7.8,7.3,new
+Huỳnh Thị Trí,Nam,2008-11-08,050347421110,huynhthitri.20260070@demo.tdmu.edu.vn,0967051057,Cần Thơ,THPT Bến Cát,2026,7480201,1,8.79,5.28,8.25,pending
+Ngô Văn Linh,Nam,2008-09-05,022314393278,ngovanlinh.20260071@demo.tdmu.edu.vn,0912067463,Tây Ninh,THPT Trịnh Hoài Đức,2026,7480201,3,6.47,6.17,9.14,pending
+Dương Khánh Ngân,Nữ,2008-06-06,067832654654,duongkhanhngan.20260072@demo.tdmu.edu.vn,0948514780,Bình Phước,THPT chuyên Hùng Vương,2026,7340301,3,8.25,6.9,7.82,pending
+Ngô Thị Hùng,Nữ,2008-09-08,065518401340,ngothihung.20260073@demo.tdmu.edu.vn,0996704984,Bà Rịa - Vũng Tàu,THPT Lái Thiêu,2026,7340301,3,7.83,7.24,7.26,pending
+Hoàng Minh Tâm,Nam,2008-07-20,096864044334,hoangminhtam.20260074@demo.tdmu.edu.vn,0957940833,Bà Rịa - Vũng Tàu,THPT Tân Phước Khánh,2026,7340301,1,7.77,7.52,9.34,new
+Phan Văn Nhi,Nam,2008-09-20,088954825210,phanvannhi.20260075@demo.tdmu.edu.vn,0941787471,TP Hồ Chí Minh,THPT Lái Thiêu,2026,7340301,1,8.53,7.29,9.19,pending
+Dương Hoài Giang,Nam,2008-07-09,059560589660,duonghoaigiang.20260076@demo.tdmu.edu.vn,0996285151,Bà Rịa - Vũng Tàu,THPT Bến Cát,2026,7480201,3,5.87,9.38,7.3,approved
+Vũ Gia Tâm,Nữ,2008-04-28,058934798311,vugiatam.20260077@demo.tdmu.edu.vn,0934304780,Bình Phước,THPT chuyên Hùng Vương,2026,7480201,1,7.46,8.3,8.32,new
+Phan Khánh Long,Nam,2008-04-26,059645462718,phankhanhlong.20260078@demo.tdmu.edu.vn,0960168417,Bình Dương,THPT Tân Phước Khánh,2026,7340301,1,9.1,6.08,6.61,pending
+Đặng Tuấn Nam,Nam,2008-04-25,026060679092,dangtuannam.20260079@demo.tdmu.edu.vn,0976887628,Cần Thơ,THPT Bến Cát,2026,7340301,1,6.09,8.55,5.13,new
+Dương Tuấn Trí,Nữ,2008-08-17,048064901055,duongtuantri.20260080@demo.tdmu.edu.vn,0996048731,Bình Phước,THPT Bến Cát,2026,7480201,2,5.52,9.04,7.31,approved
+Bùi Ngọc Châu,Nam,2008-02-08,070163260538,buingocchau.20260081@demo.tdmu.edu.vn,0924082908,TP Hồ Chí Minh,THPT Bến Cát,2026,7480201,1,7.46,8.9,5.35,pending
+Bùi Thị Khánh,Nữ,2008-04-10,050391991778,buithikhanh.20260082@demo.tdmu.edu.vn,0963672768,Cần Thơ,THPT Bến Cát,2026,7480201,1,5.73,5.67,6.88,approved
+Bùi Phương Bình,Nam,2008-11-11,074337943933,buiphuongbinh.20260083@demo.tdmu.edu.vn,0978318761,Bình Phước,THPT Bình Phú,2026,7480201,1,8.29,5.14,5.51,new
+Vũ Thị Đạt,Nữ,2008-06-08,098711739296,vuthidat.20260084@demo.tdmu.edu.vn,0923730979,Bà Rịa - Vũng Tàu,THPT Nguyễn Trãi,2026,7340301,1,8.49,9.13,8.53,new
+Huỳnh Thị Nam,Nữ,2008-09-12,073690563438,huynhthinam.20260085@demo.tdmu.edu.vn,0938615187,Bà Rịa - Vũng Tàu,THPT Tân Phước Khánh,2026,7340301,2,8.69,9.29,4.63,pending
+Huỳnh Hoài Ngân,Nữ,2008-09-12,030091105223,huynhhoaingan.20260086@demo.tdmu.edu.vn,0969659525,Tiền Giang,THPT Võ Minh Đức,2026,7480201,1,7.59,9.09,7.73,pending
+Hoàng Thị Châu,Nữ,2008-06-25,087089382270,hoangthichau.20260087@demo.tdmu.edu.vn,0974394240,Bà Rịa - Vũng Tàu,THPT Dĩ An,2026,7340301,3,8.26,7.23,8.22,pending
+Huỳnh Hữu Hùng,Nam,2008-02-25,023340968579,huynhhuuhung.20260088@demo.tdmu.edu.vn,0926752836,Bình Dương,THPT Trịnh Hoài Đức,2026,7340301,2,9.38,5.59,7.97,pending
+Nguyễn Thị Duy,Nữ,2008-01-03,073403051164,nguyenthiduy.20260089@demo.tdmu.edu.vn,0988043893,TP Hồ Chí Minh,THPT Trịnh Hoài Đức,2026,7480201,1,7.2,7.47,4.9,new
+Bùi Tuấn Trang,Nữ,2008-03-08,070014618935,buituantrang.20260090@demo.tdmu.edu.vn,0936488410,Long An,THPT Phước Vĩnh,2026,7480201,1,9.65,7.26,7.81,new
+Lê Văn Khánh,Nam,2008-03-24,092959249759,levankhanh.20260091@demo.tdmu.edu.vn,0933280724,Tây Ninh,THPT chuyên Hùng Vương,2026,7480201,1,6.36,7.38,6.22,approved
+Dương Gia Hân,Nữ,2008-12-07,019361316201,duonggiahan.20260092@demo.tdmu.edu.vn,0937384390,Bình Phước,THPT chuyên Hùng Vương,2026,7480201,1,8.74,5.58,4.68,approved
+Đỗ Trọng Mai,Nữ,2008-09-08,097388543732,dotrongmai.20260093@demo.tdmu.edu.vn,0935135643,Bình Dương,THPT Tân Phước Khánh,2026,7340301,2,8.5,6.33,9.66,approved
+Bùi Thị Bình,Nữ,2008-09-04,018217942076,buithibinh.20260094@demo.tdmu.edu.vn,0960903262,Đồng Nai,THPT Dĩ An,2026,7480201,1,8.02,5.89,9.36,pending
+Ngô Hữu An,Nam,2008-07-02,033262702847,ngohuuan.20260095@demo.tdmu.edu.vn,0961322811,Bình Dương,THPT Bình Phú,2026,7480201,1,8.32,6.4,4.73,approved
+Phạm Tuấn Nhi,Nam,2008-04-13,061724536577,phamtuannhi.20260096@demo.tdmu.edu.vn,0934417192,An Giang,THPT Trịnh Hoài Đức,2026,7480201,1,9.65,5.48,8.21,approved
+Ngô Văn Thảo,Nam,2008-09-30,012041019541,ngovanthao.20260097@demo.tdmu.edu.vn,0938511598,Đồng Nai,THPT Dĩ An,2026,7480201,3,6.51,5.7,7.45,approved
+Đặng Thị Trang,Nữ,2008-07-12,098512105453,dangthitrang.20260098@demo.tdmu.edu.vn,0938996383,TP Hồ Chí Minh,THPT Dĩ An,2026,7480201,3,7.77,7.26,4.58,new
+Bùi Hoài Khánh,Nam,2008-09-16,049541487631,buihoaikhanh.20260099@demo.tdmu.edu.vn,0943416684,Bình Dương,THPT Nguyễn Trãi,2026,7340301,1,6.66,5.58,6.29,pending
+Hồ Văn Nam,Nam,2008-12-03,040696004508,hovannam.20260100@demo.tdmu.edu.vn,0961722195,An Giang,THPT Trịnh Hoài Đức,2026,7480201,1,7.55,8.59,7.14,approved

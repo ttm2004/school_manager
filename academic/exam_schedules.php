@@ -2,6 +2,7 @@
 require_once '../config/database.php';
 require_once '../includes/auth.php';
 require_once '../includes/AcademicPolicy.php';
+require_once '../app/Services/ExamScheduleService.php';
 require_once 'includes/academic_helpers.php';
 requireAnyRole(['academic_manager','academic_staff']);
 $pageTitle = 'Lich thi Cuoi ky';
@@ -22,23 +23,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $note      = trim($_POST['note'] ?? '');
         $status    = trim($_POST['status'] ?? 'scheduled');
         if ($sectionId && $examDate && $startTime && $endTime) {
-            $examCheck = academicPolicyValidateExamSchedule($conn, $sectionId, $examDate, $startTime, $endTime, $room);
+            $examCheck = ExamScheduleService::validate($conn, $sectionId, $examDate, $startTime, $endTime, $room);
             if (!$examCheck['ok']) {
                 $_SESSION['_flash']=['type'=>'danger','message'=>$examCheck['message']];
             } else {
-                $stmt = $conn->prepare("INSERT INTO final_exam_schedules (course_section_id,exam_date,start_time,end_time,room,exam_form,note,status) VALUES (?,?,?,?,?,?,?,?)");
-                $stmt->bind_param('isssssss',$sectionId,$examDate,$startTime,$endTime,$room,$examForm,$note,$status);
+                $demoContext = academicPolicySectionDemoContext($conn, $sectionId);
+                $stmt = $conn->prepare("INSERT INTO final_exam_schedules (course_section_id,exam_date,start_time,end_time,room,exam_form,note,status,data_mode,demo_batch_id) VALUES (?,?,?,?,?,?,?,?,?,?)");
+                $stmt->bind_param('isssssssss',$sectionId,$examDate,$startTime,$endTime,$room,$examForm,$note,$status,$demoContext['data_mode'],$demoContext['demo_batch_id']);
                 $stmt->execute() ? $_SESSION['_flash']=['type'=>'success','message'=>'Them lich thi thanh cong.']
                                  : $_SESSION['_flash']=['type'=>'danger','message'=>'Loi: '.$conn->error];
                 $stmt->close();
                 // Thong bao SV
                 if ($_SESSION['_flash']['type']==='success') {
-                    $svList = $conn->query("SELECT u.id FROM student_subjects ss JOIN students st ON ss.student_id=st.id JOIN users u ON st.user_id=u.id WHERE ss.course_section_id=$sectionId AND ss.status='registered'")->fetch_all(MYSQLI_ASSOC);
+                    $svList = $conn->query("SELECT u.id FROM student_subjects ss JOIN students st ON ss.student_id=st.id JOIN users u ON st.user_id=u.id WHERE ss.course_section_id=$sectionId AND ss.status IN ('registered','auto_enrolled')")->fetch_all(MYSQLI_ASSOC);
                     $info = $conn->query("SELECT s.subject_name, cs.section_code FROM course_sections cs JOIN subjects s ON cs.subject_id=s.id WHERE cs.id=$sectionId LIMIT 1")->fetch_assoc();
                     if ($info && !empty($svList)) {
                         $title = "Lich thi: {$info['subject_name']}";
                         $content = "Lop {$info['section_code']} thi ngay ".date('d/m/Y',strtotime($examDate))." luc $startTime tai phong $room.";
-                        $stmtN = $conn->prepare("INSERT INTO notifications (user_id,title,content) VALUES (?,?,?)");
+                        $stmtN = $conn->prepare("INSERT INTO system_notifications (user_id,title,content) VALUES (?,?,?)");
                         foreach ($svList as $sv) { $stmtN->bind_param('iss',$sv['id'],$title,$content); $stmtN->execute(); }
                         $stmtN->close();
                     }
@@ -60,10 +62,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $currentExam = $stmtCurrent->get_result()->fetch_assoc();
             $stmtCurrent->close();
             if (!$currentExam) {
-                $_SESSION['_flash']=['type'=>'danger','message'=>'Không tìm thấy lịch thi.'];
+                $_SESSION['_flash']=['type'=>'danger','message'=>'Không tìm th?y l?ch thi.'];
                 header('Location: exam_schedules.php'); exit();
             }
-            $examCheck = academicPolicyValidateExamSchedule($conn, (int)$currentExam['course_section_id'], $examDate, $startTime, $endTime, $room, $id);
+            $examCheck = ExamScheduleService::validate($conn, (int)$currentExam['course_section_id'], $examDate, $startTime, $endTime, $room, $id);
             if (!$examCheck['ok']) {
                 $_SESSION['_flash']=['type'=>'danger','message'=>$examCheck['message']];
                 header('Location: exam_schedules.php'); exit();
@@ -108,7 +110,7 @@ JOIN course_sections cs ON fes.course_section_id=cs.id
 JOIN subjects s ON cs.subject_id=s.id JOIN semesters sm ON cs.semester_id=sm.id
 LEFT JOIN majors m ON s.major_id=m.id LEFT JOIN faculties f ON m.faculty_id=f.id
 LEFT JOIN teachers t ON cs.teacher_id=t.id LEFT JOIN users ut ON t.user_id=ut.id
-LEFT JOIN student_subjects ss ON ss.course_section_id=cs.id AND ss.status='registered'
+LEFT JOIN student_subjects ss ON ss.course_section_id=cs.id AND ss.status IN ('registered','auto_enrolled')
 WHERE $whereSQL GROUP BY fes.id ORDER BY fes.exam_date ASC, fes.start_time ASC LIMIT ? OFFSET ?");
 $allTypes=$types.'ii'; $allParams=array_merge($params,[$pag['per_page'],$pag['offset']]);
 $stmtData->bind_param($allTypes,...$allParams); $stmtData->execute();
@@ -265,3 +267,4 @@ document.getElementById('editModal').addEventListener('show.bs.modal', function(
 });
 </script>
 <?php include 'includes/footer.php'; ?>
+

@@ -1,17 +1,19 @@
 ﻿<?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
+require_once '../app/Services/AdmissionsEnrollmentService.php';
 requireAnyRole(['admissions_manager']);
 $pageTitle = 'Phân lớp & Cấp tài khoản tự động';
 
 $success = $error = '';
 $preview = null;
 $assignResult = null;
+$dataMode = ($_GET['mode'] ?? 'system') === 'test' ? 'test' : 'system';
 
 // ── Kiểm tra giai đoạn đợt tuyển sinh ──────────────────────
-$roundPhase  = getRoundPhase();
-$activeRound = getActiveRound();
-$roundMsg    = getRoundStatusMessage();
+$roundPhase  = getRoundPhase($dataMode);
+$activeRound = getActiveRound($dataMode);
+$roundMsg    = getRoundStatusMessage($dataMode);
 
 // auto_assign CHỈ mở sau khi xét tuyển kết thúc:
 // enrolling, supp_enrolling, completed (nếu còn SV chưa phân lớp)
@@ -22,6 +24,7 @@ $assignLocked  = !$assignAllowed;
 $pendingAssign = $conn->query("
     SELECT COUNT(*) as c FROM admission_applications aa
     WHERE aa.status = 'enrolled'
+    AND aa.data_mode = '" . $conn->real_escape_string($dataMode) . "'
     AND (SELECT u.id FROM users u JOIN students s ON u.id=s.user_id WHERE u.email=aa.email LIMIT 1) IS NULL
 ")->fetch_assoc()['c'] ?? 0;
 
@@ -39,7 +42,7 @@ $majors = $conn->query("
         COUNT(aa.id) as enrolled_count,
         SUM(CASE WHEN (SELECT u.id FROM users u JOIN students s ON u.id=s.user_id WHERE u.email=aa.email LIMIT 1) IS NOT NULL THEN 1 ELSE 0 END) as has_account_count
     FROM majors m
-    JOIN admission_applications aa ON aa.major_id = m.id AND aa.status = 'enrolled'
+    JOIN admission_applications aa ON aa.major_id = m.id AND aa.status = 'enrolled' AND aa.data_mode = '" . $conn->real_escape_string($dataMode) . "'
     GROUP BY m.id
     HAVING enrolled_count > 0
     ORDER BY m.major_name
@@ -63,6 +66,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $major_id   = intval($_POST['major_id'] ?? 0);
     $algorithm  = $_POST['algorithm'] ?? 'alpha'; // alpha | score
     $class_ids  = array_map('intval', $_POST['class_ids'] ?? []);
+    $autoEnrollMode = ($_POST['auto_enroll_mode'] ?? 'system') === 'test' ? 'test' : 'system';
+    $dataMode = ($_POST['data_mode'] ?? 'system') === 'test' ? 'test' : 'system';
 
     if (!$major_id || empty($class_ids)) {
         $error = 'Vui lòng chọn ngành và ít nhất một lớp.';
@@ -75,10 +80,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 YEAR(aa.created_at) as enroll_year
             FROM admission_applications aa
             LEFT JOIN majors m ON aa.major_id = m.id
-            WHERE aa.major_id = ? AND aa.status = 'enrolled'
+            WHERE aa.major_id = ? AND aa.status = 'enrolled' AND aa.data_mode = ?
             AND (SELECT u.id FROM users u JOIN students s ON u.id=s.user_id WHERE u.email=aa.email LIMIT 1) IS NULL
         ");
-        $stmt->bind_param('i', $major_id);
+        $stmt->bind_param('is', $major_id, $dataMode);
         $stmt->execute();
         $students = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
         $stmt->close();
@@ -130,10 +135,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $created = 0; $failed = 0;
                     foreach ($students as $i => $sv) {
                         $cid = $class_ids[$i % $numClasses];
-                        $classInfo = $conn->query("SELECT c.enrollment_year, c.cohort_id, tc.program_id, tc.duration_years
-                                                   FROM classes c
-                                                   LEFT JOIN training_cohorts tc ON c.cohort_id = tc.id
-                                                   WHERE c.id=$cid LIMIT 1")->fetch_assoc();
+                        $classStmt = $conn->prepare(
+                            "SELECT c.major_id, c.enrollment_year, c.cohort_id, tc.program_id, tc.duration_years
+                             FROM classes c
+                             LEFT JOIN training_cohorts tc ON c.cohort_id = tc.id
+                             WHERE c.id = ?
+                             LIMIT 1"
+                        );
+                        $classStmt->bind_param('i', $cid);
+                        $classStmt->execute();
+                        $classInfo = $classStmt->get_result()->fetch_assoc();
+                        $classStmt->close();
                         $year = (int)($classInfo['enrollment_year'] ?? $sv['enroll_year']);
                         $cohortId = (int)($classInfo['cohort_id'] ?? 0);
                         $programId = (int)($classInfo['program_id'] ?? 0);
@@ -158,15 +170,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $us->close();
 
                         // Tạo student
-                        $ss = $conn->prepare(
-                            "INSERT INTO students
-                             (user_id, student_code, class_id, enrollment_year, cohort_id, training_program_id,
-                              expected_grad_year, academic_status, address, birthday, gender)
-                             VALUES (?,?,?,?,?,?,?,'Đang học',?,?,?)"
-                        );
-                        $ss->bind_param('isiiiiisss', $userId, $studentCode, $cid, $year, $cohortId, $programId, $expectedGradYear, $sv['address'], $sv['birthday'], $sv['gender']);
-                        if (!$ss->execute()) { $failed++; $ss->close(); continue; }
-                        $ss->close();
+                        $studentId = AdmissionsEnrollmentService::createStudentProfile($conn, $userId, $studentCode, $cid, $sv, $classInfo, $autoEnrollMode);
+                        AdmissionsEnrollmentService::notifyFinanceNewEnrollment($conn, $studentId, $studentCode, $sv['full_name']);
                         $created++;
                     }
                     $conn->commit();
@@ -220,6 +225,13 @@ include __DIR__ . '/includes/header.php';
             <div class="card-header"><i class="bi bi-diagram-3-fill me-2"></i>Cấu hình phân lớp tự động</div>
             <div class="card-body">
                 <form method="POST" id="assignForm">
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Luong ho so</label>
+                        <select name="data_mode" class="form-select" onchange="window.location.href='auto_assign.php?mode='+this.value">
+                            <option value="system" <?php echo $dataMode==='system'?'selected':''; ?>>Dữ liệu thật</option>
+                            <option value="test" <?php echo $dataMode==='test'?'selected':''; ?>>Test / Demo</option>
+                        </select>
+                    </div>
                     <!-- Chọn ngành -->
                     <div class="mb-3">
                         <label class="form-label fw-semibold">Ngành xét tuyển <span class="text-danger">*</span></label>
@@ -267,6 +279,22 @@ include __DIR__ . '/includes/header.php';
                             <div class="text-muted small fst-italic">Chọn ngành trước để lọc lớp</div>
                         </div>
                         <div class="form-text">Chọn nhiều lớp — sinh viên sẽ được phân đều theo vòng tròn.</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Chế độ đăng ký HK1 tự động</label>
+                        <div class="d-flex flex-column gap-2">
+                            <label class="form-check border rounded p-2 mb-0">
+                                <input class="form-check-input" type="radio" name="auto_enroll_mode" value="system" checked>
+                                <span class="form-check-label fw-semibold">Theo hệ thống thật</span>
+                                <div class="small text-muted">Tìm HK1 đúng khóa/năm học, dùng cho vận hành thật.</div>
+                            </label>
+                            <label class="form-check border rounded p-2 mb-0">
+                                <input class="form-check-input" type="radio" name="auto_enroll_mode" value="test">
+                                <span class="form-check-label fw-semibold">Theo học kỳ Test</span>
+                                <div class="small text-muted">Ưu tiên học kỳ Test cùng năm học để demo quy trình nhanh.</div>
+                            </label>
+                        </div>
                     </div>
 
                     <div class="d-grid gap-2">
@@ -354,6 +382,8 @@ include __DIR__ . '/includes/header.php';
                 <form method="POST">
                     <input type="hidden" name="major_id" value="<?php echo intval($_POST['major_id']); ?>">
                     <input type="hidden" name="algorithm" value="<?php echo htmlspecialchars($_POST['algorithm']); ?>">
+                    <input type="hidden" name="data_mode" value="<?php echo htmlspecialchars($_POST['data_mode'] ?? $dataMode); ?>">
+                    <input type="hidden" name="auto_enroll_mode" value="<?php echo htmlspecialchars($_POST['auto_enroll_mode'] ?? 'system'); ?>">
                     <?php foreach ($_POST['class_ids'] ?? [] as $cid): ?>
                     <input type="hidden" name="class_ids[]" value="<?php echo intval($cid); ?>">
                     <?php endforeach; ?>

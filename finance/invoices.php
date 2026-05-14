@@ -40,8 +40,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $invStmt->bind_param('i',$iid); $invStmt->execute();
             $inv=$invStmt->get_result()->fetch_assoc(); $invStmt->close();
             if ($inv) {
-                $pay=$conn->prepare("INSERT INTO tuition_payments (invoice_id,amount,method,reference,note,paid_by) VALUES (?,?,?,?,?,?)");
-                $pay->bind_param('idsssi',$iid,$amount,$method,$ref,$note,$aid); $pay->execute(); $pay->close();
+                $dataMode=(($inv['data_mode'] ?? 'system') === 'test') ? 'test' : 'system';
+                $demoBatchId=(string)($inv['demo_batch_id'] ?? '');
+                $pay=$conn->prepare("INSERT INTO tuition_payments (invoice_id,amount,method,reference,note,data_mode,demo_batch_id,paid_by) VALUES (?,?,?,?,?,?,?,?)");
+                $pay->bind_param('idsssssi',$iid,$amount,$method,$ref,$note,$dataMode,$demoBatchId,$aid); $pay->execute(); $pay->close();
                 $newPaid=$inv['paid_amount']+$amount; $net=$inv['net_amount'];
                 $st=$inv['status']==='waived'?'waived':($newPaid>=$net?'paid':($newPaid>0?'partial':'unpaid'));
                 $updStmt=$conn->prepare("UPDATE tuition_invoices SET paid_amount=?,status=?,updated_at=NOW() WHERE id=?");

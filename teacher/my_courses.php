@@ -58,7 +58,7 @@ if ($view_section) {
             JOIN users u ON st.user_id = u.id
             LEFT JOIN classes cl ON st.class_id = cl.id
             LEFT JOIN grades g ON g.student_subject_id = ss.id
-            WHERE ss.course_section_id = ? AND ss.status = 'registered'
+            WHERE ss.course_section_id = ? AND ss.status IN ('registered','auto_enrolled')
             ORDER BY u.full_name
         ");
         $svStmt->bind_param('i', $view_section);
@@ -366,3 +366,4 @@ document.addEventListener('DOMContentLoaded', function() {
 <?php include_once __DIR__ . "/../includes/analytics_widget.php"; ?>
 </body>
 </html>
+

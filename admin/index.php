@@ -4,15 +4,15 @@ require_once '../includes/auth.php';
 requireRole('admin');
 $pageTitle = 'Dashboard';
 
-$totalStudents = $conn->query("SELECT COUNT(*) as c FROM students")->fetch_assoc()['c'] ?? 0;
-$totalTeachers = $conn->query("SELECT COUNT(*) as c FROM teachers")->fetch_assoc()['c'] ?? 0;
-$totalSections = $conn->query("SELECT COUNT(*) as c FROM course_sections")->fetch_assoc()['c'] ?? 0;
-$pendingApps   = $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='new'")->fetch_assoc()['c'] ?? 0;
 $totalUsers    = $conn->query("SELECT COUNT(*) as c FROM users")->fetch_assoc()['c'] ?? 0;
+$totalFaculties = $conn->query("SELECT COUNT(*) as c FROM faculties")->fetch_assoc()['c'] ?? 0;
+$totalMajors   = $conn->query("SELECT COUNT(*) as c FROM majors")->fetch_assoc()['c'] ?? 0;
+$totalClasses  = $conn->query("SELECT COUNT(*) as c FROM classes")->fetch_assoc()['c'] ?? 0;
+$totalNotifications = $conn->query("SELECT COUNT(*) as c FROM notifications")->fetch_assoc()['c'] ?? 0;
 $newContacts   = $conn->query("SELECT COUNT(*) as c FROM contacts WHERE status='new'")->fetch_assoc()['c'] ?? 0;
 
 $recentContacts = $conn->query("SELECT * FROM contacts ORDER BY created_at DESC LIMIT 5");
-$recentApps     = $conn->query("SELECT aa.*, m.major_name, am.method_name FROM admission_applications aa LEFT JOIN majors m ON aa.major_id=m.id LEFT JOIN admission_methods am ON aa.method_id=am.id ORDER BY aa.created_at DESC LIMIT 5");
+$recentUsers = $conn->query("SELECT id, username, full_name, role, status, created_at FROM users ORDER BY created_at DESC LIMIT 5");
 
 include 'includes/header.php';
 include 'includes/sidebar.php';
@@ -32,37 +32,37 @@ include 'includes/sidebar.php';
         <div class="row g-4 mb-4">
             <div class="col-6 col-lg-2">
                 <div class="stat-card-admin stat-bg-1">
-                    <div class="stat-icon"><i class="bi bi-people-fill"></i></div>
-                    <div class="stat-value mt-2"><?php echo number_format($totalStudents); ?></div>
-                    <div class="stat-label">Sinh vi&#234;n</div>
+                    <div class="stat-icon"><i class="bi bi-person-fill-check"></i></div>
+                    <div class="stat-value mt-2"><?php echo number_format($totalUsers); ?></div>
+                    <div class="stat-label">Người dùng</div>
                 </div>
             </div>
             <div class="col-6 col-lg-2">
                 <div class="stat-card-admin stat-bg-2">
-                    <div class="stat-icon"><i class="bi bi-person-badge-fill"></i></div>
-                    <div class="stat-value mt-2"><?php echo number_format($totalTeachers); ?></div>
-                    <div class="stat-label">Gi&#7843;ng vi&#234;n</div>
+                    <div class="stat-icon"><i class="bi bi-building-fill"></i></div>
+                    <div class="stat-value mt-2"><?php echo number_format($totalFaculties); ?></div>
+                    <div class="stat-label">Khoa/Viện</div>
                 </div>
             </div>
             <div class="col-6 col-lg-2">
                 <div class="stat-card-admin stat-bg-3">
-                    <div class="stat-icon"><i class="bi bi-grid-3x3-gap-fill"></i></div>
-                    <div class="stat-value mt-2"><?php echo number_format($totalSections); ?></div>
-                    <div class="stat-label">L&#7899;p h&#7885;c ph&#7847;n</div>
+                    <div class="stat-icon"><i class="bi bi-book-fill"></i></div>
+                    <div class="stat-value mt-2"><?php echo number_format($totalMajors); ?></div>
+                    <div class="stat-label">Ngành học</div>
                 </div>
             </div>
             <div class="col-6 col-lg-2">
                 <div class="stat-card-admin stat-bg-4">
-                    <div class="stat-icon"><i class="bi bi-file-earmark-person-fill"></i></div>
-                    <div class="stat-value mt-2"><?php echo number_format($pendingApps); ?></div>
-                    <div class="stat-label">H&#7891; s&#417; m&#7899;i</div>
+                    <div class="stat-icon"><i class="bi bi-collection-fill"></i></div>
+                    <div class="stat-value mt-2"><?php echo number_format($totalClasses); ?></div>
+                    <div class="stat-label">Lớp hành chính</div>
                 </div>
             </div>
             <div class="col-6 col-lg-2">
                 <div class="stat-card-admin stat-bg-5">
-                    <div class="stat-icon"><i class="bi bi-person-fill-check"></i></div>
-                    <div class="stat-value mt-2"><?php echo number_format($totalUsers); ?></div>
-                    <div class="stat-label">Ng&#432;&#7901;i d&#249;ng</div>
+                    <div class="stat-icon"><i class="bi bi-bell-fill"></i></div>
+                    <div class="stat-value mt-2"><?php echo number_format($totalNotifications); ?></div>
+                    <div class="stat-label">Thông báo</div>
                 </div>
             </div>
             <div class="col-6 col-lg-2">
@@ -115,27 +115,38 @@ include 'includes/sidebar.php';
             <div class="col-lg-6">
                 <div class="card h-100">
                     <div class="card-header d-flex justify-content-between align-items-center">
-                        <span><i class="bi bi-file-earmark-person me-2"></i>H&#7891; s&#417; x&#233;t tuy&#7875;n m&#7899;i</span>
-                        <a href="/university/admin/admission_applications.php" class="btn btn-sm btn-outline-light">Xem t&#7845;t c&#7843;</a>
+                        <span><i class="bi bi-person-lines-fill me-2"></i>Người dùng mới nhất</span>
+                        <a href="/university/admin/users.php" class="btn btn-sm btn-outline-light">Quản lý</a>
                     </div>
                     <div class="card-body p-0">
                         <div class="table-responsive">
                             <table class="table table-hover mb-0">
-                                <thead><tr><th>H&#7885; t&#234;n</th><th>Ng&#224;nh</th><th>Tr&#7841;ng th&#225;i</th></tr></thead>
+                                <thead><tr><th>Họ tên</th><th>Tài khoản</th><th>Vai trò</th><th>Trạng thái</th></tr></thead>
                                 <tbody>
                                 <?php
-                                $sMap = ['new'=>['M&#7899;i','warning'],'checking'=>['&#272;ang x&#233;t','info'],'approved'=>['&#272;&#227; duy&#7879;t','success'],'rejected'=>['T&#7915; ch&#7889;i','danger']];
-                                if ($recentApps && $recentApps->num_rows > 0):
-                                    while ($app = $recentApps->fetch_assoc()):
-                                        $s = $sMap[$app['status']] ?? ['N/A','secondary'];
+                                $roleMap = [
+                                    'admin' => 'Quản trị',
+                                    'staff' => 'Nhân sự',
+                                    'teacher' => 'Giảng viên',
+                                    'student' => 'Sinh viên',
+                                ];
+                                if ($recentUsers && $recentUsers->num_rows > 0):
+                                    while ($user = $recentUsers->fetch_assoc()):
                                 ?>
                                 <tr>
-                                    <td class="fw-bold"><?php echo htmlspecialchars($app['full_name']); ?></td>
-                                    <td class="text-muted small"><?php echo htmlspecialchars($app['major_name'] ?? 'N/A'); ?></td>
-                                    <td><span class="badge bg-<?php echo $s[1]; ?>"><?php echo $s[0]; ?></span></td>
+                                    <td class="fw-bold"><?php echo htmlspecialchars($user['full_name']); ?></td>
+                                    <td class="text-muted small"><?php echo htmlspecialchars($user['username']); ?></td>
+                                    <td class="text-muted small"><?php echo htmlspecialchars($roleMap[$user['role']] ?? $user['role']); ?></td>
+                                    <td>
+                                        <?php if ((int)$user['status'] === 1): ?>
+                                        <span class="badge bg-success">Đang hoạt động</span>
+                                        <?php else: ?>
+                                        <span class="badge bg-secondary">Đã khóa</span>
+                                        <?php endif; ?>
+                                    </td>
                                 </tr>
                                 <?php endwhile; else: ?>
-                                <tr><td colspan="3" class="text-center text-muted py-3">Kh&#244;ng c&#243; h&#7891; s&#417; m&#7899;i</td></tr>
+                                <tr><td colspan="4" class="text-center text-muted py-3">Chưa có người dùng</td></tr>
                                 <?php endif; ?>
                                 </tbody>
                             </table>

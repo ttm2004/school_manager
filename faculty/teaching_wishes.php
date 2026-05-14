@@ -184,7 +184,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $flash = getFlash();
 
 // Lay danh sach hoc ky
-$semesters = $conn->query("SELECT id, semester_name, status FROM semesters ORDER BY id DESC")->fetch_all(MYSQLI_ASSOC);
+$semesters = $conn->query("SELECT id, semester_name, school_year, status FROM semesters ORDER BY school_year DESC, id DESC")->fetch_all(MYSQLI_ASSOC);
 
 // Lay danh sach mon hoc thuoc CTDT cua khoa (de GV chon)
 $subjects = [];
@@ -316,7 +316,7 @@ include 'includes/sidebar.php';
                         <option value="0">-- Chon hoc ky --</option>
                         <?php foreach ($semesters as $sem): ?>
                         <option value="<?php echo $sem['id']; ?>" <?php echo $semId==(int)$sem['id']?'selected':''; ?>>
-                            <?php echo htmlspecialchars($sem['semester_name']); ?>
+                            <?php echo htmlspecialchars($sem['semester_name'] . ' - ' . ($sem['school_year'] ?? '')); ?>
                             <?php if ($sem['status']==='active'): ?>(Hien tai)<?php endif; ?>
                         </option>
                         <?php endforeach; ?>

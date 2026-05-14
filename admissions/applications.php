@@ -2,13 +2,15 @@
 require_once '../config/database.php';
 require_once '../includes/auth.php';
 requireAnyRole(['admissions_manager', 'admissions_staff']);
-$pageTitle = 'Hồ sơ Xét tuyển';
+$pageTitle = 'Hồ sơ xét tuyển';
 
 $success = $error = '';
-$isReviewing     = isReviewingPhase();
-$roundMsg        = getRoundStatusMessage();
-$activeRound     = getActiveRound();
-$roundPhase      = getRoundPhase();
+$filter_mode   = trim($_GET['mode'] ?? 'system');
+if (!in_array($filter_mode, ['system','test'], true)) $filter_mode = 'system';
+$isReviewing     = isReviewingPhase($filter_mode);
+$roundMsg        = getRoundStatusMessage($filter_mode);
+$activeRound     = getActiveRound($filter_mode);
+$roundPhase      = getRoundPhase($filter_mode);
 
 $isLocked        = in_array($roundPhase, ['reviewing', 'supp_reviewing', 'no_round', 'completed']);
 $canManualReview = !$isLocked;
@@ -19,10 +21,10 @@ $offset = ($page - 1) * $perPage;
 $filter_status = trim($_GET['status'] ?? '');
 $filter_major  = intval($_GET['major_id'] ?? 0);
 $filter_search = trim($_GET['q'] ?? '');
-
 $where = [];
 $params = [];
 $types = '';
+if ($filter_mode !== 'all') { $where[] = 'aa.data_mode=?'; $params[] = $filter_mode; $types .= 's'; }
 if ($filter_status) { $where[] = 'aa.status=?'; $params[] = $filter_status; $types .= 's'; }
 if ($filter_major)  { $where[] = 'aa.major_id=?'; $params[] = $filter_major; $types .= 'i'; }
 if ($filter_search) { $where[] = '(aa.full_name LIKE ? OR aa.email LIKE ? OR aa.citizen_id LIKE ?)'; $like = "%$filter_search%"; $params[] = $like; $params[] = $like; $params[] = $like; $types .= 'sss'; }
@@ -54,6 +56,7 @@ $stmt->close();
 $totalPages = ceil($total / $perPage);
 
 $majors = $conn->query("SELECT id, major_name FROM majors ORDER BY major_name");
+$testStats = $conn->query("SELECT COUNT(*) AS c, COUNT(DISTINCT import_batch_id) AS batches FROM admission_applications WHERE data_mode='test'")->fetch_assoc() ?: ['c'=>0,'batches'=>0];
 
 // View detail
 $viewApp = null;
@@ -95,11 +98,11 @@ include __DIR__ . '/includes/header.php';
             <div class="modal-body pt-3">
                 <p class="mb-0" style="font-size:.9rem;line-height:1.6;">
                 <?php if ($roundPhase === 'reviewing' || $roundPhase === 'supp_reviewing'): ?>
-                    Đang trong giai đoạn <strong>xét tuyển</strong> — không thể cập nhật trạng thái hồ sơ thủ công để đảm bảo tính công bằng.
+                    Đang trong giai đoạn <strong>xét tuyển</strong> - không thể cập nhật trạng thái hồ sơ thủ công để đảm bảo tính công bằng.
                 <?php elseif ($roundPhase === 'completed'): ?>
-                    Đợt tuyển sinh đã <strong>hoàn tất</strong> — hồ sơ không thể thay đổi.
+                    Đợt tuyển sinh đã <strong>hoàn tất</strong> - hồ sơ không thể thay đổi.
                 <?php else: ?>
-                    Không có đợt tuyển sinh đang hoạt động — hồ sơ chỉ được xem.
+                    Không có đợt tuyển sinh đang hoạt động - hồ sơ chỉ được xem.
                 <?php endif; ?>
                 </p>
                 <div class="mt-3 d-flex align-items-center gap-2">
@@ -172,7 +175,7 @@ document.addEventListener('DOMContentLoaded', function() {
         <!-- Detail View -->
         <div class="card mb-4">
             <div class="card-header d-flex justify-content-between align-items-center">
-                <span><i class="bi bi-file-earmark-person me-2"></i>Chi tiết Hồ sơ #<?php echo $viewApp['id']; ?></span>
+                <span><i class="bi bi-file-earmark-person me-2"></i>Chi tiết hồ sơ #<?php echo $viewApp['id']; ?></span>
                 <a href="applications.php" class="btn btn-sm btn-outline-light"><i class="bi bi-arrow-left me-1"></i>Quay lại</a>
             </div>
             <div class="card-body">
@@ -229,7 +232,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         </button>
                     </div>
                     <?php elseif ($isLocked): ?>
-                    <span class="text-danger small ms-auto"><i class="bi bi-lock-fill me-1"></i>Hồ sơ đã khóa — không thể sửa</span>
+                    <span class="text-danger small ms-auto"><i class="bi bi-lock-fill me-1"></i>Hồ sơ đã khóa - không thể sửa</span>
                     <?php else: ?>
                     <span class="text-muted small ms-auto"><i class="bi bi-lock me-1"></i>Chỉ xem</span>
                     <?php endif; ?>
@@ -241,12 +244,25 @@ document.addEventListener('DOMContentLoaded', function() {
         <!-- Filter & List -->
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
-                <span><i class="bi bi-funnel-fill me-2"></i>Danh sách Hồ sơ
+                <span><i class="bi bi-funnel-fill me-2"></i>Danh sách hồ sơ
                     <span class="badge bg-gold text-navy ms-1"><?php echo $total; ?></span>
                 </span>
+                <?php if (hasRole('admissions_manager')): ?>
+                <div class="d-flex gap-2">
+                    <button type="button" class="btn btn-sm btn-outline-light" data-bs-toggle="modal" data-bs-target="#testImportModal"><i class="bi bi-upload me-1"></i>Import test</button>
+                    <button type="button" class="btn btn-sm btn-danger" onclick="clearTestData()"><i class="bi bi-trash3 me-1"></i>Xóa test</button>
+                </div>
+                <?php endif; ?>
             </div>
             <div class="card-body border-bottom">
                 <form method="GET" class="d-flex gap-2 flex-wrap align-items-end">
+                    <div>
+                        <label class="form-label small mb-1">Luồng dữ liệu</label>
+                        <select name="mode" class="form-select form-select-sm" style="width:160px">
+                            <option value="system" <?php echo $filter_mode==='system'?'selected':''; ?>>Hệ thống thật</option>
+                            <option value="test" <?php echo $filter_mode==='test'?'selected':''; ?>>Test / Demo</option>
+                                                    </select>
+                    </div>
                     <div>
                         <label class="form-label small mb-1">Tìm kiếm</label>
                         <input type="text" name="q" class="form-control form-control-sm" placeholder="Tên, email, CCCD..." value="<?php echo htmlspecialchars($filter_search); ?>" style="width:200px">
@@ -270,16 +286,22 @@ document.addEventListener('DOMContentLoaded', function() {
                         </select>
                     </div>
                     <button type="submit" class="btn btn-sm btn-navy"><i class="bi bi-search me-1"></i>Lọc</button>
-                    <?php if ($filter_status || $filter_major || $filter_search): ?>
+                    <?php if ($filter_status || $filter_major || $filter_search || $filter_mode !== 'system'): ?>
                     <a href="applications.php" class="btn btn-sm btn-outline-secondary"><i class="bi bi-x me-1"></i>Xóa lọc</a>
                     <?php endif; ?>
                 </form>
+                <?php if ((int)($testStats['c'] ?? 0) > 0): ?>
+                <div class="alert alert-info py-2 mt-3 mb-0 small">
+                    <i class="bi bi-info-circle me-1"></i>
+                    Đang có <strong><?php echo (int)$testStats['c']; ?></strong> hồ sơ test từ <strong><?php echo (int)$testStats['batches']; ?></strong> lần import.
+                </div>
+                <?php endif; ?>
             </div>
             <div class="card-body p-0">
                 <div class="table-responsive">
                     <table class="table table-hover mb-0">
                         <thead>
-                            <tr><th>#</th><th>Họ tên</th><th>Ngành</th><th>Phương thức</th><th>Tổng điểm</th><th>Trạng thái</th><th>Ngày nộp</th><th>Thao tác</th></tr>
+                            <tr><th>#</th><th>Họ tên</th><th>Luồng</th><th>Ngành</th><th>Phương thức</th><th>Tổng điểm</th><th>Trạng thái</th><th>Ngày nộp</th><th>Thao tác</th></tr>
                         </thead>
                         <tbody>
                             <?php if ($applications && $applications->num_rows > 0): $idx=$offset+1; while ($app = $applications->fetch_assoc()):
@@ -290,6 +312,13 @@ document.addEventListener('DOMContentLoaded', function() {
                                 <td>
                                     <div class="fw-bold small"><?php echo htmlspecialchars($app['full_name']); ?></div>
                                     <div class="text-muted" style="font-size:0.75rem;"><?php echo htmlspecialchars($app['email']); ?></div>
+                                </td>
+                                <td>
+                                    <?php if (($app['data_mode'] ?? 'system') === 'test'): ?>
+                                    <span class="badge bg-info text-dark">Test</span>
+                                    <?php else: ?>
+                                    <span class="badge bg-success">Thật</span>
+                                    <?php endif; ?>
                                 </td>
                                 <td class="text-muted small"><?php echo htmlspecialchars($app['major_name'] ?? '--'); ?></td>
                                 <td class="text-muted small"><?php echo mb_substr($app['method_name'] ?? '--', 0, 25); ?></td>
@@ -306,7 +335,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 </td>
                             </tr>
                             <?php endwhile; else: ?>
-                            <tr><td colspan="8" class="text-center text-muted py-5">
+                            <tr><td colspan="9" class="text-center text-muted py-5">
                                 <i class="bi bi-inbox fs-2 d-block mb-2"></i>Không có hồ sơ nào
                             </td></tr>
                             <?php endif; ?>
@@ -315,24 +344,70 @@ document.addEventListener('DOMContentLoaded', function() {
                 </div>
                 <?php if ($totalPages > 1): ?>
                 <nav class="p-3"><ul class="pagination justify-content-center mb-0">
-                    <?php if ($page > 1): ?><li class="page-item"><a class="page-link" href="?status=<?php echo urlencode($filter_status); ?>&major_id=<?php echo $filter_major; ?>&q=<?php echo urlencode($filter_search); ?>&page=<?php echo $page-1; ?>"><i class="bi bi-chevron-left"></i></a></li><?php endif; ?>
+                    <?php if ($page > 1): ?><li class="page-item"><a class="page-link" href="?mode=<?php echo urlencode($filter_mode); ?>&status=<?php echo urlencode($filter_status); ?>&major_id=<?php echo $filter_major; ?>&q=<?php echo urlencode($filter_search); ?>&page=<?php echo $page-1; ?>"><i class="bi bi-chevron-left"></i></a></li><?php endif; ?>
                     <?php for ($p = max(1,$page-2); $p <= min($totalPages,$page+2); $p++): ?>
-                    <li class="page-item <?php echo $p==$page?'active':''; ?>"><a class="page-link" href="?status=<?php echo urlencode($filter_status); ?>&major_id=<?php echo $filter_major; ?>&q=<?php echo urlencode($filter_search); ?>&page=<?php echo $p; ?>"><?php echo $p; ?></a></li>
+                    <li class="page-item <?php echo $p==$page?'active':''; ?>"><a class="page-link" href="?mode=<?php echo urlencode($filter_mode); ?>&status=<?php echo urlencode($filter_status); ?>&major_id=<?php echo $filter_major; ?>&q=<?php echo urlencode($filter_search); ?>&page=<?php echo $p; ?>"><?php echo $p; ?></a></li>
                     <?php endfor; ?>
-                    <?php if ($page < $totalPages): ?><li class="page-item"><a class="page-link" href="?status=<?php echo urlencode($filter_status); ?>&major_id=<?php echo $filter_major; ?>&q=<?php echo urlencode($filter_search); ?>&page=<?php echo $page+1; ?>"><i class="bi bi-chevron-right"></i></a></li><?php endif; ?>
+                    <?php if ($page < $totalPages): ?><li class="page-item"><a class="page-link" href="?mode=<?php echo urlencode($filter_mode); ?>&status=<?php echo urlencode($filter_status); ?>&major_id=<?php echo $filter_major; ?>&q=<?php echo urlencode($filter_search); ?>&page=<?php echo $page+1; ?>"><i class="bi bi-chevron-right"></i></a></li><?php endif; ?>
                 </ul></nav>
                 <?php endif; ?>
             </div>
         </div>
+
+<?php if (hasRole('admissions_manager')): ?>
+<div class="modal fade" id="testImportModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-upload me-2"></i>Import hồ sơ dự tuyển test</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="testImportForm" enctype="multipart/form-data">
+                <div class="modal-body">
+                    <input type="hidden" name="_csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>">
+                    <input type="hidden" name="module" value="applications">
+                    <input type="hidden" name="action" value="import_test_csv">
+                    <div class="alert alert-info small">
+                        File CSV cần có dòng tiêu đề. Các cột nên dùng:
+                        <code>full_name,gender,birthday,citizen_id,email,phone,address,high_school,graduation_year,major_code,method_id,math_score,literature_score,english_score,status</code>.
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">File CSV</label>
+                        <input type="file" name="csv_file" class="form-control" accept=".csv,.txt" required>
+                    </div>
+                    <div class="small text-muted">
+                        Dữ liệu import sẽ được gắn luồng <strong>test</strong> và mã batch riêng. Sau khi demo xong, nút <strong>Xóa test</strong> chỉ xóa các hồ sơ/tài khoản/sinh viên sinh ra từ luồng test này.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
+                    <button type="submit" class="btn btn-navy"><i class="bi bi-upload me-1"></i>Import</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
 <?php include __DIR__ . '/includes/footer.php'; ?>
 <script>
 // ── Fetch API helper ─────────────────────────────────────────
 const CSRF = document.querySelector('meta[name="csrf-token"]')?.content || '';
+const DATA_MODE = <?php echo json_encode($filter_mode); ?>;
 
 function admFetch(data) {
     const fd = new FormData();
     fd.append('_csrf_token', CSRF);
+    fd.append('data_mode', DATA_MODE);
     Object.entries(data).forEach(([k, v]) => fd.append(k, v));
+    return fetch('/university/admissions/api/actions.php', {
+        method: 'POST', body: fd, credentials: 'same-origin'
+    }).then(r => r.json());
+}
+
+function admUpload(form) {
+    const fd = new FormData(form);
+    fd.append('data_mode', 'test');
     return fetch('/university/admissions/api/actions.php', {
         method: 'POST', body: fd, credentials: 'same-origin'
     }).then(r => r.json());
@@ -386,4 +461,42 @@ function deleteApp(id, btn) {
         })
         .catch(() => { btn.disabled = false; showToast('error', 'Lỗi kết nối.'); });
 }
+
+document.getElementById('testImportForm')?.addEventListener('submit', function(e) {
+    e.preventDefault();
+    const btn = this.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Dang import...';
+    admUpload(this)
+        .then(res => {
+            if (res.success) {
+                showToast('success', res.message);
+                setTimeout(() => window.location.href = 'applications.php?mode=test', 800);
+            } else {
+                showToast('error', res.message);
+            }
+        })
+        .catch(() => showToast('error', 'Loi ket noi.'))
+        .finally(() => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-upload me-1"></i>Import';
+        });
+});
+
+function clearTestData() {
+    if (!confirm('Xoa Tất cả du lieu test da import va tai khoan/sinh vien sinh ra tu ho so test? Du lieu that se khong bi anh huong.')) return;
+    const batchId = prompt('Nhap ma batch can xoa, hoac de trong de xoa Tất cả du lieu test:', '');
+    if (batchId === null) return;
+    admFetch({ module: 'applications', action: 'clear_test_data', batch_id: batchId.trim() })
+        .then(res => {
+            if (res.success) {
+                showToast('success', res.message);
+                setTimeout(() => window.location.href = 'applications.php?mode=system', 800);
+            } else {
+                showToast('error', res.message);
+            }
+        })
+        .catch(() => showToast('error', 'Loi ket noi.'));
+}
 </script>
+

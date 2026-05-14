@@ -1,7 +1,8 @@
-﻿<?php
+<?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
 require_once '../includes/teacher_assignment_rules.php';
+require_once '../app/Services/TeacherAssignmentService.php';
 require_once 'includes/academic_helpers.php';
 requireAnyRole(['academic_manager','academic_staff']);
 
@@ -28,7 +29,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['_flash'] = ['type'=>'danger','message'=>'Dữ liệu không hợp lệ.'];
             header('Location: teacher_assignments.php'); exit();
         }
-        $assignmentCheck = validateTeacherAssignmentForSection($conn, $teacherId, $sectionId);
+        $assignmentCheck = TeacherAssignmentService::validateForSection($conn, $teacherId, $sectionId);
         if (!$assignmentCheck['ok']) {
             $_SESSION['_flash'] = ['type'=>'danger','message'=>$assignmentCheck['message']];
             header('Location: teacher_assignments.php'); exit();
@@ -45,7 +46,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($info && $info['teacher_user_id']) {
                 $title = "Bạn được phân công dạy: {$info['section_code']}";
                 $content = "Phòng Đào tạo đã phân công bạn dạy lớp {$info['section_code']} ({$info['subject_name']}).";
-                $stmtN = $conn->prepare("INSERT INTO notifications (user_id, title, content) VALUES (?,?,?)");
+                $stmtN = $conn->prepare("INSERT INTO system_notifications (user_id, title, content) VALUES (?,?,?)");
                 $stmtN->bind_param('iss', $info['teacher_user_id'], $title, $content);
                 $stmtN->execute(); $stmtN->close();
             }
@@ -64,7 +65,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmtProp->execute();
         $propRow = $stmtProp->get_result()->fetch_assoc();
         $stmtProp->close();
-        $assignmentCheck = validateTeacherAssignmentForSection($conn, (int)($propRow['proposed_teacher_id'] ?? 0), $sectionId);
+        $assignmentCheck = TeacherAssignmentService::validateForSection($conn, (int)($propRow['proposed_teacher_id'] ?? 0), $sectionId);
         if (!$assignmentCheck['ok']) {
             $_SESSION['_flash'] = ['type'=>'danger','message'=>$assignmentCheck['message']];
             header('Location: teacher_assignments.php'); exit();
@@ -90,7 +91,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($info['teacher_user_id']) {
                     $title = "Phân công được duyệt: {$info['section_code']}";
                     $content = "Đề xuất phân công bạn dạy lớp {$info['section_code']} ({$info['subject_name']}) đã được Phòng Đào tạo phê duyệt.";
-                    $stmtN = $conn->prepare("INSERT INTO notifications (user_id, title, content) VALUES (?,?,?)");
+                    $stmtN = $conn->prepare("INSERT INTO system_notifications (user_id, title, content) VALUES (?,?,?)");
                     $stmtN->bind_param('iss', $info['teacher_user_id'], $title, $content);
                     $stmtN->execute(); $stmtN->close();
                 }
@@ -275,7 +276,7 @@ include 'includes/sidebar.php';
                 <label class="form-label small">Loc</label>
                 <select name="filter" class="form-select form-select-sm">
                     <option value="" <?php echo $filterMode===''?'selected':''; ?>>Tất cả lớp mở</option>
-                    <option value="no_teacher" <?php echo $filterMode==='no_teacher'?'selected':''; ?>>Chưa có GV</option>
+                    <option value="no_teacher" <?php echo $filterMode==='no_teacher'?'selected':''; ?>>Chua có GV</option>
                     <option value="pending" <?php echo $filterMode==='pending'?'selected':''; ?>>Đề xuất chờ duyệt</option>
                 </select>
             </div>
@@ -326,13 +327,13 @@ include 'includes/sidebar.php';
                     <div class="small fw-semibold"><?php echo htmlspecialchars($cs['teacher_name']); ?></div>
                     <small class="text-muted"><?php echo htmlspecialchars($cs['teacher_code']); ?> · <?php echo htmlspecialchars($cs['degree']??''); ?></small>
                     <?php else: ?>
-                    <span class="badge bg-warning text-dark">Chưa có GV</span>
+                    <span class="badge bg-warning text-dark">Chua có GV</span>
                     <?php endif; ?>
                 </td>
                 <td>
                     <?php if ($cs['proposal_status'] === 'pending' && $cs['proposed_teacher_name']): ?>
                     <div class="small">
-                        <span class="badge bg-info">Đề xuất: <?php echo htmlspecialchars($cs['proposed_teacher_name']); ?></span>
+                        <span class="badge bg-info">Ð? xu?t: <?php echo htmlspecialchars($cs['proposed_teacher_name']); ?></span>
                     </div>
                     <?php if (isAcademicManager()): ?>
                     <div class="d-flex gap-1 mt-1">
@@ -342,7 +343,7 @@ include 'includes/sidebar.php';
                             <input type="hidden" name="section_id" value="<?php echo $cs['id']; ?>">
                             <button class="btn btn-xs btn-success" style="font-size:.7rem;padding:2px 6px"
                                     onclick="return confirm('Duyệt phân công?')">
-                                <i class="bi bi-check"></i> Duyệt
+                                <i class="bi bi-check"></i> Duy?t
                             </button>
                         </form>
                         <button class="btn btn-xs btn-outline-danger" style="font-size:.7rem;padding:2px 6px"
@@ -422,7 +423,7 @@ include 'includes/sidebar.php';
                     foreach ($allTeachers as $t):
                         if ($t['faculty_name'] !== $lastFaculty):
                             if ($lastFaculty !== '') echo '</optgroup>';
-                            echo '<optgroup label="' . htmlspecialchars($t['faculty_name']??'Khac') . '">';
+                            echo '<optgroup label="' . htmlspecialchars($t['faculty_name']??'Khác') . '">';
                             $lastFaculty = $t['faculty_name'];
                         endif;
                         $loadBadge = $t['load_count'] > 0 ? " [{$t['load_count']} lớp]" : '';

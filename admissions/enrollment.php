@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
 requireAnyRole(['admissions_manager', 'admissions_staff']);
@@ -7,7 +7,9 @@ requireAnyRole(['admissions_manager', 'admissions_staff']);
 if (isset($_GET['ajax'])) {
     $isManager   = hasRole('admissions_manager');
     $canEnroll   = hasPermission('admissions', 'manage_enrollment');
-    $roundPhase  = getRoundPhase();
+    $filter_mode  = trim($_GET['mode'] ?? 'system');
+    if (!in_array($filter_mode, ['system','test'], true)) $filter_mode = 'system';
+    $roundPhase  = getRoundPhase($filter_mode);
     $enrollAllowed = in_array($roundPhase, ['enrolling', 'supp_enrolling']);
     $enrollLocked  = !$enrollAllowed;
 
@@ -18,6 +20,7 @@ if (isset($_GET['ajax'])) {
 
     $where  = ["aa.status='$statusFilter'"];
     $params = []; $types = '';
+    if ($filter_mode !== 'all') { $where[] = 'aa.data_mode=?'; $params[] = $filter_mode; $types .= 's'; }
     if ($filter_major) { $where[] = 'aa.major_id=?'; $params[] = $filter_major; $types .= 'i'; }
     if ($filter_search) {
         $like = "%$filter_search%";
@@ -52,15 +55,18 @@ $pageTitle = 'Thủ tục Nhập học';
 
 $isManager   = hasRole('admissions_manager');
 $canEnroll   = hasPermission('admissions', 'manage_enrollment');
-$roundPhase  = getRoundPhase();
-$activeRound = getActiveRound();
-$roundMsg    = getRoundStatusMessage();
+$filter_mode  = trim($_GET['mode'] ?? 'system');
+if (!in_array($filter_mode, ['system','test'], true)) $filter_mode = 'system';
+$roundPhase  = getRoundPhase($filter_mode);
+$activeRound = getActiveRound($filter_mode);
+$roundMsg    = getRoundStatusMessage($filter_mode);
 $enrollAllowed = in_array($roundPhase, ['enrolling', 'supp_enrolling']);
 $enrollLocked  = !$enrollAllowed;
 
 // Counts
-$approvedCount = (int)($conn->query("SELECT COUNT(*) c FROM admission_applications WHERE status='approved'")->fetch_assoc()['c'] ?? 0);
-$enrolledCount = (int)($conn->query("SELECT COUNT(*) c FROM admission_applications WHERE status='enrolled'")->fetch_assoc()['c'] ?? 0);
+$modeCountSql = $filter_mode === 'all' ? '1=1' : "data_mode='" . $conn->real_escape_string($filter_mode) . "'";
+$approvedCount = (int)($conn->query("SELECT COUNT(*) c FROM admission_applications WHERE status='approved' AND $modeCountSql")->fetch_assoc()['c'] ?? 0);
+$enrolledCount = (int)($conn->query("SELECT COUNT(*) c FROM admission_applications WHERE status='enrolled' AND $modeCountSql")->fetch_assoc()['c'] ?? 0);
 
 // Filter params
 $tab          = $_GET['tab'] ?? 'approved';
@@ -70,6 +76,7 @@ $statusFilter = $tab === 'enrolled' ? 'enrolled' : 'approved';
 
 $where  = ["aa.status='$statusFilter'"];
 $params = []; $types = '';
+if ($filter_mode !== 'all') { $where[] = 'aa.data_mode=?'; $params[] = $filter_mode; $types .= 's'; }
 if ($filter_major) { $where[] = 'aa.major_id=?'; $params[] = $filter_major; $types .= 'i'; }
 if ($filter_search) {
     $like = "%$filter_search%";
@@ -212,6 +219,10 @@ document.addEventListener('DOMContentLoaded', function() {
     <!-- Filter -->
     <div class="card-body border-bottom py-2">
         <div class="d-flex gap-2 flex-wrap align-items-end">
+            <select id="filterMode" class="form-select form-select-sm" style="width:160px">
+                <option value="system" <?php echo $filter_mode==='system'?'selected':''; ?>>Dữ liệu thật</option>
+                <option value="test" <?php echo $filter_mode==='test'?'selected':''; ?>>Test / Demo</option>
+                            </select>
             <input type="text" id="filterSearch" class="form-control form-control-sm" placeholder="Tìm tên, email, CCCD..." value="<?php echo htmlspecialchars($filter_search); ?>" style="width:220px">
             <select id="filterMajor" class="form-select form-select-sm" style="width:200px">
                 <option value="">Tất cả ngành</option>
@@ -246,6 +257,21 @@ document.addEventListener('DOMContentLoaded', function() {
                         <option value="">-- Chọn lớp --</option>
                     </select>
                     <div class="form-text">Chỉ hiển thị lớp cùng ngành với sinh viên.</div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Chế độ đăng ký HK1 tự động</label>
+                    <div class="d-flex flex-column gap-2">
+                        <label class="form-check border rounded p-2 mb-0">
+                            <input class="form-check-input" type="radio" name="modalAutoEnrollMode" value="system" checked>
+                            <span class="form-check-label fw-semibold">Theo hệ thống thật</span>
+                            <div class="small text-muted">Tìm HK1 đúng khóa/năm học và lớp HP đang mở trong học kỳ đó.</div>
+                        </label>
+                        <label class="form-check border rounded p-2 mb-0">
+                            <input class="form-check-input" type="radio" name="modalAutoEnrollMode" value="test">
+                            <span class="form-check-label fw-semibold">Theo học kỳ Test</span>
+                            <div class="small text-muted">Ưu tiên học kỳ có tên Test cùng năm học để mô phỏng nhanh.</div>
+                        </label>
+                    </div>
                 </div>
                 <div class="alert alert-warning py-2 small">
                     <i class="bi bi-key me-1"></i><strong>Mã SV tự động:</strong> Năm + Mã ngành + 3 số ngẫu nhiên<br>
@@ -296,6 +322,7 @@ const isManager    = <?php echo $isManager ? 'true' : 'false'; ?>;
 let currentTab    = '<?php echo $tab; ?>';
 let currentMajor  = <?php echo $filter_major; ?>;
 let currentSearch = <?php echo json_encode($filter_search); ?>;
+let currentMode   = <?php echo json_encode($filter_mode); ?>;
 let currentPage   = <?php echo $page; ?>;
 let pendingAppId  = null;
 let pendingMajorId= null;
@@ -316,8 +343,8 @@ function updateStats(approved, enrolled) {
 }
 
 // ── Load bảng qua AJAX ───────────────────────────────────────
-function loadTable(tab, major, search, page) {
-    currentTab = tab; currentMajor = major; currentSearch = search; currentPage = page;
+function loadTable(tab, major, search, page, mode = currentMode) {
+    currentTab = tab; currentMajor = major; currentSearch = search; currentPage = page; currentMode = mode;
 
     // Cập nhật tab active
     document.querySelectorAll('.tab-link').forEach(a => {
@@ -327,7 +354,7 @@ function loadTable(tab, major, search, page) {
     const wrapper = document.getElementById('tableWrapper');
     wrapper.style.opacity = '0.5';
 
-    const params = new URLSearchParams({ tab, major_id: major, q: search, page, ajax: 1 });
+    const params = new URLSearchParams({ tab, major_id: major, q: search, page, mode, ajax: 1 });
     fetch('enrollment.php?' + params.toString(), { credentials: 'same-origin' })
         .then(r => r.text())
         .then(html => {
@@ -370,6 +397,9 @@ function bindTableEvents() {
             pendingAppId   = this.dataset.id;
             pendingMajorId = parseInt(this.dataset.majorId);
             document.getElementById('modalStudentName').textContent = this.dataset.name;
+            const autoMode = currentMode === 'test' ? 'test' : 'system';
+            const radio = document.querySelector(`input[name="modalAutoEnrollMode"][value="${autoMode}"]`);
+            if (radio) radio.checked = true;
             buildClassSelect(pendingMajorId);
             new bootstrap.Modal(document.getElementById('accountModal')).show();
         });
@@ -389,6 +419,7 @@ function doEnroll(id, row) {
     const fd = new FormData();
     fd.append('action', 'enroll');
     fd.append('id', id);
+    fd.append('data_mode', currentMode);
     fetch('enrollment_api.php', { method: 'POST', body: fd, credentials: 'same-origin' })
         .then(r => r.json())
         .then(res => {
@@ -411,6 +442,7 @@ function doCancelEnroll(id, row) {
     const fd = new FormData();
     fd.append('action', 'cancel_enroll');
     fd.append('id', id);
+    fd.append('data_mode', currentMode);
     fetch('enrollment_api.php', { method: 'POST', body: fd, credentials: 'same-origin' })
         .then(r => r.json())
         .then(res => {
@@ -450,6 +482,8 @@ document.getElementById('btnCreateAccount').addEventListener('click', function()
     fd.append('action', 'create_account');
     fd.append('app_id', pendingAppId);
     fd.append('class_id', classId);
+    fd.append('data_mode', currentMode);
+    fd.append('auto_enroll_mode', document.querySelector('input[name="modalAutoEnrollMode"]:checked')?.value || 'system');
 
     this.disabled = true;
     this.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Đang xử lý...';
@@ -497,12 +531,13 @@ document.querySelectorAll('.tab-link').forEach(a => {
 
 // ── Filter ───────────────────────────────────────────────────
 document.getElementById('btnFilter').addEventListener('click', function() {
-    loadTable(currentTab, document.getElementById('filterMajor').value, document.getElementById('filterSearch').value, 1);
+    loadTable(currentTab, document.getElementById('filterMajor').value, document.getElementById('filterSearch').value, 1, document.getElementById('filterMode').value);
 });
 document.getElementById('btnClearFilter').addEventListener('click', function() {
     document.getElementById('filterSearch').value = '';
     document.getElementById('filterMajor').value  = '';
-    loadTable(currentTab, '', '', 1);
+    document.getElementById('filterMode').value = 'system';
+    loadTable(currentTab, '', '', 1, 'system');
 });
 document.getElementById('filterSearch').addEventListener('keydown', function(e) {
     if (e.key === 'Enter') document.getElementById('btnFilter').click();

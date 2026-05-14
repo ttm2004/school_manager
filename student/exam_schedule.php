@@ -20,7 +20,7 @@ $stmt = $conn->prepare("
            u.full_name as teacher_name,
            ss.status as enrollment_status,
            CASE
-               WHEN ss.status = 'registered' THEN 1
+               WHEN ss.status IN ('registered','auto_enrolled') THEN 1
                ELSE 0
            END as eligible_to_exam
     FROM final_exam_schedules f
@@ -30,7 +30,7 @@ $stmt = $conn->prepare("
     JOIN teachers t ON cs.teacher_id = t.id
     JOIN users u ON t.user_id = u.id
     JOIN student_subjects ss ON ss.course_section_id = cs.id
-    WHERE ss.student_id = ? AND ss.status = 'registered' AND f.status != 'cancelled'
+    WHERE ss.student_id = ? AND ss.status IN ('registered','auto_enrolled') AND f.status != 'cancelled'
     ORDER BY f.exam_date ASC, f.start_time ASC
 ");
 $stmt->bind_param('i', $student['id']);
@@ -45,7 +45,7 @@ $stmtCheck = $conn->prepare("
     FROM student_subjects ss
     JOIN course_sections cs ON ss.course_section_id = cs.id
     JOIN final_exam_schedules f ON f.course_section_id = cs.id
-    WHERE ss.student_id = ? AND ss.status = 'registered' AND f.status = 'cancelled'
+    WHERE ss.student_id = ? AND ss.status IN ('registered','auto_enrolled') AND f.status = 'cancelled'
 ");
 $stmtCheck->bind_param('i', $student['id']);
 $stmtCheck->execute();
@@ -345,3 +345,4 @@ if (isset($bySemester[$selectedSem])) {
 <?php include_once __DIR__ . "/../includes/analytics_widget.php"; ?>
 </body>
 </html>
+

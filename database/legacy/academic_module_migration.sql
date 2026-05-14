@@ -7,6 +7,7 @@ SET foreign_key_checks = 0;
 
 -- ── 1. Thêm cột workflow vào course_sections ─────────────────
 ALTER TABLE `course_sections`
+    MODIFY COLUMN `teacher_id` INT NULL DEFAULT NULL,
     MODIFY COLUMN `status`
         ENUM('draft','proposed','open','full','closed','cancelled')
         NOT NULL DEFAULT 'open'

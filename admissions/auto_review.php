@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
 requireAnyRole(['admissions_manager', 'admissions_staff']);
@@ -7,31 +7,35 @@ $pageTitle = 'Xét tuyển tự động';
 // ── Download file mẫu CSV ────────────────────────────────────
 if (isset($_GET['download_template'])) {
     header('Content-Type: text/csv; charset=utf-8');
-    header('Content-Disposition: attachment; filename="mau_chi_tieu_diem_chuan.csv"');
+    header('Content-Disposition: attachment; filename="mau_chi_tieu_xet_tuyen.csv"');
     echo "\xEF\xBB\xBF"; // BOM UTF-8
-    echo "major_code,major_name,quota,threshold,year\n";
-    echo "7480201,Công nghệ thông tin,120,18.50,2026\n";
-    echo "7480103,Kỹ thuật phần mềm,80,17.75,2026\n";
-    echo "7340101,Quản trị kinh doanh,100,16.00,2026\n";
+    echo "major_code,major_name,quota,year\n";
+    echo "7480201,Cong nghe thong tin,120,2026\n";
+    echo "7340301,Ke toan,80,2026\n";
     exit();
 }
 
 // ── Trạng thái đợt tuyển sinh ────────────────────────────────
-$roundPhase    = getRoundPhase();
-$activeRound   = getActiveRound();
+$filter_mode   = (($_GET['mode'] ?? $_POST['mode'] ?? 'system') === 'test') ? 'test' : 'system';
+$roundPhase    = getRoundPhase($filter_mode);
+$activeRound   = getActiveRound($filter_mode);
 $reviewAllowed = in_array($roundPhase, ['reviewing', 'supp_reviewing']);
 $reviewLocked  = !$reviewAllowed;
 $isManager     = hasRole('admissions_manager');
+$modeImportKey = 'import_rows_' . $filter_mode;
+$modeLabel     = $filter_mode === 'test' ? 'Demo/Test' : 'Dữ liệu thật';
+$modeBadgeClass = $filter_mode === 'test' ? 'bg-warning text-dark' : 'bg-success';
 
 // ── Biến kết quả ─────────────────────────────────────────────
 $importErrors  = [];   // lỗi khi parse CSV
 $importRows    = [];   // dữ liệu đã parse từ CSV (session)
 $reviewResults = [];   // kết quả sau khi chạy xét tuyển
 $success = $error = '';
+$autoPreviewImport = false;
 
 // ── Khôi phục import từ session ──────────────────────────────
-if (!empty($_SESSION['import_rows'])) {
-    $importRows = $_SESSION['import_rows'];
+if (!empty($_SESSION[$modeImportKey])) {
+    $importRows = $_SESSION[$modeImportKey];
 }
 
 // ════════════════════════════════════════════════════════════
@@ -63,7 +67,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $lineNo++;
                     if ($lineNo === 1) continue; // bỏ header
 
-                    // Cột: major_code, major_name, quota, threshold, year
+                    // Cot: major_code, major_name, quota, year. Diem chuan se duoc tinh tu dong theo chi tieu.
                     if (count($row) < 4) {
                         $importErrors[] = "Dòng $lineNo: Thiếu cột (cần ít nhất 4 cột).";
                         continue;
@@ -72,18 +76,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $majorCode = trim($row[0]);
                     $majorName = trim($row[1]);
                     $quota     = intval($row[2]);
-                    $threshold = floatval(str_replace(',', '.', $row[3]));
-                    $year      = isset($row[4]) ? intval($row[4]) : ($activeRound['year'] ?? date('Y'));
+                    $year      = isset($row[3]) ? intval($row[3]) : ($activeRound['year'] ?? date('Y'));
 
                     if (!$majorCode) {
                         $importErrors[] = "Dòng $lineNo: Mã ngành trống.";
                         continue;
                     }
-                    if ($threshold <= 0 || $threshold > 30) {
-                        $importErrors[] = "Dòng $lineNo [$majorCode]: Điểm chuẩn không hợp lệ ($threshold).";
-                        continue;
-                    }
-                    if ($quota < 0) {
+                    if ($quota <= 0) {
                         $importErrors[] = "Dòng $lineNo [$majorCode]: Chỉ tiêu không hợp lệ.";
                         continue;
                     }
@@ -105,15 +104,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'major_code' => $majorCode,
                         'major_name' => $majorName ?: $maj['major_name'],
                         'quota'      => $quota,
-                        'threshold'  => $threshold,
                         'year'       => $year,
                     ];
                 }
                 fclose($handle);
 
                 if ($parsed) {
-                    $_SESSION['import_rows'] = $parsed;
+                    $_SESSION[$modeImportKey] = $parsed;
                     $importRows = $parsed;
+                    $autoPreviewImport = true;
                     $success = 'Import thành công <strong>' . count($parsed) . '</strong> ngành.' .
                                ($importErrors ? ' Có ' . count($importErrors) . ' dòng lỗi.' : '');
                 } else {
@@ -125,10 +124,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // ── 2. XÓA IMPORT ───────────────────────────────────────
     if ($action === 'clear_import') {
-        unset($_SESSION['import_rows']);
+        unset($_SESSION[$modeImportKey]);
         $importRows = [];
         $_SESSION['_flash'] = ['type' => 'success', 'message' => 'Đã xóa dữ liệu import.'];
-        header('Location: auto_review.php');
+        header('Location: auto_review.php?mode=' . urlencode($filter_mode));
         exit();
     }
 
@@ -148,8 +147,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             foreach ($ids as $id) {
                 $id = intval($id);
                 if ($id) {
-                    $upd = $conn->prepare("UPDATE admission_applications SET status=? WHERE id=?");
-                    $upd->bind_param('si', $newSt, $id);
+                    $upd = $conn->prepare("UPDATE admission_applications SET status=? WHERE id=? AND data_mode=?");
+                    $upd->bind_param('sis', $newSt, $id, $filter_mode);
                     $upd->execute(); $upd->close(); $cnt++;
                 }
             }
@@ -174,7 +173,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $majors = $conn->query("SELECT id, major_name, major_code FROM majors WHERE status='open' ORDER BY major_name");
 
 $filter_major = intval($_GET['major_id'] ?? 0);
-$whereSQL = "WHERE aa.status IN ('new','checking')" . ($filter_major ? " AND aa.major_id=$filter_major" : '');
+$whereSQL = "WHERE aa.status IN ('new','checking') AND aa.data_mode='" . $conn->real_escape_string($filter_mode) . "'" . ($filter_major ? " AND aa.major_id=$filter_major" : '');
 $pending = $conn->query("
     SELECT aa.*, m.major_name, am.method_name,
            (aa.math_score + aa.literature_score + aa.english_score) AS total_score
@@ -196,6 +195,7 @@ $statRes = $conn->query("
            COUNT(*) AS total
     FROM admission_applications aa
     LEFT JOIN majors m ON aa.major_id=m.id
+    WHERE aa.data_mode='" . $conn->real_escape_string($filter_mode) . "'
     GROUP BY aa.major_id
     ORDER BY m.major_name
 ");
@@ -204,6 +204,28 @@ if ($statRes) while ($r = $statRes->fetch_assoc()) $statsByMajor[] = $r;
 include __DIR__ . '/includes/header.php';
 ?>
 <?php $flash = getFlash(); if ($flash): ?><div class="alert alert-<?php echo $flash['type']; ?> auto-dismiss alert-dismissible fade show"><i class="bi bi-<?php echo $flash['type']==='success'?'check-circle-fill':'exclamation-circle-fill'; ?> me-2"></i><?php echo htmlspecialchars($flash['message']); ?><button type="button" class="btn-close" data-bs-dismiss="alert"></button></div><?php endif; ?>
+
+<div class="card border-0 shadow-sm mb-3">
+    <div class="card-body d-flex flex-wrap align-items-center justify-content-between gap-3 py-3">
+        <div>
+            <div class="text-muted small mb-1">Chế độ dữ liệu đang thao tác</div>
+            <div class="d-flex align-items-center gap-2">
+                <span class="badge <?php echo $modeBadgeClass; ?> fs-6 px-3 py-2"><?php echo htmlspecialchars($modeLabel); ?></span>
+                <span class="text-muted small">Import chỉ tiêu, xét tuyển, duyệt/từ chối và danh sách chờ xét đều theo chế độ này.</span>
+            </div>
+        </div>
+        <div class="btn-group" role="group" aria-label="Chuyển chế độ dữ liệu">
+            <a class="btn btn-sm <?php echo $filter_mode === 'system' ? 'btn-navy' : 'btn-outline-navy'; ?>"
+               href="auto_review.php?mode=system<?php echo $filter_major ? '&major_id=' . $filter_major : ''; ?>">
+                Dữ liệu thật
+            </a>
+            <a class="btn btn-sm <?php echo $filter_mode === 'test' ? 'btn-warning' : 'btn-outline-warning'; ?>"
+               href="auto_review.php?mode=test<?php echo $filter_major ? '&major_id=' . $filter_major : ''; ?>">
+                Demo/Test
+            </a>
+        </div>
+    </div>
+</div>
 
 <!-- ── Modal trạng thái ──────────────────────────────────── -->
 <?php
@@ -394,12 +416,12 @@ document.addEventListener('DOMContentLoaded', function() {
         <div class="card mb-3">
             <div class="card-header d-flex align-items-center gap-2">
                 <i class="bi bi-file-earmark-arrow-up-fill"></i>
-                <span>Import danh sách chỉ tiêu & điểm chuẩn</span>
+                <span>Import danh sách chỉ tiêu</span>
             </div>
             <div class="card-body">
                 <p class="text-muted small mb-2">
-                    File CSV gồm các cột: <code>major_code, major_name, quota, threshold, year</code><br>
-                    <span class="text-muted" style="font-size:.75rem;">VD: <code>7480201,Công nghệ thông tin,120,18.5,2026</code></span>
+                    File CSV gồm các cột: <code>major_code, major_name, quota, year</code><br>
+                    <span class="text-muted" style="font-size:.75rem;">VD: <code>7480201,Cong nghe thong tin,120,2026</code>. Hệ thống tự tính điểm chuẩn theo chỉ tiêu.</span>
                 </p>
                 <a href="?download_template=1" class="btn btn-sm btn-outline-secondary mb-3">
                     <i class="bi bi-download me-1"></i>Tải file mẫu
@@ -407,6 +429,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 <?php if ($isManager): ?>
                 <form method="POST" enctype="multipart/form-data">
                     <input type="hidden" name="action" value="import_csv">
+                    <input type="hidden" name="mode" value="<?php echo htmlspecialchars($filter_mode); ?>">
                     <div class="input-group">
                         <input type="file" name="csv_file" class="form-control form-control-sm" accept=".csv,.txt" required>
                         <button type="submit" class="btn btn-sm btn-navy">
@@ -430,14 +453,13 @@ document.addEventListener('DOMContentLoaded', function() {
                     </div>
                     <div class="table-responsive">
                         <table class="table table-sm table-bordered mb-0" style="font-size:.78rem;">
-                            <thead><tr><th>Mã ngành</th><th>Tên ngành</th><th class="text-center">Chỉ tiêu</th><th class="text-center">Điểm chuẩn</th><th class="text-center">Năm</th></tr></thead>
+                            <thead><tr><th>Mã ngành</th><th>Tên ngành</th><th class="text-center">Chỉ tiêu</th><th class="text-center">Năm</th></tr></thead>
                             <tbody>
                             <?php foreach ($importRows as $ir): ?>
                             <tr>
                                 <td><code><?php echo htmlspecialchars($ir['major_code']); ?></code></td>
                                 <td><?php echo htmlspecialchars($ir['major_name']); ?></td>
                                 <td class="text-center"><?php echo $ir['quota'] ?: '∞'; ?></td>
-                                <td class="text-center fw-bold text-navy"><?php echo number_format($ir['threshold'],2); ?></td>
                                 <td class="text-center"><?php echo $ir['year']; ?></td>
                             </tr>
                             <?php endforeach; ?>
@@ -460,10 +482,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 <!-- Nút chạy từ import -->
                 <div class="alert alert-info py-2 small mb-3">
                     <i class="bi bi-info-circle me-1"></i>
-                    Đã có <strong><?php echo count($importRows); ?></strong> ngành từ file import. Nhấn bên dưới để chạy tất cả.
+                    Đã có <strong><?php echo count($importRows); ?></strong> ngành từ file import. Hệ thống sẽ tạo bản xem trước để kiểm tra trước khi công bố.
                 </div>
                 <button type="button" class="btn btn-navy w-100 mb-3" id="btnRunImport">
-                    <i class="bi bi-play-circle-fill me-2"></i>Chạy xét tuyển từ file import (<?php echo count($importRows); ?> ngành)
+                    <i class="bi bi-eye-fill me-2"></i>Xem trước xét tuyển từ file import (<?php echo count($importRows); ?> ngành)
                 </button>
                 <hr class="my-2"><p class="text-muted small text-center mb-2">— hoặc nhập tay từng ngành —</p>
                 <?php endif; ?>
@@ -479,25 +501,19 @@ document.addEventListener('DOMContentLoaded', function() {
                             <?php endwhile; endif; ?>
                         </select>
                     </div>
-                    <div class="row g-2 mb-3">
-                        <div class="col-6">
-                            <label class="form-label fw-bold small">Điểm chuẩn <span class="text-danger">*</span></label>
-                            <input type="number" id="manual_threshold" class="form-control form-control-sm" step="0.25" min="0" max="30" placeholder="VD: 18.5"
-                                <?php echo (!$isManager || $reviewLocked) ? 'disabled' : ''; ?>>
-                        </div>
-                        <div class="col-6">
-                            <label class="form-label fw-bold small">Chỉ tiêu</label>
-                            <input type="number" id="manual_quota" class="form-control form-control-sm" min="0" placeholder="0 = không giới hạn"
-                                <?php echo (!$isManager || $reviewLocked) ? 'disabled' : ''; ?>>
-                        </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold small">Chỉ tiêu <span class="text-danger">*</span></label>
+                        <input type="number" id="manual_quota" class="form-control form-control-sm" min="1" placeholder="VD: 120"
+                            <?php echo (!$isManager || $reviewLocked) ? 'disabled' : ''; ?>>
+                        <div class="form-text">Hệ thống sẽ lấy điểm của thí sinh cuối cùng trong chỉ tiêu làm điểm chuẩn.</div>
                     </div>
                     <div class="alert alert-warning py-2 small mb-3">
                         <i class="bi bi-exclamation-triangle-fill me-1"></i>
-                        Thao tác này cập nhật trạng thái tất cả hồ sơ đang chờ. Không thể hoàn tác.
+                        Bước này chỉ tạo bản xem trước. Trạng thái hồ sơ chỉ thay đổi sau khi bấm <strong>Công bố kết quả</strong>.
                     </div>
                     <button type="button" class="btn btn-navy w-100" id="btnRunManual"
                         <?php echo (!$isManager || $reviewLocked) ? 'disabled' : ''; ?>>
-                        <i class="bi bi-play-circle-fill me-2"></i>Chạy xét tuyển (nhập tay)
+                        <i class="bi bi-eye-fill me-2"></i>Xem trước xét tuyển (nhập tay)
                     </button>
                     <?php if (!$isManager): ?>
                     <div class="text-muted small mt-2"><i class="bi bi-lock me-1"></i>Chỉ Trưởng phòng mới có quyền.</div>
@@ -515,8 +531,10 @@ document.addEventListener('DOMContentLoaded', function() {
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span><i class="bi bi-hourglass-split me-2"></i>Hồ sơ chờ xét
                     <span class="badge bg-warning text-dark ms-1"><?php echo $pendingCount; ?></span>
+                    <span class="badge <?php echo $modeBadgeClass; ?> ms-1"><?php echo htmlspecialchars($modeLabel); ?></span>
                 </span>
                 <form method="GET" class="d-flex gap-2">
+                    <input type="hidden" name="mode" value="<?php echo htmlspecialchars($filter_mode); ?>">
                     <select name="major_id" class="form-select form-select-sm" style="width:180px" onchange="this.form.submit()">
                         <option value="">Tất cả ngành</option>
                         <?php if ($majorsFilter): while ($m = $majorsFilter->fetch_assoc()): ?>
@@ -627,51 +645,147 @@ function setLoading(btn, loading) {
     }
 }
 
-function showResults(results) {
-    let html = `<div class="card mb-4 border-0 shadow-sm">
-        <div class="card-header d-flex align-items-center gap-2" style="background:linear-gradient(135deg,#0d2d6b,#1a4fa0);">
-            <i class="bi bi-clipboard2-data-fill fs-5"></i>
-            <span class="fw-bold">Kết quả xét tuyển tự động</span>
-        </div><div class="card-body p-0">`;
-    results.forEach(r => {
-        html += `<div class="border-bottom p-3">
-            <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-1">
+let currentPreviewToken = '';
+
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[ch]));
+}
+
+function renderCandidateRows(list, emptyText) {
+    if (!list || !list.length) {
+        return `<tr><td colspan="8" class="text-center text-muted py-3">${emptyText}</td></tr>`;
+    }
+    return list.map(c => `
+        <tr>
+            <td class="text-center fw-bold">${c.rank}</td>
+            <td>
+                <div class="fw-semibold">${escapeHtml(c.full_name)}</div>
+                <div class="text-muted small">${escapeHtml(c.email)}</div>
+            </td>
+            <td class="text-center">${Number(c.math_score).toFixed(1)}</td>
+            <td class="text-center">${Number(c.literature_score).toFixed(1)}</td>
+            <td class="text-center">${Number(c.english_score).toFixed(1)}</td>
+            <td class="text-center fw-bold text-success">${Number(c.total_score).toFixed(2)}</td>
+            <td class="text-center"><span class="badge ${c.result === 'approved' ? 'bg-success' : 'bg-danger'}">${c.result === 'approved' ? '\u0110\u1eadu' : 'R\u1edbt'}</span></td>
+            <td class="text-center"><code>#${c.id}</code></td>
+        </tr>
+    `).join('');
+}
+
+function showResults(results, previewToken = '') {
+    currentPreviewToken = previewToken;
+    document.getElementById('autoReviewPreviewCard')?.remove();
+
+    let totalPublish = results.reduce((sum, r) => sum + Number(r.total || 0), 0);
+    let html = `<div class="card mb-4 border-0 shadow-sm" id="autoReviewPreviewCard">
+        <div class="card-header d-flex align-items-center justify-content-between gap-2" style="background:linear-gradient(135deg,#0d2d6b,#1a4fa0);">
+            <div><i class="bi bi-clipboard2-data-fill fs-5 me-2"></i><span class="fw-bold">B&#7843;n xem tr&#432;&#7899;c k&#7871;t qu&#7843; x&#233;t tuy&#7875;n</span></div>
+            <span class="badge bg-warning text-dark">Ch&#432;a c&#244;ng b&#7889;</span>
+        </div>
+        <div class="card-body">
+            <div class="alert alert-warning d-flex align-items-start gap-2 py-2">
+                <i class="bi bi-exclamation-triangle-fill mt-1"></i>
+                <div class="small">&#272;&#226;y l&#224; k&#7871;t qu&#7843; xem tr&#432;&#7899;c. H&#227;y ki&#7875;m tra ch&#7881; ti&#234;u, &#273;i&#7875;m chu&#7849;n v&#224; danh s&#225;ch th&#237; sinh. H&#7891; s&#417; ch&#432;a &#273;&#7893;i tr&#7841;ng th&#225;i cho t&#7899;i khi b&#7845;m <strong>C&#244;ng b&#7889; k&#7871;t qu&#7843;</strong>.</div>
+            </div>`;
+
+    results.forEach((r, idx) => {
+        const approvedId = `previewApproved${idx}`;
+        const rejectedId = `previewRejected${idx}`;
+        html += `<div class="border rounded mb-3 overflow-hidden">
+            <div class="p-3 bg-light d-flex align-items-center justify-content-between flex-wrap gap-2">
                 <div>
-                    <span class="fw-bold text-navy">${r.major_name}</span>
-                    <span class="badge bg-secondary ms-2">Điểm chuẩn: ${parseFloat(r.threshold).toFixed(2)}</span>
-                    ${r.quota ? `<span class="badge bg-info ms-1">Chỉ tiêu: ${r.quota}</span>` : ''}
+                    <span class="fw-bold text-navy">${escapeHtml(r.major_name)}</span>
+                    <span class="badge bg-secondary ms-2">&#272;i&#7875;m chu&#7849;n: ${Number(r.threshold || 0).toFixed(2)}</span>
+                    <span class="badge bg-info ms-1">Ch&#7881; ti&#234;u: ${r.quota || 0}</span>
                 </div>
                 <div class="d-flex gap-2">
-                    <span class="badge bg-success fs-6 px-3"><i class="bi bi-check-circle me-1"></i>${r.approved} Đậu</span>
-                    <span class="badge bg-danger fs-6 px-3"><i class="bi bi-x-circle me-1"></i>${r.rejected} Rớt</span>
-                    <span class="badge bg-secondary fs-6 px-3"><i class="bi bi-people me-1"></i>${r.total} Tổng</span>
+                    <span class="badge bg-success fs-6 px-3"><i class="bi bi-check-circle me-1"></i>${r.approved} &#272;&#7853;u</span>
+                    <span class="badge bg-danger fs-6 px-3"><i class="bi bi-x-circle me-1"></i>${r.rejected} R&#7899;t</span>
+                    <span class="badge bg-secondary fs-6 px-3"><i class="bi bi-people me-1"></i>${r.total} T&#7893;ng</span>
+                </div>
+            </div>
+            <div class="p-3">
+                <div class="d-flex gap-2 mb-2">
+                    <button class="btn btn-sm btn-outline-success" type="button" data-bs-toggle="collapse" data-bs-target="#${approvedId}">
+                        <i class="bi bi-chevron-down me-1"></i>Danh s&#225;ch &#273;&#7853;u (${r.approved})
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger" type="button" data-bs-toggle="collapse" data-bs-target="#${rejectedId}">
+                        <i class="bi bi-chevron-down me-1"></i>Danh s&#225;ch r&#7899;t (${r.rejected})
+                    </button>
+                </div>
+                <div class="collapse show" id="${approvedId}">
+                    <div class="table-responsive mb-3" style="max-height:280px;overflow:auto;">
+                        <table class="table table-sm table-hover align-middle mb-0">
+                            <thead><tr><th class="text-center">H&#7841;ng</th><th>Th&#237; sinh</th><th class="text-center">To&#225;n</th><th class="text-center">V&#259;n</th><th class="text-center">Anh</th><th class="text-center">T&#7893;ng</th><th class="text-center">KQ</th><th class="text-center">ID</th></tr></thead>
+                            <tbody>${renderCandidateRows(r.approved_list, 'Kh&#244;ng c&#243; th&#237; sinh &#273;&#7853;u')}</tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="collapse" id="${rejectedId}">
+                    <div class="table-responsive" style="max-height:280px;overflow:auto;">
+                        <table class="table table-sm table-hover align-middle mb-0">
+                            <thead><tr><th class="text-center">H&#7841;ng</th><th>Th&#237; sinh</th><th class="text-center">To&#225;n</th><th class="text-center">V&#259;n</th><th class="text-center">Anh</th><th class="text-center">T&#7893;ng</th><th class="text-center">KQ</th><th class="text-center">ID</th></tr></thead>
+                            <tbody>${renderCandidateRows(r.rejected_list, 'Kh&#244;ng c&#243; th&#237; sinh r&#7899;t')}</tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>`;
     });
-    html += '</div></div>';
-    // Chèn vào đầu trang
+
+    html += `<div class="d-flex justify-content-end gap-2">
+                <button type="button" class="btn btn-outline-secondary" onclick="document.getElementById('autoReviewPreviewCard')?.remove(); currentPreviewToken='';">
+                    <i class="bi bi-x-lg me-1"></i>H&#7911;y b&#7843;n xem tr&#432;&#7899;c
+                </button>
+                <button type="button" class="btn btn-success" id="btnPublishPreview" ${totalPublish ? '' : 'disabled'}>
+                    <i class="bi bi-megaphone-fill me-1"></i>C&#244;ng b&#7889; k&#7871;t qu&#7843; (${totalPublish} h&#7891; s&#417;)
+                </button>
+            </div>
+        </div>
+    </div>`;
+
     const content = document.querySelector('.adm-content');
     if (content) content.insertAdjacentHTML('afterbegin', html);
+    document.getElementById('autoReviewPreviewCard')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    document.getElementById('btnPublishPreview')?.addEventListener('click', publishPreview);
 }
 
-// Chạy từ import
+function publishPreview() {
+    if (!currentPreviewToken) { showToast('error', 'Kh\u00f4ng t\u00ecm th\u1ea5y b\u1ea3n xem tr\u01b0\u1edbc. Vui l\u00f2ng ch\u1ea1y l\u1ea1i x\u00e9t tuy\u1ec3n.'); return; }
+    if (!confirm('C\u00f4ng b\u1ed1 k\u1ebft qu\u1ea3 n\u00e0y? Sau khi c\u00f4ng b\u1ed1, tr\u1ea1ng th\u00e1i h\u1ed3 s\u01a1 s\u1ebd \u0111\u01b0\u1ee3c c\u1eadp nh\u1eadt \u0110\u1eadu/R\u1edbt.')) return;
+    const btn = document.getElementById('btnPublishPreview');
+    setLoading(btn, true);
+    admFetch({ action: 'publish_auto_review', preview_token: currentPreviewToken, data_mode: <?php echo json_encode($filter_mode); ?> })
+        .then(res => {
+            setLoading(btn, false);
+            if (res.success) {
+                showToast('success', res.message);
+                setTimeout(() => window.location.href = 'auto_review.php?mode=<?php echo urlencode($filter_mode); ?>', 900);
+            } else {
+                showToast('error', res.message);
+            }
+        })
+        .catch(() => { setLoading(btn, false); showToast('error', 'L\u1ed7i k\u1ebft n\u1ed1i.'); });
+}
+
 const btnRunImport = document.getElementById('btnRunImport');
 if (btnRunImport) {
     btnRunImport.addEventListener('click', function() {
-        if (!confirm('Xác nhận chạy xét tuyển tự động từ file import?')) return;
         setLoading(this, true);
         const btn = this;
-        admFetch({ action: 'run_auto_review', source: 'import' })
+        admFetch({ action: 'run_auto_review', source: 'import', data_mode: <?php echo json_encode($filter_mode); ?> })
             .then(res => {
                 setLoading(btn, false);
                 if (res.success) {
                     showToast('success', res.message);
-                    if (res.data?.results) showResults(res.data.results);
+                    if (res.data?.results) showResults(res.data.results, res.data.preview_token || '');
                 } else { showToast('error', res.message); }
             })
             .catch(() => { setLoading(btn, false); showToast('error', 'Lỗi kết nối.'); });
     });
+    <?php if ($autoPreviewImport && $isManager && !$reviewLocked): ?>
+    window.addEventListener('load', () => setTimeout(() => btnRunImport.click(), 250));
+    <?php endif; ?>
 }
 
 // Chạy nhập tay
@@ -679,18 +793,16 @@ const btnRunManual = document.getElementById('btnRunManual');
 if (btnRunManual) {
     btnRunManual.addEventListener('click', function() {
         const major_id  = document.getElementById('manual_major_id')?.value;
-        const threshold = document.getElementById('manual_threshold')?.value;
         const quota     = document.getElementById('manual_quota')?.value || '0';
-        if (!major_id || !threshold) { showToast('error', 'Vui lòng chọn ngành và nhập điểm chuẩn.'); return; }
-        if (!confirm('Xác nhận chạy xét tuyển tự động?')) return;
+        if (!major_id || Number(quota) <= 0) { showToast('error', 'Vui lòng chọn ngành và nhập chỉ tiêu.'); return; }
         setLoading(this, true);
         const btn = this;
-        admFetch({ action: 'run_auto_review', source: 'manual', major_id, threshold, quota })
+        admFetch({ action: 'run_auto_review', source: 'manual', major_id, quota, data_mode: <?php echo json_encode($filter_mode); ?> })
             .then(res => {
                 setLoading(btn, false);
                 if (res.success) {
                     showToast('success', res.message);
-                    if (res.data?.results) showResults(res.data.results);
+                    if (res.data?.results) showResults(res.data.results, res.data.preview_token || '');
                 } else { showToast('error', res.message); }
             })
             .catch(() => { setLoading(btn, false); showToast('error', 'Lỗi kết nối.'); });
@@ -703,7 +815,8 @@ function clearImport(btn) {
     btn.disabled = true;
     const fd = new FormData();
     fd.append('action', 'clear_import');
-    fetch('auto_review.php', { method: 'POST', body: fd, credentials: 'same-origin' })
+    fd.append('mode', <?php echo json_encode($filter_mode); ?>);
+    fetch('auto_review.php?mode=<?php echo urlencode($filter_mode); ?>', { method: 'POST', body: fd, credentials: 'same-origin' })
         .then(() => location.reload())
         .catch(() => { btn.disabled = false; showToast('error', 'Lỗi kết nối.'); });
 }
@@ -719,6 +832,7 @@ function bulkAction(action) {
     fd.append('_csrf_token', CSRF);
     fd.append('module', 'applications');
     fd.append('action', action === 'bulk_approve' ? 'bulk_approve' : 'bulk_reject');
+    fd.append('data_mode', <?php echo json_encode($filter_mode); ?>);
     checked.forEach(id => fd.append('ids[]', id));
 
     fetch('/university/admissions/api/actions.php', {

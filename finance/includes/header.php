@@ -1,6 +1,7 @@
 ﻿<?php
 require_once __DIR__ . '/../../config/database.php';
 require_once __DIR__ . '/../../includes/auth.php';
+require_once __DIR__ . '/../../includes/AcademicPolicy.php';
 requireAnyRole(['finance_manager', 'finance_staff']);
 
 $_currentPage = basename($_SERVER['PHP_SELF']);
@@ -54,7 +55,6 @@ $chkIdx = $conn->query("SHOW INDEX FROM `tuition_invoices` WHERE Key_name='uq_ps
 if ($chkIdx && $chkIdx->num_rows === 0) {
     $conn->query("ALTER TABLE `tuition_invoices` ADD UNIQUE KEY `uq_ps` (`period_id`,`student_id`)");
 }
-
 // Pending count cho badge
 $_pendingCount = 0;
 $_pr = $conn->query("SELECT COUNT(*) c FROM tuition_invoices WHERE status IN ('unpaid','partial','overdue')");

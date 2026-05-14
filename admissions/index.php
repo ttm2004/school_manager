@@ -1,16 +1,19 @@
 <?php
 $pageTitle = 'Dashboard Tuyển sinh';
 include __DIR__ . '/includes/header.php';
+$filter_mode = trim($_GET['mode'] ?? 'system');
+if (!in_array($filter_mode, ['system','test'], true)) $filter_mode = 'system';
+$modeSql = $filter_mode === 'all' ? '1=1' : "data_mode='" . $conn->real_escape_string($filter_mode) . "'";
 
 // Stats
 $stats = [
-    'total'    => $conn->query("SELECT COUNT(*) as c FROM admission_applications")->fetch_assoc()['c'] ?? 0,
-    'new'      => $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='new'")->fetch_assoc()['c'] ?? 0,
-    'checking' => $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='checking'")->fetch_assoc()['c'] ?? 0,
-    'approved' => $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='approved'")->fetch_assoc()['c'] ?? 0,
-    'rejected' => $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='rejected'")->fetch_assoc()['c'] ?? 0,
-    'enrolled' => $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='enrolled'")->fetch_assoc()['c'] ?? 0,
-    'today'    => $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE DATE(created_at)=CURDATE()")->fetch_assoc()['c'] ?? 0,
+    'total'    => $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE $modeSql")->fetch_assoc()['c'] ?? 0,
+    'new'      => $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='new' AND $modeSql")->fetch_assoc()['c'] ?? 0,
+    'checking' => $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='checking' AND $modeSql")->fetch_assoc()['c'] ?? 0,
+    'approved' => $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='approved' AND $modeSql")->fetch_assoc()['c'] ?? 0,
+    'rejected' => $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='rejected' AND $modeSql")->fetch_assoc()['c'] ?? 0,
+    'enrolled' => $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='enrolled' AND $modeSql")->fetch_assoc()['c'] ?? 0,
+    'today'    => $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE DATE(created_at)=CURDATE() AND $modeSql")->fetch_assoc()['c'] ?? 0,
     'methods'  => $conn->query("SELECT COUNT(*) as c FROM admission_methods WHERE status='open'")->fetch_assoc()['c'] ?? 0,
 ];
 
@@ -19,7 +22,7 @@ $chartLabels = $chartData = [];
 for ($i = 6; $i >= 0; $i--) {
     $d = date('Y-m-d', strtotime("-$i days"));
     // $d được tạo từ date() nên an toàn
-    $cntStmt = $conn->prepare("SELECT COUNT(*) as c FROM admission_applications WHERE DATE(created_at)=?");
+    $cntStmt = $conn->prepare("SELECT COUNT(*) as c FROM admission_applications WHERE DATE(created_at)=? AND $modeSql");
     $cntStmt->bind_param('s', $d);
     $cntStmt->execute();
     $cnt = $cntStmt->get_result()->fetch_assoc()['c'] ?? 0;
@@ -33,6 +36,7 @@ $byMajor = $conn->query("
     SELECT m.major_name, COUNT(aa.id) as cnt
     FROM admission_applications aa
     LEFT JOIN majors m ON aa.major_id = m.id
+    WHERE $modeSql
     GROUP BY aa.major_id ORDER BY cnt DESC LIMIT 6
 ");
 
@@ -42,11 +46,28 @@ $recent = $conn->query("
     FROM admission_applications aa
     LEFT JOIN majors m ON aa.major_id = m.id
     LEFT JOIN admission_methods am ON aa.method_id = am.id
+    WHERE $modeSql
     ORDER BY aa.created_at DESC LIMIT 8
 ");
 ?>
 
 <!-- Stats row -->
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <form method="get" class="d-flex gap-2 align-items-end flex-wrap">
+            <div>
+                <label class="form-label small mb-1">Luồng dữ liệu</label>
+                <select name="mode" class="form-select form-select-sm" onchange="this.form.submit()">
+                    <option value="system" <?php echo $filter_mode==='system'?'selected':''; ?>>Hệ thống thật</option>
+                    <option value="test" <?php echo $filter_mode==='test'?'selected':''; ?>>Test / Demo</option>
+                                    </select>
+            </div>
+            <a href="applications.php?mode=<?php echo urlencode($filter_mode); ?>" class="btn btn-sm btn-outline-primary">Hồ sơ</a>
+            <a href="auto_review.php?mode=<?php echo urlencode($filter_mode === 'all' ? 'system' : $filter_mode); ?>" class="btn btn-sm btn-outline-secondary">Xét tuyển</a>
+            <a href="enrollment.php?mode=<?php echo urlencode($filter_mode); ?>" class="btn btn-sm btn-outline-success">Nhập học</a>
+        </form>
+    </div>
+</div>
 <div class="row g-3 mb-4">
 <?php
 $cards = [
@@ -94,9 +115,9 @@ foreach ($cards as [$label, $val, $icon, $bg, $color]):
         <div class="card">
             <div class="card-header"><i class="bi bi-lightning-charge-fill me-2"></i>Thao tác nhanh</div>
             <div class="card-body d-flex flex-wrap gap-2">
-                <a href="auto_review.php" class="btn btn-navy"><i class="bi bi-robot me-2"></i>Chạy xét tuyển tự động</a>
-                <a href="results.php" class="btn btn-outline-success"><i class="bi bi-trophy me-2"></i>Xem kết quả xét tuyển</a>
-                <a href="reports.php" class="btn btn-outline-primary"><i class="bi bi-bar-chart me-2"></i>Báo cáo thống kê</a>
+                <a href="auto_review.php?mode=<?php echo urlencode($filter_mode === 'all' ? 'system' : $filter_mode); ?>" class="btn btn-navy"><i class="bi bi-robot me-2"></i>Chạy xét tuyển tự động</a>
+                <a href="results.php?mode=<?php echo urlencode($filter_mode); ?>" class="btn btn-outline-success"><i class="bi bi-trophy me-2"></i>Xem kết quả xét tuyển</a>
+                <a href="reports.php?mode=<?php echo urlencode($filter_mode); ?>" class="btn btn-outline-primary"><i class="bi bi-bar-chart me-2"></i>Báo cáo thống kê</a>
                 <a href="methods.php" class="btn btn-outline-secondary"><i class="bi bi-list-check me-2"></i>Phương thức xét tuyển</a>
                 <a href="news.php" class="btn btn-outline-secondary"><i class="bi bi-newspaper me-2"></i>Tin tức tuyển sinh</a>
             </div>
@@ -109,7 +130,7 @@ foreach ($cards as [$label, $val, $icon, $bg, $color]):
 <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-clock-history me-2"></i>Hồ sơ mới nhất</span>
-        <a href="applications.php" class="btn btn-sm btn-gold">Xem tất cả</a>
+        <a href="applications.php?mode=<?php echo urlencode($filter_mode); ?>" class="btn btn-sm btn-gold">Xem tất cả</a>
     </div>
     <div class="card-body p-0">
         <div class="table-responsive">
@@ -134,7 +155,7 @@ foreach ($cards as [$label, $val, $icon, $bg, $color]):
                     <td class="fw-bold text-success"><?php echo number_format($total,2); ?></td>
                     <td><span class="bs <?php echo $s[1]; ?>"><?php echo $s[0]; ?></span></td>
                     <td class="small text-muted"><?php echo date('d/m/Y',strtotime($r['created_at'])); ?></td>
-                    <td><a href="applications.php?view=<?php echo $r['id']; ?>" class="btn btn-sm btn-navy"><i class="bi bi-eye"></i></a></td>
+                    <td><a href="applications.php?mode=<?php echo urlencode($filter_mode); ?>&view=<?php echo $r['id']; ?>" class="btn btn-sm btn-navy"><i class="bi bi-eye"></i></a></td>
                 </tr>
                 <?php endwhile; else: ?>
                 <tr><td colspan="8" class="text-center text-muted py-4">Chưa có hồ sơ nào</td></tr>

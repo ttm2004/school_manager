@@ -1,6 +1,7 @@
 ﻿<?php
 require_once '../config/database.php';
 require_once '../includes/auth.php';
+require_once '../includes/AcademicPolicy.php';
 require_once '../includes/teacher_assignment_rules.php';
 requireRole('admin');
 $pageTitle = 'Quản lý Lớp học phần';
@@ -55,8 +56,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
             if ($error === '') {
-            $stmt = $conn->prepare("INSERT INTO course_sections (subject_id,teacher_id,semester_id,section_code,schedule_text,room,max_students,current_students,tuition_fee,status,start_time,end_time,start_date,end_date,sessions_per_week,study_days,session_type,day_sessions,class_id) VALUES (?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?,?,?,?)");
-            $stmt->bind_param('iiisssidsssssisssi', $subject_id,$teacher_id,$semester_id,$section_code,$schedule_text,$room,$max_students,$tuition_fee,$status,$start_time,$end_time,$start_date,$end_date,$sessions_pw,$study_days,$session_type,$day_sessions,$class_id);
+            $demoContext = academicPolicySemesterDemoContext($conn, $semester_id);
+            $stmt = $conn->prepare("INSERT INTO course_sections (subject_id,teacher_id,semester_id,section_code,schedule_text,room,max_students,current_students,tuition_fee,status,data_mode,demo_batch_id,start_time,end_time,start_date,end_date,sessions_per_week,study_days,session_type,day_sessions,class_id) VALUES (?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+            $stmt->bind_param('iiisssidsssssssisssi', $subject_id,$teacher_id,$semester_id,$section_code,$schedule_text,$room,$max_students,$tuition_fee,$status,$demoContext['data_mode'],$demoContext['demo_batch_id'],$start_time,$end_time,$start_date,$end_date,$sessions_pw,$study_days,$session_type,$day_sessions,$class_id);
             $stmt->execute() ? $success = 'Thêm lớp học phần thành công!' : $error = 'Lỗi: '.$conn->error;
             $stmt->close();
             }

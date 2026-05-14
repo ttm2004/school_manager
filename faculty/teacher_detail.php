@@ -243,7 +243,7 @@ include 'includes/sidebar.php';
                         <i class="bi bi-bar-chart-fill me-2" aria-hidden="true"></i>
                         Khối lượng giảng dạy
                         <?php if ($activeSemester): ?>
-                        — <span class="text-muted small"><?php echo htmlspecialchars($activeSemester['semester_name']); ?></span>
+                        — <span class="text-muted small"><?php echo htmlspecialchars(($activeSemester['semester_name'] ?? '') . ' - ' . ($activeSemester['school_year'] ?? '')); ?></span>
                         <?php endif; ?>
                     </div>
                     <div class="card-body">
