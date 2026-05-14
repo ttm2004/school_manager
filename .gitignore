@@ -16,6 +16,7 @@
 *.sql.gz
 database/backups/
 database/dumps/
+database/imports/admission_demo.csv
 
 # ── Upload files (dữ liệu người dùng) ───────────────────────
 assets/uploads/avatars/*
