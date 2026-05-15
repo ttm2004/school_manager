@@ -3,10 +3,30 @@
  * Partial: bảng danh sách hồ sơ nhập học
  * Được include từ enrollment.php — biến đã được chuẩn bị sẵn
  */
+$testBulkEnroll = ($filter_mode ?? 'system') === 'test'
+    && ($tab ?? 'approved') !== 'enrolled'
+    && !empty($canEnroll);
+$emptyColspan = ($tab ?? 'approved') === 'enrolled' ? 8 : 7;
+if ($testBulkEnroll) $emptyColspan++;
 ?>
+<?php if ($testBulkEnroll): ?>
+<div class="d-flex justify-content-between align-items-center gap-2 flex-wrap px-3 py-2 border-bottom bg-light">
+    <label class="form-check mb-0 small fw-semibold">
+        <input class="form-check-input" type="checkbox" id="bulkSelectAll">
+        Chọn tất cả trang này
+    </label>
+    <div class="d-flex align-items-center gap-2">
+        <span class="text-muted small"><span id="bulkSelectedCount">0</span> hồ sơ được chọn</span>
+        <button type="button" class="btn btn-sm btn-success" id="btnBulkEnroll" disabled>
+            <i class="bi bi-check2-circle me-1"></i>Nhập học đã chọn
+        </button>
+    </div>
+</div>
+<?php endif; ?>
 <div class="table-responsive">
     <table class="table table-hover mb-0">
         <thead><tr>
+            <?php if ($testBulkEnroll): ?><th style="width:42px"></th><?php endif; ?>
             <th>#</th><th>Họ tên</th><th>Ngành</th><th>Phương thức</th>
             <th>Tổng điểm</th><th>Ngày nộp</th>
             <?php if ($tab === 'enrolled'): ?><th>Tài khoản SV</th><?php endif; ?>
@@ -17,6 +37,11 @@
             $idx = $offset + 1;
             while ($app = $applications->fetch_assoc()): ?>
         <tr id="row-<?php echo $app['id']; ?>">
+            <?php if ($testBulkEnroll): ?>
+            <td>
+                <input class="form-check-input bulk-enroll-check" type="checkbox" value="<?php echo (int)$app['id']; ?>" aria-label="Chọn hồ sơ">
+            </td>
+            <?php endif; ?>
             <td class="text-muted small"><?php echo $idx++; ?></td>
             <td>
                 <div class="fw-semibold small"><?php echo htmlspecialchars($app['full_name']); ?></div>
@@ -59,7 +84,8 @@
                     <button class="btn btn-sm btn-gold btn-create-account"
                         data-id="<?php echo $app['id']; ?>"
                         data-name="<?php echo htmlspecialchars($app['full_name'], ENT_QUOTES); ?>"
-                        data-major-id="<?php echo intval($app['major_id']); ?>">
+                        data-major-id="<?php echo intval($app['major_id']); ?>"
+                        data-target-year="<?php echo (int)($app['admission_year'] ?? $app['graduation_year'] ?? date('Y', strtotime($app['created_at']))); ?>">
                         <i class="bi bi-person-plus-fill me-1"></i>Cấp TK
                     </button>
                     <?php elseif ($app['has_account']): ?>
@@ -81,7 +107,7 @@
             </td>
         </tr>
         <?php endwhile; else: ?>
-        <tr><td colspan="8" class="text-center text-muted py-5">
+        <tr><td colspan="<?php echo $emptyColspan; ?>" class="text-center text-muted py-5">
             <i class="bi bi-inbox fs-2 d-block mb-2"></i>Không có hồ sơ nào
         </td></tr>
         <?php endif; ?>

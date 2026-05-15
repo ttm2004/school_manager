@@ -273,10 +273,10 @@ include 'includes/sidebar.php';
                 </select>
             </div>
             <div class="col-6 col-md-2">
-                <label class="form-label small">Loc</label>
+                <label class="form-label small">Lọc</label>
                 <select name="filter" class="form-select form-select-sm">
                     <option value="" <?php echo $filterMode===''?'selected':''; ?>>Tất cả lớp mở</option>
-                    <option value="no_teacher" <?php echo $filterMode==='no_teacher'?'selected':''; ?>>Chua có GV</option>
+                    <option value="no_teacher" <?php echo $filterMode==='no_teacher'?'selected':''; ?>>Chưa có GV</option>
                     <option value="pending" <?php echo $filterMode==='pending'?'selected':''; ?>>Đề xuất chờ duyệt</option>
                 </select>
             </div>
@@ -304,10 +304,10 @@ include 'includes/sidebar.php';
                 <tr>
                     <th>Lớp học phần / Môn học</th>
                     <th>Khoa</th>
-                    <th class="text-center">Si so</th>
+                    <th class="text-center">Sĩ số</th>
                     <th>Giảng viên</th>
                     <th>Đề xuất từ Khoa</th>
-                    <th class="text-center">Thao tac</th>
+                    <th class="text-center">Thao tác</th>
                 </tr>
             </thead>
             <tbody>
@@ -327,13 +327,13 @@ include 'includes/sidebar.php';
                     <div class="small fw-semibold"><?php echo htmlspecialchars($cs['teacher_name']); ?></div>
                     <small class="text-muted"><?php echo htmlspecialchars($cs['teacher_code']); ?> · <?php echo htmlspecialchars($cs['degree']??''); ?></small>
                     <?php else: ?>
-                    <span class="badge bg-warning text-dark">Chua có GV</span>
+                    <span class="badge bg-warning text-dark">Chưa có GV</span>
                     <?php endif; ?>
                 </td>
                 <td>
                     <?php if ($cs['proposal_status'] === 'pending' && $cs['proposed_teacher_name']): ?>
                     <div class="small">
-                        <span class="badge bg-info">Ð? xu?t: <?php echo htmlspecialchars($cs['proposed_teacher_name']); ?></span>
+                        <span class="badge bg-info">Đề xuất: <?php echo htmlspecialchars($cs['proposed_teacher_name']); ?></span>
                     </div>
                     <?php if (isAcademicManager()): ?>
                     <div class="d-flex gap-1 mt-1">
@@ -343,7 +343,7 @@ include 'includes/sidebar.php';
                             <input type="hidden" name="section_id" value="<?php echo $cs['id']; ?>">
                             <button class="btn btn-xs btn-success" style="font-size:.7rem;padding:2px 6px"
                                     onclick="return confirm('Duyệt phân công?')">
-                                <i class="bi bi-check"></i> Duy?t
+                                <i class="bi bi-check"></i> Duyệt
                             </button>
                         </form>
                         <button class="btn btn-xs btn-outline-danger" style="font-size:.7rem;padding:2px 6px"
@@ -455,7 +455,7 @@ include 'includes/sidebar.php';
             <input type="hidden" name="action" value="reject_assignment">
             <input type="hidden" name="section_id" id="rejectSectionId">
             <div class="modal-body">
-                <label class="form-label fw-semibold">Ly do tu choi <span class="text-danger">*</span></label>
+                <label class="form-label fw-semibold">Lý do từ chối <span class="text-danger">*</span></label>
                 <textarea name="reject_reason" class="form-control" rows="3" required
                           placeholder="Nhập lý do để thông báo cho Khoa..."></textarea>
             </div>

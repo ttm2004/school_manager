@@ -23,6 +23,7 @@ $majorId    = (int)($_GET['major_id'] ?? 0);
 $status     = trim($_GET['status'] ?? '');
 $year       = (int)($_GET['year'] ?? 0);
 $search     = trim($_GET['search'] ?? '');
+$filterMode = (($_GET['mode'] ?? 'system') === 'test') ? 'test' : 'system';
 
 $allowedStatuses = ['đang học', 'bảo lưu', 'thôi học', 'tốt nghiệp'];
 
@@ -41,10 +42,10 @@ $stmtStatus = $conn->prepare(
      FROM students s
      JOIN classes cl ON s.class_id = cl.id
      JOIN majors m ON cl.major_id = m.id
-     WHERE m.faculty_id = ?
+     WHERE m.faculty_id = ? AND s.data_mode = ?
      GROUP BY s.academic_status"
 );
-$stmtStatus->bind_param('i', $facultyId);
+$stmtStatus->bind_param('is', $facultyId, $filterMode);
 $stmtStatus->execute();
 $statusResult = $stmtStatus->get_result();
 while ($row = $statusResult->fetch_assoc()) {
@@ -53,9 +54,9 @@ while ($row = $statusResult->fetch_assoc()) {
 $stmtStatus->close();
 
 // ── Build WHERE ───────────────────────────────────────────────
-$whereParts = ['m.faculty_id = ?'];
-$bindTypes  = 'i';
-$bindValues = [$facultyId];
+$whereParts = ['m.faculty_id = ?', 's.data_mode = ?'];
+$bindTypes  = 'is';
+$bindValues = [$facultyId, $filterMode];
 
 if ($majorId > 0) {
     $whereParts[] = 'cl.major_id = ?';
@@ -122,6 +123,7 @@ $stmtData->close();
 // ── Build query string for pagination ────────────────────────
 $qsParts = [];
 if ($majorId > 0)  $qsParts[] = 'major_id=' . $majorId;
+if ($filterMode !== 'system') $qsParts[] = 'mode=' . urlencode($filterMode);
 if ($status !== '') $qsParts[] = 'status=' . urlencode($status);
 if ($year > 0)     $qsParts[] = 'year=' . $year;
 if ($search !== '') $qsParts[] = 'search=' . urlencode($search);
@@ -133,9 +135,9 @@ $stmtYears = $conn->prepare(
     "SELECT DISTINCT s.enrollment_year FROM students s
      JOIN classes cl ON s.class_id = cl.id
      JOIN majors m ON cl.major_id = m.id
-     WHERE m.faculty_id = ? AND s.enrollment_year IS NOT NULL ORDER BY s.enrollment_year DESC"
+     WHERE m.faculty_id = ? AND s.data_mode = ? AND s.enrollment_year IS NOT NULL ORDER BY s.enrollment_year DESC"
 );
-$stmtYears->bind_param('i', $facultyId);
+$stmtYears->bind_param('is', $facultyId, $filterMode);
 $stmtYears->execute();
 $yearsResult = $stmtYears->get_result();
 while ($row = $yearsResult->fetch_assoc()) {
@@ -206,6 +208,13 @@ include 'includes/sidebar.php';
                         <input type="text" id="search" name="search" class="form-control"
                                placeholder="Tên hoặc mã SV..."
                                value="<?php echo htmlspecialchars($search); ?>">
+                    </div>
+                    <div class="col-6 col-md-2">
+                        <label for="mode" class="form-label">Chế độ</label>
+                        <select id="mode" name="mode" class="form-select">
+                            <option value="system" <?php echo $filterMode === 'system' ? 'selected' : ''; ?>>Dữ liệu thật</option>
+                            <option value="test" <?php echo $filterMode === 'test' ? 'selected' : ''; ?>>Test / Demo</option>
+                        </select>
                     </div>
                     <div class="col-6 col-md-3">
                         <label for="major_id" class="form-label">Ngành</label>

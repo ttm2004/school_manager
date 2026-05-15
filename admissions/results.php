@@ -48,12 +48,81 @@ $stmt->close();
 
 $majors = $conn->query("SELECT id, major_name FROM majors ORDER BY major_name");
 
+$viewApp = null;
+if (isset($_GET['view'])) {
+    $vid = (int)$_GET['view'];
+    $vs = $conn->prepare("
+        SELECT aa.*, m.major_name, m.major_code, am.method_name,
+               (COALESCE(aa.math_score, 0) + COALESCE(aa.literature_score, 0) + COALESCE(aa.english_score, 0)) AS total_score
+        FROM admission_applications aa
+        LEFT JOIN majors m ON aa.major_id = m.id
+        LEFT JOIN admission_methods am ON aa.method_id = am.id
+        WHERE aa.id = ? AND aa.status IN ('approved','rejected','enrolled')
+        LIMIT 1
+    ");
+    $vs->bind_param('i', $vid);
+    $vs->execute();
+    $viewApp = $vs->get_result()->fetch_assoc();
+    $vs->close();
+}
+
+$baseQuery = [
+    'mode' => $filter_mode,
+    'status' => $filter_status,
+    'major_id' => $filter_major,
+    'q' => $filter_search,
+    'page' => $page,
+];
+$backQuery = array_filter($baseQuery, static fn($v) => $v !== '' && $v !== 0 && $v !== null);
+$sMap = ['approved'=>['Trúng tuyển','bs-approved','success'],'rejected'=>['Không trúng','bs-rejected','danger'],'enrolled'=>['Đã nhập học','bs-enrolled','primary']];
+
 // Summary stats
 $modeSql = $filter_mode === 'all' ? '1=1' : "data_mode='" . $conn->real_escape_string($filter_mode) . "'";
 $sumApproved = $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='approved' AND $modeSql")->fetch_assoc()['c'] ?? 0;
 $sumRejected = $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='rejected' AND $modeSql")->fetch_assoc()['c'] ?? 0;
 $sumEnrolled = $conn->query("SELECT COUNT(*) as c FROM admission_applications WHERE status='enrolled' AND $modeSql")->fetch_assoc()['c'] ?? 0;
 ?>
+
+<?php if ($viewApp): ?>
+<div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-eye-fill me-2"></i>Chi tiết kết quả #<?php echo (int)$viewApp['id']; ?></span>
+        <a href="results.php?<?php echo http_build_query($backQuery); ?>" class="btn btn-sm btn-outline-light"><i class="bi bi-arrow-left me-1"></i>Quay lại</a>
+    </div>
+    <div class="card-body">
+        <div class="row g-4">
+            <div class="col-md-6">
+                <h6 class="text-navy fw-bold mb-3 border-bottom pb-2">Thông tin thí sinh</h6>
+                <table class="table table-borderless table-sm">
+                    <tr><th width="150">Họ tên:</th><td class="fw-bold"><?php echo htmlspecialchars($viewApp['full_name']); ?></td></tr>
+                    <tr><th>Ngày sinh:</th><td><?php echo $viewApp['birthday'] ? date('d/m/Y', strtotime($viewApp['birthday'])) : '--'; ?></td></tr>
+                    <tr><th>CCCD/CMND:</th><td><?php echo htmlspecialchars($viewApp['citizen_id'] ?? '--'); ?></td></tr>
+                    <tr><th>Email:</th><td><?php echo htmlspecialchars($viewApp['email'] ?? '--'); ?></td></tr>
+                    <tr><th>Điện thoại:</th><td><?php echo htmlspecialchars($viewApp['phone'] ?? '--'); ?></td></tr>
+                    <tr><th>Luồng dữ liệu:</th><td><?php echo ($viewApp['data_mode'] ?? 'system') === 'test' ? 'Test/Demo' : 'Dữ liệu thật'; ?></td></tr>
+                </table>
+            </div>
+            <div class="col-md-6">
+                <h6 class="text-navy fw-bold mb-3 border-bottom pb-2">Kết quả xét tuyển</h6>
+                <table class="table table-borderless table-sm">
+                    <tr><th width="150">Ngành:</th><td class="fw-bold text-navy"><?php echo htmlspecialchars($viewApp['major_name'] ?? '--'); ?></td></tr>
+                    <tr><th>Phương thức:</th><td><?php echo htmlspecialchars($viewApp['method_name'] ?? '--'); ?></td></tr>
+                    <tr><th>Điểm Toán:</th><td><?php echo number_format((float)($viewApp['math_score'] ?? 0), 2); ?></td></tr>
+                    <tr><th>Điểm Văn:</th><td><?php echo number_format((float)($viewApp['literature_score'] ?? 0), 2); ?></td></tr>
+                    <tr><th>Điểm Anh:</th><td><?php echo number_format((float)($viewApp['english_score'] ?? 0), 2); ?></td></tr>
+                    <tr><th>Tổng điểm:</th><td class="fw-bold text-success"><?php echo number_format((float)($viewApp['total_score'] ?? 0), 2); ?></td></tr>
+                </table>
+            </div>
+        </div>
+        <div class="mt-3 pt-3 border-top d-flex gap-3 align-items-center flex-wrap">
+            <strong class="text-navy">Kết quả hiện tại:</strong>
+            <?php $vs = $sMap[$viewApp['status']] ?? [$viewApp['status'], '', 'secondary']; ?>
+            <span class="badge bg-<?php echo $vs[2]; ?> fs-6"><?php echo htmlspecialchars($vs[0]); ?></span>
+            <span class="text-muted small ms-auto"><i class="bi bi-eye-fill me-1"></i>Chỉ xem, không chỉnh sửa</span>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
 
 <!-- Summary -->
 <div class="row g-3 mb-4">
@@ -125,11 +194,10 @@ $sumEnrolled = $conn->query("SELECT COUNT(*) as c FROM admission_applications WH
             <table class="table mb-0">
                 <thead><tr>
                     <th>Hạng</th><th>Họ tên</th><th>Ngành</th><th>Phương thức</th>
-                    <th>Toán</th><th>Văn</th><th>Anh</th><th>Tổng điểm</th><th>Kết quả</th>
+                    <th>Toán</th><th>Văn</th><th>Anh</th><th>Tổng điểm</th><th>Kết quả</th><th>Thao tác</th>
                 </tr></thead>
                 <tbody>
                 <?php
-                $sMap = ['approved'=>['Trúng tuyển','bs-approved'],'rejected'=>['Không trúng','bs-rejected'],'enrolled'=>['Đã nhập học','bs-enrolled']];
                 if ($rows && $rows->num_rows > 0):
                     $rank = $offset + 1;
                     while ($r = $rows->fetch_assoc()):
@@ -148,9 +216,13 @@ $sumEnrolled = $conn->query("SELECT COUNT(*) as c FROM admission_applications WH
                     <td class="text-center"><?php echo number_format($r['english_score']??0,2); ?></td>
                     <td class="text-center fw-bold fs-6 text-success"><?php echo number_format($r['total_score']??0,2); ?></td>
                     <td><span class="bs <?php echo $s[1]; ?>"><?php echo $s[0]; ?></span></td>
+                    <td>
+                        <?php $viewQuery = array_merge($backQuery, ['view' => (int)$r['id']]); ?>
+                        <a href="?<?php echo http_build_query($viewQuery); ?>" class="btn btn-sm btn-outline-primary" title="Xem chi tiết"><i class="bi bi-eye-fill"></i></a>
+                    </td>
                 </tr>
                 <?php endwhile; else: ?>
-                <tr><td colspan="9" class="text-center text-muted py-5"><i class="bi bi-inbox fs-2 d-block mb-2"></i>Không có dữ liệu</td></tr>
+                <tr><td colspan="10" class="text-center text-muted py-5"><i class="bi bi-inbox fs-2 d-block mb-2"></i>Không có dữ liệu</td></tr>
                 <?php endif; ?>
                 </tbody>
             </table>

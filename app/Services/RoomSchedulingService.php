@@ -17,7 +17,9 @@ final class RoomSchedulingService
         int $maxStudents,
         string $teachingMode,
         ?string $daySessions,
-        string $roomRequirement = ''
+        string $roomRequirement = '',
+        ?string $startDate = null,
+        ?string $endDate = null
     ): array {
         return academicPolicyFindAvailableClassrooms(
             $conn,
@@ -27,7 +29,9 @@ final class RoomSchedulingService
             $maxStudents,
             $teachingMode,
             $daySessions,
-            $roomRequirement
+            $roomRequirement,
+            $startDate,
+            $endDate
         );
     }
 
@@ -40,6 +44,17 @@ final class RoomSchedulingService
         string $roomRequirement = ''
     ): array {
         return academicPolicyValidateRoom($conn, $roomCode, $maxStudents, $subjectId, $teachingMode, $roomRequirement);
+    }
+
+    public static function planSectionOpening(
+        mysqli $conn,
+        array $section,
+        int $maxStudents,
+        string $teachingMode,
+        ?string $preferredDaySessions = '',
+        ?string $preferredRoom = ''
+    ): array {
+        return academicPolicyPlanSectionOpening($conn, $section, $maxStudents, $teachingMode, $preferredDaySessions, $preferredRoom);
     }
 }
 

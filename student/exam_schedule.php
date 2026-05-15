@@ -8,6 +8,7 @@ $stmt->bind_param('i', $_SESSION['user_id']);
 $stmt->execute();
 $student = $stmt->get_result()->fetch_assoc();
 $stmt->close();
+requireNoTuitionLock((int)($student['id'] ?? 0));
 
 // Lấy lịch thi của sinh viên (qua các môn đã đăng ký)
 // Bước 4 trong luồng: Hệ thống kiểm tra sinh viên đủ điều kiện thi

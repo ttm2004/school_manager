@@ -29,6 +29,7 @@ function loadEnv(string $path): void
 
 // Load .env từ root project
 loadEnv(dirname(__DIR__) . '/.env');
+date_default_timezone_set((string)($_ENV['APP_TIMEZONE'] ?? getenv('APP_TIMEZONE') ?: 'Asia/Ho_Chi_Minh'));
 
 // ── Helper: lấy config ────────────────────────────────────────
 function env(string $key, mixed $default = null): mixed

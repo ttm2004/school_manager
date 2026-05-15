@@ -6,22 +6,129 @@ require_once '../app/Services/RoomSchedulingService.php';
 require_once 'includes/academic_helpers.php';
 requireAnyRole(['academic_manager','academic_staff']);
 
-$pageTitle = 'De xuat mo lop tu Khoa';
+$pageTitle = 'Đề xuất mở lớp từ Khoa';
 $userId    = (int)$_SESSION['user_id'];
 
 // POST: duyet / tu choi de xuat
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verifyCSRFToken($_POST['_csrf_token'] ?? '')) {
-        $_SESSION['_flash'] = ['type'=>'danger','message'=>'Yeu cau khong hop le.'];
+        $_SESSION['_flash'] = ['type'=>'danger','message'=>'Yêu cầu không hợp lệ.'];
         header('Location: proposals.php'); exit();
     }
     if (!isAcademicManager()) {
-        $_SESSION['_flash'] = ['type'=>'danger','message'=>'Chi Truong phong Dao tao moi co quyen duyet.'];
+        $_SESSION['_flash'] = ['type'=>'danger','message'=>'Chỉ Trưởng phòng Đào tạo mới có quyền duyệt.'];
         header('Location: proposals.php'); exit();
     }
 
     $action   = trim($_POST['action'] ?? '');
     $sectionId = (int)($_POST['section_id'] ?? 0);
+    $redirectQuery = trim((string)($_POST['redirect_query'] ?? ''));
+    $redirectUrl = 'proposals.php' . ($redirectQuery !== '' ? '?' . ltrim($redirectQuery, '?') : '');
+
+    if (in_array($action, ['bulk_approve_open', 'bulk_reject_open'], true)) {
+        $sectionIds = array_values(array_unique(array_filter(
+            array_map('intval', $_POST['section_ids'] ?? []),
+            static fn(int $id): bool => $id > 0
+        )));
+        if (empty($sectionIds)) {
+            $_SESSION['_flash'] = ['type'=>'danger','message'=>'Vui lòng chọn ít nhất một đề xuất chờ duyệt.'];
+            header('Location: ' . $redirectUrl); exit();
+        }
+
+        if ($action === 'bulk_reject_open') {
+            $reason = trim($_POST['bulk_reject_reason'] ?? '');
+            if ($reason === '') {
+                $_SESSION['_flash'] = ['type'=>'danger','message'=>'Vui lòng nhập lý do từ chối.'];
+                header('Location: ' . $redirectUrl); exit();
+            }
+            $placeholders = implode(',', array_fill(0, count($sectionIds), '?'));
+            $typesBulk = 's' . str_repeat('i', count($sectionIds));
+            $paramsBulk = array_merge([$reason], $sectionIds);
+            $stmtBulk = $conn->prepare(
+                "UPDATE course_sections
+                 SET status='cancelled',
+                     open_reject_reason=?,
+                     open_reviewed_by=" . (int)$userId . ",
+                     open_reviewed_at=NOW()
+                 WHERE status='proposed' AND id IN ($placeholders)"
+            );
+            $stmtBulk->bind_param($typesBulk, ...$paramsBulk);
+            $stmtBulk->execute();
+            $affected = $stmtBulk->affected_rows;
+            $stmtBulk->close();
+            $_SESSION['_flash'] = ['type'=>'warning','message'=>"Đã từ chối {$affected} đề xuất."];
+            header('Location: ' . $redirectUrl); exit();
+        }
+
+        $approved = 0;
+        $failed = [];
+        foreach ($sectionIds as $bulkSectionId) {
+            $policyCheck = academicPolicyValidateSectionOpening($conn, $bulkSectionId);
+            if (!$policyCheck['ok']) {
+                $failed[] = '#' . $bulkSectionId . ': ' . $policyCheck['message'];
+                continue;
+            }
+            $section = $policyCheck['section'] ?? [];
+            $approvalWindow = academicPolicyCheckApprovalWindow($conn, (int)($section['semester_id'] ?? 0));
+            if (!$approvalWindow['ok']) {
+                $failed[] = (string)($section['section_code'] ?? ('#' . $bulkSectionId)) . ': ' . $approvalWindow['message'];
+                continue;
+            }
+            $maxStudents = max(1, (int)($section['expected_students'] ?: $section['max_students'] ?: 40));
+            $teachingMode = (string)($section['teaching_mode'] ?: 'offline');
+            if (!in_array($teachingMode, ['offline', 'online', 'hybrid'], true)) {
+                $teachingMode = 'offline';
+            }
+            $plannedOpening = RoomSchedulingService::planSectionOpening(
+                $conn,
+                $section,
+                $maxStudents,
+                $teachingMode,
+                (string)($section['day_sessions'] ?? ''),
+                (string)($section['room'] ?? '')
+            );
+            if (!$plannedOpening['ok']) {
+                $failed[] = (string)($section['section_code'] ?? ('#' . $bulkSectionId)) . ': ' . $plannedOpening['message'];
+                continue;
+            }
+
+            $daySessions = (string)$plannedOpening['day_sessions'];
+            $room = $teachingMode === 'online' ? '' : (string)$plannedOpening['room'];
+            $classroomId = $teachingMode === 'online' ? null : (int)($plannedOpening['classroom_id'] ?? 0);
+            $sectionStartDate = (string)($plannedOpening['start_date'] ?? '');
+            $sectionEndDate = (string)($plannedOpening['end_date'] ?? '');
+
+            $stmtBulkApprove = $conn->prepare(
+                "UPDATE course_sections
+                 SET status='open',
+                     max_students=?,
+                     room=?,
+                     classroom_id=?,
+                     teaching_mode=?,
+                     day_sessions=?,
+                     start_date=?,
+                     end_date=?,
+                     open_reviewed_by=?,
+                     open_reviewed_at=NOW()
+                 WHERE id=? AND status='proposed'"
+            );
+            $stmtBulkApprove->bind_param('isissssii', $maxStudents, $room, $classroomId, $teachingMode, $daySessions, $sectionStartDate, $sectionEndDate, $userId, $bulkSectionId);
+            $stmtBulkApprove->execute();
+            if ($stmtBulkApprove->affected_rows > 0) {
+                $approved++;
+            } else {
+                $failed[] = (string)($section['section_code'] ?? ('#' . $bulkSectionId)) . ': không còn ở trạng thái chờ duyệt.';
+            }
+            $stmtBulkApprove->close();
+        }
+
+        $message = "Đã duyệt {$approved} đề xuất.";
+        if (!empty($failed)) {
+            $message .= ' Bỏ qua ' . count($failed) . ' dòng: ' . implode(' | ', array_slice($failed, 0, 4));
+        }
+        $_SESSION['_flash'] = ['type'=>empty($failed) ? 'success' : 'warning','message'=>$message];
+        header('Location: ' . $redirectUrl); exit();
+    }
 
     // DUYET de xuat mo lop: proposed -> open
     if ($action === 'approve_open') {
@@ -45,13 +152,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['_flash'] = ['type'=>'danger','message'=>$approvalWindow['message']];
             header('Location: proposals.php'); exit();
         }
+        $plannedOpening = RoomSchedulingService::planSectionOpening($conn, $section, $maxStudents, $teachingMode, $daySessions, $room);
+        if (!$plannedOpening['ok']) {
+            $_SESSION['_flash'] = ['type'=>'danger','message'=>$plannedOpening['message']];
+            header('Location: proposals.php'); exit();
+        }
+        $daySessions = (string)$plannedOpening['day_sessions'];
+        $room = (string)$plannedOpening['room'];
+        $section['start_date'] = (string)$plannedOpening['start_date'];
+        $section['end_date'] = (string)$plannedOpening['end_date'];
+
         $window = $policyCheck['eligible'][0]['semester_window'] ?? null;
         if (!$window) {
             $_SESSION['_flash'] = ['type'=>'danger','message'=>'Hoc ky chua co nam hoc hop le de tinh ngay bat dau/ket thuc.'];
             header('Location: proposals.php'); exit();
         }
-        $sectionStartDate = $window['start_date'];
-        $sectionEndDate   = $window['end_date'];
+        $sectionStartDate = !empty($section['start_date']) ? $section['start_date'] : $window['start_date'];
+        $sectionEndDate   = !empty($section['end_date']) ? $section['end_date'] : $window['end_date'];
         $loadRow = $conn->query(
             "SELECT COALESCE(NULLIF(total_periods,0), theory_periods + practice_periods, credits * 15, 45) AS total_periods
              FROM subjects WHERE id = " . (int)$section['subject_id'] . " LIMIT 1"
@@ -66,7 +183,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['_flash'] = ['type'=>'danger','message'=>'Vui lòng nhập lịch học để kiểm tra trùng phòng/giảng viên.'];
             header('Location: proposals.php'); exit();
         }
-        $calculatedEndDate = academicScheduleSectionEndDate($sectionStartDate, $daySessions, $totalPeriods, $window['end_date']);
+        $calculatedEndDate = empty($section['end_date'])
+            ? academicScheduleSectionEndDate($sectionStartDate, $daySessions, $totalPeriods, $window['end_date'])
+            : null;
         if ($calculatedEndDate) {
             $sectionEndDate = $calculatedEndDate;
         }
@@ -76,7 +195,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             header('Location: proposals.php'); exit();
         }
         $teacherIdForConflict = (int)(($section['teacher_id'] ?? 0) ?: ($section['proposed_teacher_id'] ?? 0));
-        if ($teacherIdForConflict > 0 && academicPolicyHasScheduleConflict($conn, $sectionId, 'teacher_id', $teacherIdForConflict, (int)$section['semester_id'], $daySessions)) {
+        if ($teacherIdForConflict > 0 && academicPolicyHasScheduleConflict($conn, $sectionId, 'teacher_id', $teacherIdForConflict, (int)$section['semester_id'], $daySessions, $sectionStartDate, $sectionEndDate)) {
             $_SESSION['_flash'] = ['type'=>'danger','message'=>'Giảng viên đang bị trùng lịch trong học kỳ này.'];
             header('Location: proposals.php'); exit();
         }
@@ -93,7 +212,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $maxStudents,
                 $teachingMode,
                 $daySessions,
-                (string)($section['room_requirement'] ?? '')
+                (string)($section['room_requirement'] ?? ''),
+                $sectionStartDate,
+                $sectionEndDate
             );
 
             if (empty($availableRooms)) {
@@ -180,8 +301,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'reject_open') {
         $reason = trim($_POST['reject_reason'] ?? '');
         if ($reason === '') {
-            $_SESSION['_flash'] = ['type'=>'danger','message'=>'Vui long nhap ly do tu choi.'];
-            header('Location: proposals.php'); exit();
+            $_SESSION['_flash'] = ['type'=>'danger','message'=>'Vui lòng nhập lý do từ chối.'];
+            header('Location: ' . $redirectUrl); exit();
         }
         $stmt = $conn->prepare(
             "UPDATE course_sections
@@ -201,21 +322,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                   WHERE cs.id=$sectionId LIMIT 1")->fetch_assoc();
             if ($info) {
                 sendAcademicNotification($conn, $userId, 'proposal_rejected',
-                    'De xuat mo lop bi tu choi',
-                    "Lop HP {$info['section_code']} bi tu choi. Ly do: $reason",
+                    'Đề xuất mở lớp bị từ chối',
+                    "Lớp HP {$info['section_code']} bị từ chối. Lý do: $reason",
                     $info['faculty_id'] ?? null, null, $sectionId, 'course_section'
                 );
                 if ($info['open_proposed_by']) {
-                    $title = "De xuat bi tu choi: {$info['section_code']}";
+                    $title = "Đề xuất bị từ chối: {$info['section_code']}";
                     $stmtN = $conn->prepare("INSERT INTO system_notifications (user_id, title, content) VALUES (?,?,?)");
                     $stmtN->bind_param('iss', $info['open_proposed_by'], $title, $reason);
                     $stmtN->execute(); $stmtN->close();
                 }
             }
-            $_SESSION['_flash'] = ['type'=>'warning','message'=>'Da tu choi de xuat.'];
+            $_SESSION['_flash'] = ['type'=>'warning','message'=>'Đã từ chối đề xuất.'];
+        } else {
+            $_SESSION['_flash'] = ['type'=>'danger','message'=>'Lỗi hoặc đề xuất không còn ở trạng thái chờ duyệt.'];
         }
         $stmt->close();
-        header('Location: proposals.php'); exit();
+        header('Location: ' . $redirectUrl); exit();
     }
 }
 
@@ -308,10 +431,10 @@ $semesters  = $conn->query("SELECT id, semester_name, school_year FROM semesters
 $roomTypeLabels = ['theory'=>'Lý thuyết','lab'=>'Thực hành','computer_lab'=>'Phòng máy','online'=>'Online','other'=>'Khác'];
 
 $statusLabels = [
-    'proposed'  => ['warning', 'Cho duyet'],
-    'open'      => ['success', 'Da duyet - Mo'],
-    'cancelled' => ['danger',  'Tu choi'],
-    'draft'     => ['secondary','Nhap'],
+    'proposed'  => ['warning', 'Chờ duyệt'],
+    'open'      => ['success', 'Đã duyệt - Mở'],
+    'cancelled' => ['danger',  'Từ chối'],
+    'draft'     => ['secondary','Nháp'],
 ];
 
 // Lay chi tiet de xuat dang xem (neu co ?action=review&id=X)
@@ -366,7 +489,7 @@ include 'includes/sidebar.php';
 <div class="admin-topbar">
     <div class="d-flex align-items-center gap-3">
         <button class="btn btn-sm btn-outline-secondary d-lg-none" id="sidebarToggle"><i class="bi bi-list fs-5"></i></button>
-        <span class="admin-topbar-title"><i class="bi bi-send-fill me-2 text-navy"></i>De xuat mo lop tu Khoa</span>
+        <span class="admin-topbar-title"><i class="bi bi-send-fill me-2 text-navy"></i>Đề xuất mở lớp từ Khoa</span>
     </div>
     <span class="text-muted small"><?php echo htmlspecialchars($_SESSION['full_name']??''); ?></span>
 </div>
@@ -384,46 +507,46 @@ include 'includes/sidebar.php';
 <div class="card mb-4 border-warning">
     <div class="card-header bg-warning text-dark">
         <i class="bi bi-clipboard-check me-2"></i>
-        Duyet de xuat: <strong><?php echo htmlspecialchars($reviewSection['section_code']); ?></strong>
+        Duyệt đề xuất: <strong><?php echo htmlspecialchars($reviewSection['section_code']); ?></strong>
         — <?php echo htmlspecialchars($reviewSection['subject_name']); ?>
     </div>
     <div class="card-body">
         <div class="row g-3 mb-3">
-            <div class="col-md-3"><small class="text-muted d-block">Mon hoc</small>
+            <div class="col-md-3"><small class="text-muted d-block">Môn học</small>
                 <strong><?php echo htmlspecialchars($reviewSection['subject_name']); ?></strong>
                 <span class="text-muted">(<?php echo $reviewSection['credits']; ?> TC)</span>
             </div>
             <div class="col-md-3"><small class="text-muted d-block">Khoa</small>
                 <?php echo htmlspecialchars($reviewSection['faculty_name']??'—'); ?>
             </div>
-            <div class="col-md-3"><small class="text-muted d-block">Hoc ky</small>
+            <div class="col-md-3"><small class="text-muted d-block">Học kỳ</small>
                 <?php echo htmlspecialchars($reviewSection['semester_name'].' '.$reviewSection['school_year']); ?>
             </div>
-            <div class="col-md-3"><small class="text-muted d-block">Khoa tuyen sinh</small>
+            <div class="col-md-3"><small class="text-muted d-block">Khóa tuyển sinh</small>
                 <?php echo htmlspecialchars($reviewSection['cohort_code'] ?? '—'); ?>
             </div>
-            <div class="col-md-3"><small class="text-muted d-block">Si so du kien</small>
+            <div class="col-md-3"><small class="text-muted d-block">Sĩ số dự kiến</small>
                 <strong><?php echo (int)$reviewSection['expected_students']; ?></strong> SV
             </div>
             <?php if ($reviewSection['room_requirement']): ?>
-            <div class="col-md-6"><small class="text-muted d-block">Yeu cau phong</small>
+            <div class="col-md-6"><small class="text-muted d-block">Yêu cầu phòng</small>
                 <?php echo htmlspecialchars($reviewSection['room_requirement']); ?>
             </div>
             <?php endif; ?>
-            <div class="col-md-6"><small class="text-muted d-block">Lich hoc de xuat</small>
+            <div class="col-md-6"><small class="text-muted d-block">Lịch học đề xuất</small>
                 <?php echo htmlspecialchars($reviewSection['day_sessions'] ?? '—'); ?>
             </div>
-            <div class="col-md-6"><small class="text-muted d-block">GV de xuat tu Khoa</small>
+            <div class="col-md-6"><small class="text-muted d-block">GV đề xuất từ Khoa</small>
                 <?php if (!empty($reviewSection['proposed_teacher_name'])): ?>
                     <strong><?php echo htmlspecialchars($reviewSection['proposed_teacher_name']); ?></strong>
                     <span class="text-muted">(<?php echo htmlspecialchars($reviewSection['proposed_teacher_code'] ?? ''); ?>)</span>
-                    <span class="badge bg-warning text-dark ms-1">Cho duyet phan cong</span>
+                    <span class="badge bg-warning text-dark ms-1">Chờ duyệt phân công</span>
                 <?php else: ?>
-                    <span class="text-muted">Chua de xuat</span>
+                    <span class="text-muted">Chưa đề xuất</span>
                 <?php endif; ?>
             </div>
             <?php if ($reviewSection['open_proposal_note']): ?>
-            <div class="col-12"><small class="text-muted d-block">Ghi chu tu Khoa</small>
+            <div class="col-12"><small class="text-muted d-block">Ghi chú từ Khoa</small>
                 <em><?php echo htmlspecialchars($reviewSection['open_proposal_note']); ?></em>
             </div>
             <?php endif; ?>
@@ -433,7 +556,7 @@ include 'includes/sidebar.php';
             <!-- Form duyet -->
             <div class="col-md-7">
                 <div class="card border-success">
-                    <div class="card-header bg-success text-white"><i class="bi bi-check-circle me-2"></i>Duyet mo lop</div>
+                    <div class="card-header bg-success text-white"><i class="bi bi-check-circle me-2"></i>Duyệt mở lớp</div>
                     <div class="card-body">
                         <form method="post" action="proposals.php">
                             <?php echo csrfField(); ?>
@@ -441,12 +564,12 @@ include 'includes/sidebar.php';
                             <input type="hidden" name="section_id" value="<?php echo $reviewSection['id']; ?>">
                             <div class="row g-2">
                                 <div class="col-6">
-                                    <label class="form-label small fw-semibold">Si so toi da <span class="text-danger">*</span></label>
+                                    <label class="form-label small fw-semibold">Sĩ số tối đa <span class="text-danger">*</span></label>
                                     <input type="number" name="max_students" class="form-control form-control-sm"
                                            value="<?php echo (int)($reviewSection['expected_students'] ?: 40); ?>" min="1" max="200" required>
                                 </div>
                                 <div class="col-6">
-                                    <label class="form-label small fw-semibold">Hinh thuc hoc</label>
+                                    <label class="form-label small fw-semibold">Hình thức học</label>
                                     <select name="teaching_mode" class="form-select form-select-sm">
                                         <option value="offline" <?php echo ($reviewSection['teaching_mode']??'offline')==='offline'?'selected':''; ?>>Offline</option>
                                         <option value="online" <?php echo ($reviewSection['teaching_mode']??'')==='online'?'selected':''; ?>>Online</option>
@@ -479,19 +602,19 @@ include 'includes/sidebar.php';
                                     <?php endif; ?>
                                 </div>
                                 <div class="col-12">
-                                    <label class="form-label small fw-semibold">Lich hoc <span class="text-danger">*</span></label>
+                                    <label class="form-label small fw-semibold">Lịch học <span class="text-danger">*</span></label>
                                     <input type="text" name="day_sessions" class="form-control form-control-sm"
-                                           placeholder="VD: 2:sáng,4:chiều hoặc 2:sang,4:chieu" value="<?php echo htmlspecialchars($reviewSection['day_sessions']??''); ?>" required>
-                                    <div class="form-text">Hệ thống hiểu các ca sáng, chiều, tối khi kiểm tra trùng phòng và giảng viên.</div>
+                                           placeholder="Để trống để hệ thống tự xếp, VD: 2:sang,4:chieu" value="<?php echo htmlspecialchars($reviewSection['day_sessions']??''); ?>">
+                                    <div class="form-text">Nếu để trống, hệ thống tự phân bổ lịch/phòng theo tổng số tiết, 5 tiết/buổi và thời gian học kỳ.</div>
                                 </div>
                                 <div class="col-12">
-                                    <label class="form-label small fw-semibold">Ghi chu</label>
-                                    <input type="text" name="note" class="form-control form-control-sm" placeholder="Ghi chu them...">
+                                    <label class="form-label small fw-semibold">Ghi chú</label>
+                                    <input type="text" name="note" class="form-control form-control-sm" placeholder="Ghi chú thêm...">
                                 </div>
                                 <div class="col-12">
                                     <button type="submit" class="btn btn-success w-100"
                                             onclick="return confirm('Xac nhan duyet mo lop HP nay?')">
-                                        <i class="bi bi-check-circle me-2"></i>Duyet mo lop chinh thuc
+                                        <i class="bi bi-check-circle me-2"></i>Duyệt mở lớp chính thức
                                     </button>
                                 </div>
                             </div>
@@ -502,20 +625,20 @@ include 'includes/sidebar.php';
             <!-- Form tu choi -->
             <div class="col-md-5">
                 <div class="card border-danger">
-                    <div class="card-header bg-danger text-white"><i class="bi bi-x-circle me-2"></i>Tu choi</div>
+                    <div class="card-header bg-danger text-white"><i class="bi bi-x-circle me-2"></i>Từ chối</div>
                     <div class="card-body">
                         <form method="post" action="proposals.php">
                             <?php echo csrfField(); ?>
                             <input type="hidden" name="action" value="reject_open">
                             <input type="hidden" name="section_id" value="<?php echo $reviewSection['id']; ?>">
                             <div class="mb-2">
-                                <label class="form-label small fw-semibold">Ly do tu choi <span class="text-danger">*</span></label>
+                                <label class="form-label small fw-semibold">Lý do từ chối <span class="text-danger">*</span></label>
                                 <textarea name="reject_reason" class="form-control form-control-sm" rows="4"
-                                          placeholder="Nhap ly do tu choi de thong bao cho Khoa..." required></textarea>
+                                          placeholder="Nhập lý do từ chối để thông báo cho Khoa..." required></textarea>
                             </div>
                             <button type="submit" class="btn btn-danger w-100"
                                     onclick="return confirm('Xac nhan tu choi de xuat nay?')">
-                                <i class="bi bi-x-circle me-2"></i>Tu choi de xuat
+                                <i class="bi bi-x-circle me-2"></i>Từ chối đề xuất
                             </button>
                         </form>
                     </div>
@@ -533,7 +656,7 @@ include 'includes/sidebar.php';
             <div class="col-6 col-md-3">
                 <label class="form-label small">Khoa</label>
                 <select name="faculty_id" class="form-select form-select-sm">
-                    <option value="0">-- Tat ca --</option>
+                    <option value="0">-- Tất cả --</option>
                     <?php foreach ($faculties as $f): ?>
                     <option value="<?php echo $f['id']; ?>" <?php echo $filterFaculty==$f['id']?'selected':''; ?>>
                         <?php echo htmlspecialchars($f['faculty_name']); ?>
@@ -542,9 +665,9 @@ include 'includes/sidebar.php';
                 </select>
             </div>
             <div class="col-6 col-md-3">
-                <label class="form-label small">Hoc ky</label>
+                <label class="form-label small">Học kỳ</label>
                 <select name="semester_id" class="form-select form-select-sm">
-                    <option value="0">-- Tat ca --</option>
+                    <option value="0">-- Tất cả --</option>
                     <?php foreach ($semesters as $sm): ?>
                     <option value="<?php echo $sm['id']; ?>" <?php echo $filterSemester==$sm['id']?'selected':''; ?>>
                         <?php echo htmlspecialchars($sm['semester_name'].' '.$sm['school_year']); ?>
@@ -553,12 +676,12 @@ include 'includes/sidebar.php';
                 </select>
             </div>
             <div class="col-6 col-md-2">
-                <label class="form-label small">Trang thai</label>
+                <label class="form-label small">Trạng thái</label>
                 <select name="status" class="form-select form-select-sm">
-                    <option value="proposed" <?php echo $filterStatus==='proposed'?'selected':''; ?>>Cho duyet</option>
-                    <option value="open" <?php echo $filterStatus==='open'?'selected':''; ?>>Da duyet</option>
-                    <option value="cancelled" <?php echo $filterStatus==='cancelled'?'selected':''; ?>>Tu choi</option>
-                    <option value="all" <?php echo $filterStatus==='all'?'selected':''; ?>>Tat ca</option>
+                    <option value="proposed" <?php echo $filterStatus==='proposed'?'selected':''; ?>>Chờ duyệt</option>
+                    <option value="open" <?php echo $filterStatus==='open'?'selected':''; ?>>Đã duyệt</option>
+                    <option value="cancelled" <?php echo $filterStatus==='cancelled'?'selected':''; ?>>Từ chối</option>
+                    <option value="all" <?php echo $filterStatus==='all'?'selected':''; ?>>Tất cả</option>
                 </select>
             </div>
             <div class="col-auto">
@@ -571,30 +694,52 @@ include 'includes/sidebar.php';
 
 <!-- Bang de xuat -->
 <div class="card">
-    <div class="card-header d-flex justify-content-between align-items-center">
-        <span><i class="bi bi-list-check me-2"></i>Danh sach De xuat
+    <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <span><i class="bi bi-list-check me-2"></i>Danh sách đề xuất
             <span class="badge bg-light text-dark ms-1"><?php echo number_format($total); ?></span>
         </span>
+        <?php if (isAcademicManager() && !empty($proposals)): ?>
+        <form id="bulkProposalForm" method="post" action="proposals.php" class="d-flex flex-wrap align-items-center gap-2"
+              onsubmit="return confirmBulkProposalAction(this);">
+            <?php echo csrfField(); ?>
+            <input type="hidden" name="redirect_query" value="<?php echo htmlspecialchars(http_build_query(['faculty_id'=>$filterFaculty,'semester_id'=>$filterSemester,'status'=>$filterStatus,'page'=>$page])); ?>">
+            <select name="action" id="bulkProposalAction" class="form-select form-select-sm" style="width:170px;">
+                <option value="">-- Tác vụ --</option>
+                <option value="bulk_approve_open">Duyệt đã chọn</option>
+                <option value="bulk_reject_open">Từ chối đã chọn</option>
+            </select>
+            <input type="text" name="bulk_reject_reason" id="bulkRejectReason" class="form-control form-control-sm"
+                   placeholder="Lý do từ chối" style="width:230px; display:none;">
+            <button type="submit" class="btn btn-sm btn-navy" id="bulkProposalSubmit" disabled>
+                <i class="bi bi-check2-square me-1"></i>Thực hiện
+            </button>
+        </form>
+        <?php endif; ?>
     </div>
     <?php if (empty($proposals)): ?>
     <div class="card-body text-center text-muted py-5">
-        <i class="bi bi-inbox fs-2 d-block mb-2"></i>Khong co de xuat nao.
+        <i class="bi bi-inbox fs-2 d-block mb-2"></i>Không có đề xuất nào.
     </div>
     <?php else: ?>
     <div class="table-responsive">
         <table class="table table-hover table-sm mb-0">
             <thead class="table-light">
                 <tr>
-                    <th>Mon hoc / Ma lop</th>
+                    <?php if (isAcademicManager()): ?>
+                    <th style="width:38px;">
+                        <input type="checkbox" class="form-check-input" id="selectAllProposals" aria-label="Chọn tất cả đề xuất chờ duyệt">
+                    </th>
+                    <?php endif; ?>
+                    <th>Môn học / Mã lớp</th>
                     <th>Khoa</th>
                     <th>Khóa</th>
-                    <th>Hoc ky</th>
-                    <th>GV de xuat</th>
-                    <th class="text-center">Si so DK</th>
-                    <th>Hinh thuc</th>
-                    <th>Trang thai</th>
-                    <th>Ngay gui</th>
-                    <th class="text-center">Thao tac</th>
+                    <th>Học kỳ</th>
+                    <th>GV đề xuất</th>
+                    <th class="text-center">Sĩ số ĐK</th>
+                    <th>Hình thức</th>
+                    <th>Trạng thái</th>
+                    <th>Ngày gửi</th>
+                    <th class="text-center">Thao tác</th>
                 </tr>
             </thead>
             <tbody>
@@ -602,6 +747,17 @@ include 'includes/sidebar.php';
                 [$sColor, $sLabel] = $statusLabels[$p['status']] ?? ['secondary', $p['status']];
             ?>
             <tr>
+                <?php if (isAcademicManager()): ?>
+                <td>
+                    <?php if ($p['status'] === 'proposed'): ?>
+                    <input type="checkbox" class="form-check-input proposal-check"
+                           form="bulkProposalForm"
+                           name="section_ids[]"
+                           value="<?php echo (int)$p['id']; ?>"
+                           aria-label="Chọn đề xuất <?php echo htmlspecialchars($p['section_code']); ?>">
+                    <?php endif; ?>
+                </td>
+                <?php endif; ?>
                 <td>
                     <div class="fw-semibold small"><?php echo htmlspecialchars($p['subject_name']); ?></div>
                     <small class="text-muted"><?php echo htmlspecialchars($p['section_code']); ?> · <?php echo $p['credits']; ?> TC</small>
@@ -638,10 +794,21 @@ include 'includes/sidebar.php';
                 </td>
                 <td class="text-center">
                     <?php if ($p['status']==='proposed' && isAcademicManager()): ?>
-                    <a href="proposals.php?action=review&id=<?php echo $p['id']; ?>"
+                    <div class="d-flex gap-1 justify-content-center flex-wrap">
+                    <a href="proposals.php?action=review&id=<?php echo $p['id']; ?>&<?php echo htmlspecialchars(http_build_query(['faculty_id'=>$filterFaculty,'semester_id'=>$filterSemester,'status'=>$filterStatus,'page'=>$page])); ?>"
                        class="btn btn-sm btn-warning">
-                        <i class="bi bi-clipboard-check"></i> Duyet
+                        <i class="bi bi-clipboard-check"></i> Duyệt
                     </a>
+                        <button type="button"
+                                class="btn btn-sm btn-outline-danger"
+                                data-bs-toggle="modal"
+                                data-bs-target="#rejectOpenModal"
+                                data-section-id="<?php echo (int)$p['id']; ?>"
+                                data-section-code="<?php echo htmlspecialchars($p['section_code']); ?>"
+                                data-subject-name="<?php echo htmlspecialchars($p['subject_name']); ?>">
+                            <i class="bi bi-x-circle"></i> Từ chối
+                        </button>
+                    </div>
                     <?php else: ?>
                     <a href="course_sections.php?id=<?php echo $p['id']; ?>"
                        class="btn btn-sm btn-outline-secondary">
@@ -667,4 +834,102 @@ include 'includes/sidebar.php';
 </div><!-- /.admin-content -->
 <div class="admin-footer">&copy; <?php echo date('Y'); ?> TDMU — Phòng Đào tạo</div>
 </div>
+<?php if (isAcademicManager()): ?>
+<div class="modal fade" id="rejectOpenModal" tabindex="-1" aria-labelledby="rejectOpenModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <form method="post" action="proposals.php" class="modal-content">
+            <?php echo csrfField(); ?>
+            <input type="hidden" name="action" value="reject_open">
+            <input type="hidden" name="section_id" id="rejectOpenSectionId" value="">
+            <input type="hidden" name="redirect_query" value="<?php echo htmlspecialchars(http_build_query(['faculty_id'=>$filterFaculty,'semester_id'=>$filterSemester,'status'=>$filterStatus,'page'=>$page])); ?>">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title" id="rejectOpenModalLabel">
+                    <i class="bi bi-x-circle me-2"></i>Từ chối đề xuất
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Đóng"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3 small text-muted" id="rejectOpenInfo"></div>
+                <label for="rejectOpenReason" class="form-label fw-semibold">Lý do từ chối</label>
+                <textarea class="form-control" id="rejectOpenReason" name="reject_reason" rows="4" required></textarea>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
+                <button type="submit" class="btn btn-danger">
+                    <i class="bi bi-x-circle me-1"></i>Từ chối
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+<?php endif; ?>
+<script>
+function refreshBulkProposalState() {
+    const checks = Array.from(document.querySelectorAll('.proposal-check'));
+    const checked = checks.filter((item) => item.checked).length;
+    const selectAll = document.getElementById('selectAllProposals');
+    const submit = document.getElementById('bulkProposalSubmit');
+    if (submit) submit.disabled = checked === 0;
+    if (selectAll) {
+        selectAll.checked = checks.length > 0 && checked === checks.length;
+        selectAll.indeterminate = checked > 0 && checked < checks.length;
+    }
+}
+
+document.getElementById('selectAllProposals')?.addEventListener('change', function() {
+    document.querySelectorAll('.proposal-check').forEach((item) => {
+        item.checked = this.checked;
+    });
+    refreshBulkProposalState();
+});
+
+document.querySelectorAll('.proposal-check').forEach((item) => {
+    item.addEventListener('change', refreshBulkProposalState);
+});
+
+document.getElementById('bulkProposalAction')?.addEventListener('change', function() {
+    const reason = document.getElementById('bulkRejectReason');
+    if (reason) {
+        reason.style.display = this.value === 'bulk_reject_open' ? '' : 'none';
+        if (this.value !== 'bulk_reject_open') reason.value = '';
+    }
+});
+
+function confirmBulkProposalAction(form) {
+    const action = form.querySelector('[name="action"]')?.value || '';
+    const checked = document.querySelectorAll('.proposal-check:checked').length;
+    if (!action) {
+        alert('Vui lòng chọn tác vụ.');
+        return false;
+    }
+    if (checked === 0) {
+        alert('Vui lòng chọn ít nhất một đề xuất chờ duyệt.');
+        return false;
+    }
+    if (action === 'bulk_reject_open') {
+        const reason = document.getElementById('bulkRejectReason')?.value.trim() || '';
+        if (!reason) {
+            alert('Vui lòng nhập lý do từ chối.');
+            return false;
+        }
+        return confirm('Từ chối ' + checked + ' đề xuất đã chọn?');
+    }
+    return confirm('Duyệt ' + checked + ' đề xuất đã chọn? Hệ thống sẽ tự kiểm tra lịch và phòng trước khi mở lớp.');
+}
+
+document.getElementById('rejectOpenModal')?.addEventListener('show.bs.modal', function(event) {
+    const button = event.relatedTarget;
+    const sectionId = button?.getAttribute('data-section-id') || '';
+    const sectionCode = button?.getAttribute('data-section-code') || '';
+    const subjectName = button?.getAttribute('data-subject-name') || '';
+    const sectionInput = document.getElementById('rejectOpenSectionId');
+    const info = document.getElementById('rejectOpenInfo');
+    const reason = document.getElementById('rejectOpenReason');
+    if (sectionInput) sectionInput.value = sectionId;
+    if (info) info.textContent = [sectionCode, subjectName].filter(Boolean).join(' - ');
+    if (reason) reason.value = '';
+});
+
+refreshBulkProposalState();
+</script>
 <?php include 'includes/footer.php'; ?>

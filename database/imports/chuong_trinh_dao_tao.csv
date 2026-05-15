@@ -1,6 +1,6 @@
 ﻿STT,Mã MH,Tên môn học,Chuyên ngành,Số tín chỉ,Môn bắt buộc,Đã học,Tổng tiết,Lý thuyết,Thực hành,Học kỳ,Năm học
 1,KETO023,Nhập môn ngành Kế toán (0+2),Kế toán,2,Có,Có,60,0,60,Học kỳ 1,2022-2023
-2,LING127,Luật kinh tế (2+0),Kế toán,2,Có,Có,30,30,0,Học kỳ 1,2022-203
+2,LING127,Luật kinh tế (2+0),Kế toán,2,Có,Có,30,30,0,Học kỳ 1,2022-2023
 3,LING185,Pháp luật (2+0),Kế toán,2,Có,Có,30,30,0,Học kỳ 1,2022-2023
 4,LING346,Toán cao cấp C1 (2+0),Kế toán,2,Có,Có,30,30,0,Học kỳ 1,2022-2023
 5,KTCH001,Phương pháp nghiên cứu khoa học (3+0),Kế toán,3,Có,Có,45,45,0,Học kỳ 2,2022-2023
@@ -15,7 +15,7 @@
 14,LING166,Nguyên lý kế toán (2+0),Kế toán,2,Có,Có,30,30,0,Học kỳ 3,2022-2023
 15,LING293,Thực hành nguyên lý kế toán (0+1),Kế toán,1,Có,Có,30,0,30,Học kỳ 3,2022-2023
 16,LING330,Thuế (3+0),Kế toán,3,Có,Có,45,45,0,Học kỳ 3,2022-2023
-17,KETO010,Kế toán tài chính 1 (2+0),Kế toán,2,Có,Có,30,30,0,Học kỳ 1,2023-20242
+17,KETO010,Kế toán tài chính 1 (2+0),Kế toán,2,Có,Có,30,30,0,Học kỳ 1,2023-2024
 18,KETO025,Thực hành kế toán tài chính 1 (0+1),Kế toán,1,Có,Có,30,0,30,Học kỳ 1,2023-2024
 19,KETO028,Tài chính và quản lý tài chính (3+0),Kế toán,3,Có,Có,45,45,0,Học kỳ 1,2023-2024
 20,KTCH005,Tư duy biện luận ứng dụng (2+0),Kế toán,2,Có,Có,30,30,0,Học kỳ 1,2023-2024

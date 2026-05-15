@@ -9,6 +9,7 @@ $stmt->bind_param('i', $_SESSION['user_id']);
 $stmt->execute();
 $student = $stmt->get_result()->fetch_assoc();
 $stmt->close();
+requireNoTuitionLock((int)($student['id'] ?? 0));
 
 $success = $error = '';
 
@@ -72,6 +73,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'cance
             $updSection->execute();
             $updSection->close();
 
+            syncStudentTuitionInvoiceFromRegistrations((int)$student['id'], (int)$ssRow['semester_id']);
             $conn->commit();
             $success = 'Hủy đăng ký thành công!';
         } catch (Throwable $e) {

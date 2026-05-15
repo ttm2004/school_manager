@@ -110,7 +110,8 @@ function academicScheduleSectionDates(?string $startDate, ?string $daySessions, 
         foreach ($meetings as $meeting) {
             $dayOffset = ((int)$meeting['day'] === 8) ? 6 : (int)$meeting['day'] - 2;
             $dateTs = strtotime('+' . ($week * 7 + $dayOffset) . ' days', $weekMonday);
-            if ($dateTs < $startTs || $dateTs > $limitTs) continue;
+            $sameStartWeek = date('o-W', $dateTs) === date('o-W', $startTs);
+            if (($dateTs < $startTs && !$sameStartWeek) || $dateTs > $limitTs) continue;
             $dates[] = date('Y-m-d', $dateTs);
             if (count($dates) >= $needed) break;
         }
@@ -123,6 +124,37 @@ function academicScheduleSectionEndDate(?string $startDate, ?string $daySessions
 {
     $dates = academicScheduleSectionDates($startDate, $daySessions, $totalPeriods, 5, $limitEndDate);
     return $dates ? end($dates) : ($startDate ?: null);
+}
+
+function academicTimetableIsTestSemester(array $semester): bool
+{
+    if (($semester['data_mode'] ?? 'system') === 'test') {
+        return true;
+    }
+
+    $label = mb_strtolower((string)($semester['info'] ?? $semester['semester_name'] ?? ''), 'UTF-8');
+    return str_contains($label, 'test');
+}
+
+function academicTimetableResolveEndTs(array $semester, array $sections): ?int
+{
+    $semEnd = $semester['sem_end'] ?? $semester['end_date'] ?? null;
+    $endTs = $semEnd ? strtotime($semEnd) : null;
+
+    if (!academicTimetableIsTestSemester($semester)) {
+        return $endTs;
+    }
+
+    foreach ($sections as $section) {
+        $date = $section['_effective_end'] ?? $section['end_date'] ?? null;
+        if (!$date) continue;
+        $sectionEndTs = strtotime($date);
+        if ($sectionEndTs && (!$endTs || $sectionEndTs > $endTs)) {
+            $endTs = $sectionEndTs;
+        }
+    }
+
+    return $endTs;
 }
 
 function academicEnsureScheduleChangesTable(mysqli $conn): void

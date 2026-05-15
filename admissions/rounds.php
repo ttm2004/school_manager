@@ -24,6 +24,7 @@ $statusLabels = [
     'draft'         => ['secondary', 'Nháp'],
     'open'          => ['success',   'Đang nhận hồ sơ'],
     'reviewing'     => ['danger',    'Đang xét tuyển'],
+    'results'       => ['info',      'Đã công bố kết quả'],
     'enrolling'     => ['primary',   'Đang nhập học'],
     'supplementary' => ['warning',   'Đợt bổ sung'],
     'completed'     => ['dark',      'Hoàn tất'],

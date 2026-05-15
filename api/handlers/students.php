@@ -178,6 +178,10 @@ if ($method === 'POST' && $id && $action === 'register') {
     }
     if ($stmt->execute()) {
         $conn->query("UPDATE course_sections SET current_students=current_students+1 WHERE id=$sectionId");
+        $semId = (int)($conn->query("SELECT semester_id FROM course_sections WHERE id=$sectionId LIMIT 1")->fetch_assoc()['semester_id'] ?? 0);
+        if (function_exists('syncStudentTuitionInvoiceFromRegistrations')) {
+            syncStudentTuitionInvoiceFromRegistrations($myStudentId, $semId);
+        }
         $stmt->close();
         apiOk(['student_id' => $myStudentId, 'course_section_id' => $sectionId], 'Đăng ký thành công', 201);
     }
@@ -194,7 +198,11 @@ if ($method === 'DELETE' && $id && $action === 'register') {
     $stmt->bind_param('ii', $myStudentId, $sectionId);
     $stmt->execute();
     if ($stmt->affected_rows > 0) {
+        $semId = (int)($conn->query("SELECT semester_id FROM course_sections WHERE id=$sectionId LIMIT 1")->fetch_assoc()['semester_id'] ?? 0);
         $conn->query("UPDATE course_sections SET current_students=GREATEST(0,current_students-1) WHERE id=$sectionId");
+        if (function_exists('syncStudentTuitionInvoiceFromRegistrations')) {
+            syncStudentTuitionInvoiceFromRegistrations($myStudentId, $semId);
+        }
         $stmt->close();
         apiOk(null, 'Đã hủy đăng ký');
     }

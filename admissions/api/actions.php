@@ -235,9 +235,16 @@ if ($module === 'applications') {
         if (!hasRole('admissions_manager')) err('Chi Truong phong moi co quyen xoa du lieu test.', 403);
 
         $batchId = trim($_POST['batch_id'] ?? '');
+        $semesterId = (int)($_POST['semester_id'] ?? 0);
         $batchSql = $batchId !== '' ? " AND import_batch_id='" . $conn->real_escape_string($batchId) . "'" : '';
         $studentBatchSql = $batchId !== '' ? " AND (s.demo_batch_id='" . $conn->real_escape_string($batchId) . "' OR aa.import_batch_id='" . $conn->real_escape_string($batchId) . "')" : '';
-        $stats = ['applications' => 0, 'students' => 0, 'users' => 0, 'rounds' => 0];
+        $stats = ['applications' => 0, 'students' => 0, 'users' => 0, 'rounds' => 0, 'semester_subjects' => 0, 'semester_id' => $semesterId];
+        if ($semesterId > 0) {
+            $sem = $conn->query("SELECT id, semester_name, data_mode FROM semesters WHERE id=$semesterId LIMIT 1")->fetch_assoc();
+            if (!$sem || ($sem['data_mode'] ?? 'system') !== 'test') {
+                err('Chỉ được xóa dữ liệu phát sinh của học kỳ test.');
+            }
+        }
         $conn->begin_transaction();
         try {
             $stats['applications'] = (int)($conn->query("SELECT COUNT(*) AS c FROM admission_applications WHERE data_mode='test' $batchSql")->fetch_assoc()['c'] ?? 0);
@@ -251,6 +258,53 @@ if ($module === 'applications') {
                 JOIN students s ON s.user_id = u.id
                 LEFT JOIN admission_applications aa ON aa.email = u.email
                 WHERE (s.data_mode = 'test' OR aa.data_mode = 'test') AND u.role = 'student' $studentBatchSql");
+            if ($semesterId > 0) {
+                $stats['semester_subjects'] = (int)($conn->query(
+                    "SELECT COUNT(*) AS c
+                     FROM student_subjects ss
+                     JOIN course_sections cs ON cs.id = ss.course_section_id
+                     JOIN tmp_adm_test_students t ON t.student_id = ss.student_id
+                     WHERE cs.semester_id = $semesterId"
+                )->fetch_assoc()['c'] ?? 0);
+                $conn->query("UPDATE course_sections cs
+                    JOIN (
+                        SELECT ss.course_section_id, COUNT(*) AS c
+                        FROM student_subjects ss
+                        JOIN tmp_adm_test_students t ON t.student_id = ss.student_id
+                        JOIN course_sections cs2 ON cs2.id = ss.course_section_id
+                        WHERE ss.status IN ('registered','auto_enrolled') AND cs2.semester_id = $semesterId
+                        GROUP BY ss.course_section_id
+                    ) x ON x.course_section_id = cs.id
+                    SET cs.current_students = GREATEST(0, cs.current_students - x.c),
+                        cs.status = CASE WHEN cs.status='full' AND GREATEST(0, cs.current_students - x.c) < cs.max_students THEN 'open' ELSE cs.status END");
+                if (admTableExists($conn, 'tuition_payments') && admTableExists($conn, 'tuition_invoices')) {
+                    $conn->query("DELETE tp FROM tuition_payments tp JOIN tuition_invoices ti ON ti.id=tp.invoice_id WHERE ti.semester_id=$semesterId AND ti.data_mode='test'");
+                }
+                if (admTableExists($conn, 'tuition_invoices')) {
+                    $conn->query("DELETE FROM tuition_invoices WHERE semester_id=$semesterId AND data_mode='test'");
+                }
+                if (admTableExists($conn, 'tuition_periods')) {
+                    $conn->query("DELETE FROM tuition_periods WHERE semester_id=$semesterId AND data_mode='test'");
+                }
+                if (admTableExists($conn, 'grades')) {
+                    $conn->query("DELETE g FROM grades g JOIN student_subjects ss ON ss.id=g.student_subject_id JOIN course_sections cs ON cs.id=ss.course_section_id JOIN tmp_adm_test_students t ON t.student_id=ss.student_id WHERE cs.semester_id=$semesterId");
+                }
+                if (admTableExists($conn, 'pending_enrollments')) {
+                    $conn->query("DELETE pe FROM pending_enrollments pe JOIN tmp_adm_test_students t ON t.student_id=pe.student_id WHERE pe.semester_id=$semesterId AND pe.data_mode='test'");
+                }
+                if (admTableExists($conn, 'admission_auto_enrollment_requests')) {
+                    $conn->query("DELETE aer FROM admission_auto_enrollment_requests aer JOIN tmp_adm_test_students t ON t.student_id=aer.student_id WHERE aer.auto_enroll_mode='test'");
+                }
+                if (admTableExists($conn, 'student_evaluations')) {
+                    $conn->query("DELETE se FROM student_evaluations se JOIN course_sections cs ON cs.id=se.course_section_id JOIN tmp_adm_test_students t ON t.student_id=se.student_id WHERE cs.semester_id=$semesterId");
+                }
+                if (admTableExists($conn, 'student_extra_comments')) {
+                    $conn->query("DELETE sec FROM student_extra_comments sec JOIN course_sections cs ON cs.id=sec.course_section_id JOIN tmp_adm_test_students t ON t.student_id=sec.student_id WHERE cs.semester_id=$semesterId");
+                }
+                $conn->query("DELETE ss FROM student_subjects ss JOIN course_sections cs ON cs.id=ss.course_section_id JOIN tmp_adm_test_students t ON t.student_id=ss.student_id WHERE cs.semester_id=$semesterId");
+                $conn->commit();
+                ok("Đã xóa dữ liệu phát sinh học kỳ test #{$semesterId}: {$stats['semester_subjects']} đăng ký môn và các dữ liệu học phí/điểm/hàng chờ liên quan.");
+            }
             $conn->query("UPDATE course_sections cs
                 JOIN (
                     SELECT ss.course_section_id, COUNT(*) AS c
@@ -281,6 +335,9 @@ if ($module === 'applications') {
             }
             if (admTableExists($conn, 'system_notifications')) {
                 $conn->query("DELETE sn FROM system_notifications sn JOIN tmp_adm_test_students t ON t.user_id = sn.user_id");
+            }
+            if (admTableExists($conn, 'admission_auto_enrollment_requests')) {
+                $conn->query("DELETE aer FROM admission_auto_enrollment_requests aer JOIN tmp_adm_test_students t ON t.student_id = aer.student_id");
             }
             $conn->query("DELETE pe FROM pending_enrollments pe JOIN tmp_adm_test_students t ON t.student_id = pe.student_id");
             $conn->query("DELETE ss FROM student_subjects ss JOIN tmp_adm_test_students t ON t.student_id = ss.student_id");
@@ -515,7 +572,7 @@ if ($module === 'rounds') {
     if ($action === 'change_status') {
         $id     = (int)($_POST['id'] ?? 0);
         $status = trim($_POST['status'] ?? '');
-        $valid  = ['draft','open','reviewing','enrolling','supplementary','completed'];
+        $valid  = ['draft','open','reviewing','results','enrolling','supplementary','completed'];
         if (!$id || !in_array($status, $valid)) err('Dữ liệu không hợp lệ.');
 
         $stmt = $conn->prepare("UPDATE admission_rounds SET status=? WHERE id=? AND data_mode=?");
@@ -577,6 +634,7 @@ if ($module === 'auto_review') {
             if ($qta <= 0) {
                 $results[] = [
                     'major_id' => $mid,
+                    'major_code' => $job['major_code'] ?? '',
                     'major_name' => $job['major_name'],
                     'total' => 0,
                     'approved' => 0,
@@ -624,12 +682,13 @@ if ($module === 'auto_review') {
                 ];
                 if ($pass) $approvedList[] = $item;
                 else $rejectedList[] = $item;
-                $publishItems[] = ['id' => (int)$c['id'], 'status' => $newStatus];
+                $publishItems[] = ['id' => (int)$c['id'], 'major_id' => $mid, 'status' => $newStatus];
                 $pass ? $approved++ : $rejected++;
             }
 
             $results[] = [
                 'major_id' => $mid,
+                'major_code' => $job['major_code'] ?? '',
                 'major_name' => $job['major_name'],
                 'total' => count($candidates),
                 'approved' => $approved,
@@ -670,10 +729,39 @@ if ($module === 'auto_review') {
             err('Ban xem truoc da het han. Vui long chay lai xet tuyen.');
         }
 
+        $selectedMajorIds = [];
+        $rawMajorIds = $_POST['major_ids'] ?? '';
+        if (is_array($rawMajorIds)) {
+            $selectedMajorIds = array_map('intval', $rawMajorIds);
+        } elseif (trim((string)$rawMajorIds) !== '') {
+            $decoded = json_decode((string)$rawMajorIds, true);
+            if (is_array($decoded)) {
+                $selectedMajorIds = array_map('intval', $decoded);
+            }
+        }
+        $selectedMajorIds = array_values(array_unique(array_filter($selectedMajorIds)));
+        if (empty($selectedMajorIds)) {
+            err('Vui long chon it nhat mot nganh de cong bo.');
+        }
+
+        $previewMajorIds = [];
+        foreach (($preview['results'] ?? []) as $result) {
+            $mid = (int)($result['major_id'] ?? 0);
+            if ($mid > 0) $previewMajorIds[] = $mid;
+        }
+        $previewMajorIds = array_values(array_unique($previewMajorIds));
+        $invalidMajorIds = array_diff($selectedMajorIds, $previewMajorIds);
+        if (!empty($invalidMajorIds)) {
+            err('Danh sach nganh cong bo khong hop le. Vui long chay lai xet tuyen.');
+        }
+
+        $selectedMajorMap = array_fill_keys($selectedMajorIds, true);
         $published = 0;
         $stmt = $conn->prepare("UPDATE admission_applications SET status=? WHERE id=? AND data_mode=? AND status IN ('new','checking')");
         if (!$stmt) err('Loi: ' . $conn->error);
         foreach ($preview['items'] as $item) {
+            $itemMajorId = (int)($item['major_id'] ?? 0);
+            if (!isset($selectedMajorMap[$itemMajorId])) continue;
             $newStatus = $item['status'];
             $id = (int)$item['id'];
             $stmt->bind_param('sis', $newStatus, $id, $dataMode);
@@ -681,8 +769,41 @@ if ($module === 'auto_review') {
             $published += $stmt->affected_rows > 0 ? 1 : 0;
         }
         $stmt->close();
-        unset($_SESSION[$previewKey]);
-        ok("Da cong bo ket qua cho {$published} ho so.", ['published' => $published]);
+
+        $remainingResults = [];
+        $remainingItems = [];
+        foreach (($preview['results'] ?? []) as $result) {
+            $mid = (int)($result['major_id'] ?? 0);
+            if (!isset($selectedMajorMap[$mid])) $remainingResults[] = $result;
+        }
+        foreach (($preview['items'] ?? []) as $item) {
+            $mid = (int)($item['major_id'] ?? 0);
+            if (!isset($selectedMajorMap[$mid])) $remainingItems[] = $item;
+        }
+
+        $publishedAllPreview = empty($remainingResults);
+        if ($publishedAllPreview) {
+            unset($_SESSION[$previewKey]);
+        } else {
+            $_SESSION[$previewKey]['results'] = $remainingResults;
+            $_SESSION[$previewKey]['items'] = $remainingItems;
+            $_SESSION[$previewKey]['created_at'] = time();
+        }
+
+        if ($publishedAllPreview && $activeRound) {
+            $roundId = (int)$activeRound['id'];
+            $roundStmt = $conn->prepare("UPDATE admission_rounds SET status='results' WHERE id=? AND data_mode=? AND status IN ('reviewing','enrolling')");
+            if ($roundStmt) {
+                $roundStmt->bind_param('is', $roundId, $dataMode);
+                $roundStmt->execute();
+                $roundStmt->close();
+            }
+        }
+        ok("Da cong bo ket qua cho {$published} ho so.", [
+            'published' => $published,
+            'published_all_preview' => $publishedAllPreview,
+            'remaining_results' => $remainingResults,
+        ]);
     }
 
 }

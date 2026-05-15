@@ -57,6 +57,7 @@ $totalPages = ceil($total / $perPage);
 
 $majors = $conn->query("SELECT id, major_name FROM majors ORDER BY major_name");
 $testStats = $conn->query("SELECT COUNT(*) AS c, COUNT(DISTINCT import_batch_id) AS batches FROM admission_applications WHERE data_mode='test'")->fetch_assoc() ?: ['c'=>0,'batches'=>0];
+$testSemesters = $conn->query("SELECT id, semester_name, school_year FROM semesters WHERE data_mode='test' ORDER BY id DESC");
 
 // View detail
 $viewApp = null;
@@ -68,6 +69,15 @@ if (isset($_GET['view'])) {
     $viewApp = $vs->get_result()->fetch_assoc();
     $vs->close();
 }
+
+$baseQuery = [
+    'mode' => $filter_mode,
+    'status' => $filter_status,
+    'major_id' => $filter_major,
+    'q' => $filter_search,
+    'page' => $page,
+];
+$backQuery = array_filter($baseQuery, static fn($v) => $v !== '' && $v !== 0 && $v !== null);
 
 $statusMap = [
     'new'      => ['Mới','warning'],
@@ -176,7 +186,7 @@ document.addEventListener('DOMContentLoaded', function() {
         <div class="card mb-4">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span><i class="bi bi-file-earmark-person me-2"></i>Chi tiết hồ sơ #<?php echo $viewApp['id']; ?></span>
-                <a href="applications.php" class="btn btn-sm btn-outline-light"><i class="bi bi-arrow-left me-1"></i>Quay lại</a>
+                <a href="applications.php?<?php echo http_build_query($backQuery); ?>" class="btn btn-sm btn-outline-light"><i class="bi bi-arrow-left me-1"></i>Quay lại</a>
             </div>
             <div class="card-body">
                 <div class="row g-4">
@@ -219,23 +229,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     <strong class="text-navy">Trạng thái hiện tại:</strong>
                     <?php $s = $statusMap[$viewApp['status']] ?? [$viewApp['status'],'secondary']; ?>
                     <span class="badge bg-<?php echo $s[1]; ?> fs-6"><?php echo $s[0]; ?></span>
-                    <?php if (hasPermission('admissions', 'edit_application') && $canManualReview): ?>
-                    <div class="d-flex gap-2 align-items-center ms-auto">
-                        <select id="statusSelect" class="form-select form-select-sm" style="width:auto">
-                            <?php foreach ($statusMap as $val => [$label, $color]): ?>
-                            <option value="<?php echo $val; ?>" <?php echo $viewApp['status']==$val?'selected':''; ?>><?php echo $label; ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                        <button type="button" class="btn btn-sm btn-navy"
-                            onclick="updateStatus(<?php echo $viewApp['id']; ?>, document.getElementById('statusSelect').value)">
-                            <i class="bi bi-save me-1"></i>Cập nhật
-                        </button>
-                    </div>
-                    <?php elseif ($isLocked): ?>
-                    <span class="text-danger small ms-auto"><i class="bi bi-lock-fill me-1"></i>Hồ sơ đã khóa - không thể sửa</span>
-                    <?php else: ?>
-                    <span class="text-muted small ms-auto"><i class="bi bi-lock me-1"></i>Chỉ xem</span>
-                    <?php endif; ?>
+                    <span class="text-muted small ms-auto"><i class="bi bi-eye-fill me-1"></i>Chỉ xem, không chỉnh sửa</span>
                 </div>
             </div>
         </div>
@@ -249,6 +243,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 </span>
                 <?php if (hasRole('admissions_manager')): ?>
                 <div class="d-flex gap-2">
+                    <select id="clearTestSemesterId" class="form-select form-select-sm" style="width:260px" title="Chọn học kỳ test để chỉ xóa dữ liệu phát sinh trong học kỳ đó">
+                        <option value="0">Xóa toàn bộ test tuyển sinh</option>
+                        <?php if ($testSemesters) while ($sem = $testSemesters->fetch_assoc()): ?>
+                        <option value="<?php echo (int)$sem['id']; ?>"><?php echo htmlspecialchars($sem['semester_name'] . ' ' . $sem['school_year']); ?></option>
+                        <?php endwhile; ?>
+                    </select>
                     <button type="button" class="btn btn-sm btn-outline-light" data-bs-toggle="modal" data-bs-target="#testImportModal"><i class="bi bi-upload me-1"></i>Import test</button>
                     <button type="button" class="btn btn-sm btn-danger" onclick="clearTestData()"><i class="bi bi-trash3 me-1"></i>Xóa test</button>
                 </div>
@@ -326,7 +326,8 @@ document.addEventListener('DOMContentLoaded', function() {
                                 <td><span class="badge bg-<?php echo $s[1]; ?>"><?php echo $s[0]; ?></span></td>
                                 <td class="text-muted small"><?php echo date('d/m/Y', strtotime($app['created_at'])); ?></td>
                                 <td>
-                                    <a href="?view=<?php echo $app['id']; ?>" class="btn btn-sm btn-outline-primary me-1" title="Xem chi tiết"><i class="bi bi-eye-fill"></i></a>
+                                    <?php $viewQuery = array_merge($backQuery, ['view' => (int)$app['id']]); ?>
+                                    <a href="?<?php echo http_build_query($viewQuery); ?>" class="btn btn-sm btn-outline-primary me-1" title="Xem chi tiết"><i class="bi bi-eye-fill"></i></a>
                                     <?php if (hasPermission('admissions', 'delete_application')): ?>
                                     <button type="button" class="btn btn-sm btn-outline-danger"
                                         onclick="deleteApp(<?php echo $app['id']; ?>, this)"
@@ -423,27 +424,6 @@ function showToast(type, msg) {
     setTimeout(() => el.remove(), 4000);
 }
 
-// Cập nhật trạng thái hồ sơ
-function updateStatus(id, status) {
-    admFetch({ module: 'applications', action: 'update_status', id, status })
-        .then(res => {
-            if (res.success) {
-                showToast('success', res.message);
-                // Cập nhật badge trên trang nếu đang xem detail
-                const badge = document.querySelector('.badge.fs-6');
-                if (badge) {
-                    const map = {new:'warning',checking:'info',approved:'success',rejected:'danger',enrolled:'primary'};
-                    const labels = {new:'Mới',checking:'Đang xét',approved:'Đã duyệt',rejected:'Từ chối',enrolled:'Nhập học'};
-                    badge.className = `badge bg-${map[status]||'secondary'} fs-6`;
-                    badge.textContent = labels[status] || status;
-                }
-            } else {
-                showToast('error', res.message);
-            }
-        })
-        .catch(() => showToast('error', 'Lỗi kết nối.'));
-}
-
 // Xóa hồ sơ
 function deleteApp(id, btn) {
     if (!confirm('Xóa hồ sơ này? Thao tác không thể hoàn tác.')) return;
@@ -484,6 +464,21 @@ document.getElementById('testImportForm')?.addEventListener('submit', function(e
 });
 
 function clearTestData() {
+    const semesterId = document.getElementById('clearTestSemesterId')?.value || '0';
+    if (semesterId !== '0') {
+        if (!confirm('Xóa dữ liệu nghiệp vụ phát sinh trong học kỳ test đã chọn? Hồ sơ/tài khoản tuyển sinh test vẫn được giữ.')) return;
+        admFetch({ module: 'applications', action: 'clear_test_data', semester_id: semesterId })
+            .then(res => {
+                if (res.success) {
+                    showToast('success', res.message);
+                    setTimeout(() => window.location.href = 'applications.php?mode=test', 800);
+                } else {
+                    showToast('error', res.message);
+                }
+            })
+            .catch(() => showToast('error', 'Loi ket noi.'));
+        return;
+    }
     if (!confirm('Xoa Tất cả du lieu test da import va tai khoan/sinh vien sinh ra tu ho so test? Du lieu that se khong bi anh huong.')) return;
     const batchId = prompt('Nhap ma batch can xoa, hoac de trong de xoa Tất cả du lieu test:', '');
     if (batchId === null) return;

@@ -43,6 +43,11 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                 <li class="nav-item">
                     <a class="nav-link <?php echo $currentPage=='admission.php'?'active':''; ?>" href="/university/admission.php">Tuyển sinh</a>
                 </li>
+                <?php if (function_exists('isAnyAdmissionLookupOpen') && isAnyAdmissionLookupOpen()): ?>
+                <li class="nav-item">
+                    <a class="nav-link <?php echo $currentPage=='admission_lookup.php'?'active':''; ?>" href="/university/admission_lookup.php">Tra cứu kết quả</a>
+                </li>
+                <?php endif; ?>
                 <li class="nav-item">
                     <a class="nav-link <?php echo $currentPage=='news.php'?'active':''; ?>" href="/university/news.php">Tin tức</a>
                 </li>

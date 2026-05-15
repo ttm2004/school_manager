@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/AcademicPolicy.php';
 
 function getSubjectFacultyId(mysqli $conn, int $subjectId): ?int
 {
@@ -34,7 +35,8 @@ function getSectionAssignmentContext(mysqli $conn, int $sectionId): ?array
     }
 
     $stmt = $conn->prepare(
-        "SELECT cs.id, cs.subject_id, cs.semester_id,
+        "SELECT cs.id, cs.subject_id, cs.semester_id, cs.day_sessions, cs.start_date, cs.end_date,
+                " . (academicPolicyColumnExists($conn, 'course_sections', 'data_mode') ? 'cs.data_mode' : "'system' AS data_mode") . ",
                 COALESCE(m.faculty_id, cm.faculty_id) AS faculty_id
          FROM course_sections cs
          JOIN subjects s ON cs.subject_id = s.id
@@ -130,5 +132,23 @@ function validateTeacherAssignmentForSection(mysqli $conn, int $teacherId, int $
         return ['ok' => false, 'message' => 'Lớp học phần không hợp lệ.'];
     }
 
-    return validateTeacherAssignment($conn, $teacherId, (int)$section['subject_id'], (int)$section['semester_id']);
+    $valid = validateTeacherAssignment($conn, $teacherId, (int)$section['subject_id'], (int)$section['semester_id']);
+    if (!$valid['ok']) {
+        return $valid;
+    }
+
+    if (academicPolicyHasScheduleConflict(
+        $conn,
+        $sectionId,
+        'teacher_id',
+        $teacherId,
+        (int)$section['semester_id'],
+        $section['day_sessions'] ?? '',
+        $section['start_date'] ?? null,
+        $section['end_date'] ?? null
+    )) {
+        return ['ok' => false, 'message' => 'Giảng viên đang trùng lịch với lớp học phần khác trong cùng học kỳ, cùng ngày/buổi và khoảng thời gian.'];
+    }
+
+    return ['ok' => true, 'message' => ''];
 }

@@ -206,6 +206,10 @@ $_enrollCount  = $conn->query("SELECT COUNT(*) as c FROM admission_applications 
             <?php if($_pendingCount>0): ?><span class="bc"><?php echo $_pendingCount; ?></span><?php endif; ?>
         </a>
 
+        <a href="<?php echo admModeUrl('/university/admissions/assigned_classes.php'); ?>" class="sidebar-link <?php echo $_currentPage==='assigned_classes.php'?'active':''; ?>" data-tooltip="Lớp đã phân">
+            <i class="bi bi-collection-fill"></i><span class="link-text"> Lớp đã phân</span>
+        </a>
+
         <?php if(hasRole('admissions_manager')): ?>
         <div class="sidebar-sec">Xét tuyển</div>
         <a href="<?php echo admModeUrl('/university/admissions/auto_review.php'); ?>" class="sidebar-link <?php echo $_currentPage==='auto_review.php'?'active':''; ?>" data-tooltip="Xét tuyển tự động">

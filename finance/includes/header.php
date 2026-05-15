@@ -1,4 +1,6 @@
 ﻿<?php
+if (!defined('FINANCE_BOOTSTRAPPED')) {
+define('FINANCE_BOOTSTRAPPED', true);
 require_once __DIR__ . '/../../config/database.php';
 require_once __DIR__ . '/../../includes/auth.php';
 require_once __DIR__ . '/../../includes/AcademicPolicy.php';
@@ -57,8 +59,12 @@ if ($chkIdx && $chkIdx->num_rows === 0) {
 }
 // Pending count cho badge
 $_pendingCount = 0;
+if (function_exists('refreshOverdueTuitionInvoices')) {
+    refreshOverdueTuitionInvoices();
+}
 $_pr = $conn->query("SELECT COUNT(*) c FROM tuition_invoices WHERE status IN ('unpaid','partial','overdue')");
 if ($_pr) $_pendingCount = (int)$_pr->fetch_assoc()['c'];
+}
 ?>
 <!DOCTYPE html>
 <html lang="vi">

@@ -55,6 +55,42 @@ if ($action === 'enroll') {
 }
 
 // ── CANCEL ENROLL ────────────────────────────────────────────
+// Bulk enroll is only for demo/test data. Real enrollment stays one-by-one.
+if ($action === 'bulk_enroll') {
+    if (!$canEnroll) jsonErr('Bạn không có quyền xác nhận nhập học.');
+    if ($dataMode !== 'test') jsonErr('Duyệt hàng loạt chỉ áp dụng cho dữ liệu test/demo.');
+
+    $ids = $_POST['ids'] ?? [];
+    if (is_string($ids)) {
+        $decoded = json_decode($ids, true);
+        $ids = is_array($decoded) ? $decoded : explode(',', $ids);
+    }
+    $ids = array_values(array_unique(array_filter(array_map('intval', (array)$ids))));
+    if (!$ids) jsonErr('Vui lòng chọn ít nhất một hồ sơ.');
+    if (count($ids) > 500) jsonErr('Mỗi lần chỉ xử lý tối đa 500 hồ sơ.');
+
+    $placeholders = implode(',', array_fill(0, count($ids), '?'));
+    $types = str_repeat('i', count($ids)) . 's';
+    $sql = "UPDATE admission_applications
+            SET status='enrolled'
+            WHERE id IN ($placeholders) AND status='approved' AND data_mode=?";
+    $stmt = $conn->prepare($sql);
+    $params = array_merge($ids, [$dataMode]);
+    $stmt->bind_param($types, ...$params);
+    $stmt->execute();
+    $affected = $stmt->affected_rows;
+    $stmt->close();
+
+    if ($affected <= 0) {
+        jsonErr('Không có hồ sơ nào được cập nhật. Có thể các hồ sơ đã đổi trạng thái.');
+    }
+
+    jsonOk([
+        'msg' => 'Đã xác nhận nhập học ' . $affected . ' hồ sơ test.',
+        'affected' => $affected,
+    ]);
+}
+
 if ($action === 'cancel_enroll') {
     if (!$isManager)   jsonErr('Chỉ Trưởng phòng mới có quyền hủy nhập học.');
     if ($enrollLocked) jsonErr('Không thể hủy nhập học trong giai đoạn này.');
@@ -84,8 +120,9 @@ if ($action === 'create_account') {
     $autoEnrollMode = ($_POST['auto_enroll_mode'] ?? 'system') === 'test' ? 'test' : 'system';
     if (!$app_id || !$class_id) jsonErr('Vui lòng chọn lớp học.');
 
-    $stmt = $conn->prepare("SELECT aa.*, m.major_code FROM admission_applications aa
+    $stmt = $conn->prepare("SELECT aa.*, m.major_code, ar.year AS admission_year FROM admission_applications aa
         LEFT JOIN majors m ON aa.major_id=m.id
+        LEFT JOIN admission_rounds ar ON ar.id=aa.round_id
         WHERE aa.id=? AND aa.status='enrolled' AND aa.data_mode=?");
     $stmt->bind_param('is', $app_id, $dataMode);
     $stmt->execute();
@@ -93,8 +130,8 @@ if ($action === 'create_account') {
     $stmt->close();
     if (!$app) jsonErr('Không tìm thấy hồ sơ hoặc hồ sơ chưa được nhập học.');
 
-    $chk = $conn->prepare('SELECT u.id FROM users u JOIN students s ON u.id=s.user_id WHERE u.email=?');
-    $chk->bind_param('s', $app['email']);
+    $chk = $conn->prepare('SELECT u.id FROM users u JOIN students s ON u.id=s.user_id WHERE u.email=? AND s.data_mode=?');
+    $chk->bind_param('ss', $app['email'], $dataMode);
     $chk->execute();
     if ($chk->get_result()->num_rows > 0) { $chk->close(); jsonErr('Email này đã có tài khoản sinh viên.'); }
     $chk->close();
@@ -102,8 +139,12 @@ if ($action === 'create_account') {
     $classRow = AdmissionsEnrollmentService::getClassAcademicContext($conn, $class_id);
     if (!$classRow) jsonErr('Lớp hành chính không hợp lệ.');
     if ((int)$classRow['major_id'] !== (int)$app['major_id']) jsonErr('Lớp hành chính không thuộc ngành trúng tuyển.');
+    $targetYear = (int)($app['admission_year'] ?? $app['graduation_year'] ?? date('Y', strtotime($app['created_at'])));
+    if ($targetYear > 0 && (int)($classRow['enrollment_year'] ?? 0) !== $targetYear) {
+        jsonErr('Lớp hành chính không đúng khóa ' . $targetYear . '. Vui lòng chọn lớp cùng năm nhập học với hồ sơ.');
+    }
 
-    $year      = (int)($classRow['enrollment_year'] ?: date('Y', strtotime($app['created_at'])));
+    $year      = (int)($classRow['enrollment_year'] ?: $targetYear ?: date('Y', strtotime($app['created_at'])));
     $majorCode = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $app['major_code'] ?? 'SV'));
     $attempts  = 0;
     do {

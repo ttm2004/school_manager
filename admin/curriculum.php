@@ -3,32 +3,34 @@ require_once '../config/database.php';
 require_once '../includes/auth.php';
 requireRole('admin');
 $pageTitle = 'Chuong trinh dao tao';
-foreach (["semester_order TINYINT NOT NULL DEFAULT 1","theory_periods INT DEFAULT 30","practice_periods INT DEFAULT 0","is_mandatory TINYINT(1) DEFAULT 1"] as $col) {
+foreach (["semester_order TINYINT NOT NULL DEFAULT 1","theory_periods INT DEFAULT 30","practice_periods INT DEFAULT 0","is_mandatory TINYINT(1) DEFAULT 1","is_common TINYINT(1) NOT NULL DEFAULT 0"] as $col) {
     $cn = explode(' ',$col)[0];
     $chk = $conn->query("SHOW COLUMNS FROM subjects LIKE '$cn'");
     if ($chk && $chk->num_rows==0) $conn->query("ALTER TABLE subjects ADD COLUMN $col");
 }
 $success = $error = '';
 $filter_major = intval($_GET['major_id'] ?? 0);
+$filter_scope = trim($_GET['scope'] ?? 'all');
+if (!in_array($filter_scope, ['all','common','major'], true)) $filter_scope = 'all';
 if ($_SERVER['REQUEST_METHOD']==='POST') {
     $action = $_POST['action'] ?? '';
     if ($action==='add') {
         $mid=intval($_POST['major_id']??0); $code=trim($_POST['subject_code']??''); $name=trim($_POST['subject_name']??'');
         $cr=intval($_POST['credits']??3); $type=trim($_POST['subject_type_new']??'required'); $sem=intval($_POST['semester_order']??1);
-        $lt=intval($_POST['theory_periods']??30); $th=intval($_POST['practice_periods']??0); $desc=trim($_POST['description']??''); $mand=intval($_POST['is_mandatory']??1);
+        $lt=intval($_POST['theory_periods']??30); $th=intval($_POST['practice_periods']??0); $desc=trim($_POST['description']??''); $mand=intval($_POST['is_mandatory']??1); $common=isset($_POST['is_common'])?1:0;
         if ($mid && $code && $name) {
-            $st=$conn->prepare("INSERT INTO subjects (major_id,subject_code,subject_name,credits,subject_type_new,semester_order,theory_periods,practice_periods,is_mandatory,description) VALUES (?,?,?,?,?,?,?,?,?,?)");
-            $st->bind_param('issisisisi',$mid,$code,$name,$cr,$type,$sem,$lt,$th,$mand,$desc);
+            $st=$conn->prepare("INSERT INTO subjects (major_id,subject_code,subject_name,credits,subject_type_new,semester_order,theory_periods,practice_periods,is_mandatory,is_common,description) VALUES (?,?,?,?,?,?,?,?,?,?,?)");
+            $st->bind_param('issisiiiiis',$mid,$code,$name,$cr,$type,$sem,$lt,$th,$mand,$common,$desc);
             $st->execute() ? $success='Them mon hoc thanh cong!' : $error='Loi: '.$conn->error; $st->close();
         } else { $error='Vui long dien day du.'; }
     }
     if ($action==='edit') {
         $id=intval($_POST['id']??0); $mid=intval($_POST['major_id']??0); $code=trim($_POST['subject_code']??''); $name=trim($_POST['subject_name']??'');
         $cr=intval($_POST['credits']??3); $type=trim($_POST['subject_type_new']??'required'); $sem=intval($_POST['semester_order']??1);
-        $lt=intval($_POST['theory_periods']??30); $th=intval($_POST['practice_periods']??0); $desc=trim($_POST['description']??''); $mand=intval($_POST['is_mandatory']??1);
+        $lt=intval($_POST['theory_periods']??30); $th=intval($_POST['practice_periods']??0); $desc=trim($_POST['description']??''); $mand=intval($_POST['is_mandatory']??1); $common=isset($_POST['is_common'])?1:0;
         if ($id && $name) {
-            $st=$conn->prepare("UPDATE subjects SET major_id=?,subject_code=?,subject_name=?,credits=?,subject_type_new=?,semester_order=?,theory_periods=?,practice_periods=?,is_mandatory=?,description=? WHERE id=?");
-            $st->bind_param('issisisisi i',$mid,$code,$name,$cr,$type,$sem,$lt,$th,$mand,$desc,$id);
+            $st=$conn->prepare("UPDATE subjects SET major_id=?,subject_code=?,subject_name=?,credits=?,subject_type_new=?,semester_order=?,theory_periods=?,practice_periods=?,is_mandatory=?,is_common=?,description=? WHERE id=?");
+            $st->bind_param('issisiiiiisi',$mid,$code,$name,$cr,$type,$sem,$lt,$th,$mand,$common,$desc,$id);
             $st->execute() ? $success='Cap nhat thanh cong!' : $error='Loi: '.$conn->error; $st->close();
         }
     }
@@ -50,7 +52,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
             $success="Da seed $cnt mon hoc!";
         }
     }
-    if ($filter_major) { header("Location: ?major_id=$filter_major"); exit; }
+    if ($filter_major) { header("Location: ?".http_build_query(['major_id'=>$filter_major,'scope'=>$filter_scope])); exit; }
     else { header("Location: curriculum.php"); exit; }
 }
 
@@ -68,6 +70,11 @@ function getSeedData($mid,$mc){
     else{$spec=[$r('TOAN1','Toan cao cap',3,'required',1,45,0,1),$r('PHAP','Phap luat dai cuong',3,'required',1,45,0,1),$r('NHAP_MON','Nhap mon nganh hoc',3,'required',1,45,0,1),$r('CO_SO_1','Co so nganh 1',3,'required',2,45,0,1),$r('CO_SO_2','Co so nganh 2',3,'required',2,45,0,1),$r('CO_SO_3','Co so nganh 3',3,'required',2,45,0,1),$r('TA_CN','Tieng Anh chuyen nganh',3,'required',3,45,0,1),$r('CHUYEN_1','Chuyen nganh 1',3,'required',3,45,0,1),$r('CHUYEN_2','Chuyen nganh 2',3,'required',3,45,0,1),$r('CHUYEN_3','Chuyen nganh 3',3,'required',3,45,0,1),$r('CHUYEN_4','Chuyen nganh 4',3,'required',4,45,0,1),$r('CHUYEN_5','Chuyen nganh 5',3,'required',4,45,0,1),$r('CHUYEN_6','Chuyen nganh 6',3,'required',4,45,0,1),$r('CHUYEN_7','Chuyen nganh 7',3,'required',4,45,0,1),$r('CD1','Chuyen de 1',3,'elective',5,30,30,0),$r('CD2','Chuyen de 2',3,'elective',5,30,30,0),$r('CD3','Chuyen de 3',3,'elective',5,30,30,0),$r('CHUYEN_8','Chuyen nganh 8',3,'required',5,45,0,1),$r('CHUYEN_9','Chuyen nganh 9',3,'required',5,45,0,1),$r('CHUYEN_10','Chuyen nganh 10',3,'required',5,45,0,1),$r('CD4','Chuyen de 4',3,'elective',6,30,30,0),$r('CD5','Chuyen de 5',3,'elective',6,30,30,0),$r('CHUYEN_11','Chuyen nganh 11',3,'required',6,45,0,1),$r('CHUYEN_12','Chuyen nganh 12',3,'required',6,45,0,1)];}
     return array_merge($base,$spec);
 }
+function adminCurriculumSemesterLabelFromOrder(int $semesterOrder): string
+{
+    $slot = (($semesterOrder - 1) % 3) + 1;
+    return 'Học kỳ ' . ($slot === 2 ? 2 : 1);
+}
 $majors=$conn->query("SELECT m.*, f.faculty_name FROM majors m LEFT JOIN faculties f ON m.faculty_id=f.id ORDER BY f.faculty_name, m.major_name");
 $majorsArr=[];
 while($m=$majors->fetch_assoc()) $majorsArr[]=$m;
@@ -84,7 +91,7 @@ if($filter_major){
         $st=$conn->prepare("
             SELECT s.id, s.major_id, s.subject_code, s.subject_name, s.credits,
                    s.theory_periods, s.practice_periods, s.total_periods,
-                   s.subject_type, s.subject_type_new, s.is_mandatory, s.description,
+                   s.subject_type, s.subject_type_new, s.is_mandatory, s.is_common, s.description,
                    c.suggested_semester AS semester_order,
                    c.semester_label, c.year_label,
                    c.subject_type AS curr_type, c.id AS curr_id
@@ -105,13 +112,18 @@ if($filter_major){
     $st->bind_param('i',$filter_major); $st->execute();
     $res=$st->get_result(); while($row=$res->fetch_assoc()) $subjects[]=$row; $st->close();
 }
+if ($filter_scope === 'common') {
+    $subjects = array_values(array_filter($subjects, fn($s) => !empty($s['is_common'])));
+} elseif ($filter_scope === 'major') {
+    $subjects = array_values(array_filter($subjects, fn($s) => empty($s['is_common'])));
+}
 
 // Nhóm theo năm học + học kỳ (key: "year_label|semester_label|semester_order")
 $bySemester=[];
 foreach($subjects as $s) {
     $yearLabel = $s['year_label'] ?? '';
-    $semLabel  = $s['semester_label'] ?? '';
     $semOrder  = (int)($s['semester_order'] ?? 1);
+    $semLabel  = adminCurriculumSemesterLabelFromOrder($semOrder);
     // Key để sort: year_label + semester_order đảm bảo thứ tự đúng
     $key = ($yearLabel ?: '0000') . '|' . sprintf('%02d', $semOrder) . '|' . $semLabel;
     $bySemester[$key][] = $s;
@@ -151,11 +163,22 @@ include 'includes/sidebar.php';
                 </select>
             </div>
             <?php if($filter_major): ?>
+            <div style="min-width:210px">
+                <label class="form-label small mb-1 fw-bold">Loc mon hoc</label>
+                <select name="scope" class="form-select" onchange="this.form.submit()">
+                    <option value="all" <?php echo $filter_scope==='all'?'selected':''; ?>>Tat ca mon trong CTDT</option>
+                    <option value="common" <?php echo $filter_scope==='common'?'selected':''; ?>>Mon chung</option>
+                    <option value="major" <?php echo $filter_scope==='major'?'selected':''; ?>>Mon chuyen nganh</option>
+                </select>
+            </div>
             <button type="button" class="btn btn-gold btn-sm" data-bs-toggle="modal" data-bs-target="#addModal">
                 <i class="bi bi-plus-lg me-1"></i>Them mon hoc
             </button>
             <button type="button" class="btn btn-success btn-sm" data-bs-toggle="modal" data-bs-target="#importModal">
                 <i class="bi bi-file-earmark-excel-fill me-1"></i>Import Excel
+            </button>
+            <button type="button" class="btn btn-outline-success btn-sm" data-bs-toggle="modal" data-bs-target="#importCommonModal">
+                <i class="bi bi-list-check me-1"></i>Import mon chung
             </button>
             <form method="POST" class="d-inline" onsubmit="return confirm('Xoa toan bo mon cu va seed lai du lieu mau?')">
                 <input type="hidden" name="action" value="seed">
@@ -273,11 +296,15 @@ foreach($bySemester as $key=>$semSubjects):
                     $th  = (int)($sub['practice_periods'] ?? 0);
                     $tot = (int)($sub['total_periods'] ?? ($lt + $th));
                     $isMandatory = (bool)($sub['is_mandatory'] ?? 1);
+                    $isCommon = !empty($sub['is_common']);
                 ?>
                 <tr>
                     <td class="text-muted"><?php echo $idx++; ?></td>
                     <td><span class="badge bg-navy"><?php echo htmlspecialchars($sub['subject_code']); ?></span></td>
-                    <td class="fw-semibold"><?php echo htmlspecialchars($sub['subject_name']); ?></td>
+                    <td class="fw-semibold">
+                        <?php echo htmlspecialchars($sub['subject_name']); ?>
+                        <span class="badge bg-<?php echo $isCommon ? 'primary' : 'secondary'; ?> ms-1"><?php echo $isCommon ? 'Mon chung' : 'Chuyen nganh'; ?></span>
+                    </td>
                     <td class="text-center"><span class="badge bg-gold text-dark fw-bold"><?php echo $sub['credits']; ?></span></td>
                     <td class="text-center text-muted"><?php echo $lt ?: '-'; ?></td>
                     <td class="text-center text-muted"><?php echo $th ?: '-'; ?></td>
@@ -301,6 +328,7 @@ foreach($bySemester as $key=>$semSubjects):
                             data-sem="<?php echo $semOrder; ?>"
                             data-lt="<?php echo $lt; ?>"
                             data-th="<?php echo $th; ?>"
+                            data-common="<?php echo $isCommon ? 1 : 0; ?>"
                             data-desc="<?php echo htmlspecialchars($sub['description'] ?? ''); ?>">
                             <i class="bi bi-pencil-fill"></i>
                         </button>
@@ -346,6 +374,7 @@ foreach($bySemester as $key=>$semSubjects):
         <div class="col-md-2"><label class="form-label">Tiet TH</label><input type="number" name="practice_periods" class="form-control" value="0" min="0"></div>
         <div class="col-md-3"><label class="form-label">Loai mon</label><select name="subject_type_new" class="form-select"><option value="required">Bat buoc</option><option value="elective">Tu chon</option><option value="general">Dai cuong</option></select></div>
         <div class="col-md-3"><label class="form-label">Hoc ky</label><select name="semester_order" class="form-select"><?php for($i=1;$i<=11;$i++): ?><option value="<?php echo $i; ?>">Hoc ky <?php echo $i; ?></option><?php endfor; ?></select></div>
+        <div class="col-md-3 d-flex align-items-end"><div class="form-check mb-2"><input class="form-check-input" type="checkbox" name="is_common" id="addCommon"><label class="form-check-label" for="addCommon">Mon chung</label></div></div>
         <div class="col-12"><label class="form-label">Mo ta</label><textarea name="description" class="form-control" rows="2"></textarea></div>
     </div></div>
     <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Huy</button><button type="submit" class="btn btn-gold"><i class="bi bi-save me-1"></i>Luu</button></div>
@@ -365,6 +394,7 @@ foreach($bySemester as $key=>$semSubjects):
         <div class="col-md-2"><label class="form-label">Tiet TH</label><input type="number" name="practice_periods" id="eTh" class="form-control" min="0"></div>
         <div class="col-md-3"><label class="form-label">Loai mon</label><select name="subject_type_new" id="eType" class="form-select"><option value="required">Bat buoc</option><option value="elective">Tu chon</option><option value="general">Dai cuong</option></select></div>
         <div class="col-md-3"><label class="form-label">Hoc ky</label><select name="semester_order" id="eSem" class="form-select"><?php for($i=1;$i<=11;$i++): ?><option value="<?php echo $i; ?>">Hoc ky <?php echo $i; ?></option><?php endfor; ?></select></div>
+        <div class="col-md-3 d-flex align-items-end"><div class="form-check mb-2"><input class="form-check-input" type="checkbox" name="is_common" id="eCommon"><label class="form-check-label" for="eCommon">Mon chung</label></div></div>
         <div class="col-12"><label class="form-label">Mo ta</label><textarea name="description" id="eDesc" class="form-control" rows="2"></textarea></div>
     </div></div>
     <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Huy</button><button type="submit" class="btn btn-gold"><i class="bi bi-save me-1"></i>Cap nhat</button></div>
@@ -411,6 +441,28 @@ foreach($bySemester as $key=>$semSubjects):
     </div>
 </div></div></div>
 
+<!-- MODAL IMPORT MON CHUNG -->
+<div class="modal fade" id="importCommonModal" tabindex="-1"><div class="modal-dialog modal-lg"><div class="modal-content">
+    <div class="modal-header bg-primary text-white"><h5 class="modal-title"><i class="bi bi-list-check me-2"></i>Import danh sach mon chung</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+        <div class="alert alert-info">
+            File CSV co the dung lai file CTDT hien tai. He thong lay ma mon va ten mon, sau do danh dau cac mon do la <strong>mon chung</strong> de dung khi mo lop hoc phan chung.
+        </div>
+        <div id="importCommonResult" style="display:none"></div>
+        <form id="importCommonForm" enctype="multipart/form-data">
+            <input type="hidden" name="major_id" value="<?php echo $filter_major; ?>">
+            <div class="mb-3">
+                <label class="form-label fw-bold">Chon file CSV <span class="text-danger">*</span></label>
+                <input type="file" name="excel_file" id="commonFile" class="form-control" accept=".csv" required>
+            </div>
+        </form>
+    </div>
+    <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Huy</button>
+        <button type="button" class="btn btn-primary" id="btnImportCommon"><i class="bi bi-upload me-1"></i>Import mon chung</button>
+    </div>
+</div></div></div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script src="/university/assets/js/main.js"></script>
 <script>
@@ -425,6 +477,7 @@ document.getElementById('editModal').addEventListener('show.bs.modal', function(
     document.getElementById('eSem').value     = b.dataset.sem;
     document.getElementById('eLt').value      = b.dataset.lt;
     document.getElementById('eTh').value      = b.dataset.th;
+    document.getElementById('eCommon').checked = b.dataset.common === '1';
     document.getElementById('eDesc').value    = b.dataset.desc;
 });
 
@@ -444,7 +497,7 @@ document.getElementById('btnImport').addEventListener('click', function() {
             res.className = 'alert ' + (data.success ? 'alert-success' : 'alert-danger');
             res.innerHTML = '<i class="bi bi-' + (data.success ? 'check-circle-fill' : 'exclamation-circle-fill') + ' me-2"></i>' + data.message;
             if (data.success) {
-                setTimeout(() => { window.location.href = '?major_id=<?php echo $filter_major; ?>'; }, 1500);
+                setTimeout(() => { window.location.href = '?<?php echo http_build_query(['major_id'=>$filter_major,'scope'=>$filter_scope]); ?>'; }, 1500);
             }
         })
         .catch(() => {
@@ -455,6 +508,36 @@ document.getElementById('btnImport').addEventListener('click', function() {
         .finally(() => {
             btn.disabled = false;
             btn.innerHTML = '<i class="bi bi-upload me-1"></i>Import';
+        });
+});
+
+document.getElementById('btnImportCommon').addEventListener('click', function() {
+    const form = document.getElementById('importCommonForm');
+    const fileInput = document.getElementById('commonFile');
+    if (!fileInput.files.length) { alert('Vui long chon file!'); return; }
+    const btn = this;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Dang xu ly...';
+    const fd = new FormData(form);
+    fetch('import_common_subjects.php', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(data => {
+            const res = document.getElementById('importCommonResult');
+            res.style.display = 'block';
+            res.className = 'alert ' + (data.success ? 'alert-success' : 'alert-danger');
+            res.innerHTML = '<i class="bi bi-' + (data.success ? 'check-circle-fill' : 'exclamation-circle-fill') + ' me-2"></i>' + data.message;
+            if (data.success) {
+                setTimeout(() => { window.location.href = '?<?php echo http_build_query(['major_id'=>$filter_major,'scope'=>'common']); ?>'; }, 1200);
+            }
+        })
+        .catch(() => {
+            document.getElementById('importCommonResult').style.display = 'block';
+            document.getElementById('importCommonResult').className = 'alert alert-danger';
+            document.getElementById('importCommonResult').textContent = 'Loi ket noi. Vui long thu lai.';
+        })
+        .finally(() => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-upload me-1"></i>Import mon chung';
         });
 });
 </script>

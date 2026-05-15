@@ -8,6 +8,7 @@ $stmt->bind_param('i', $_SESSION['user_id']);
 $stmt->execute();
 $student = $stmt->get_result()->fetch_assoc();
 $stmt->close();
+requireNoTuitionLock((int)($student['id'] ?? 0));
 
 // Lấy điểm theo học kỳ
 $stmt = $conn->prepare("

@@ -1,165 +1,138 @@
-# Quy trình vận hành chính
+# Quy trinh van hanh chinh
 
-Tài liệu này mô tả các quy trình nghiệp vụ quan trọng trong hệ thống. Mỗi quy trình được trình bày theo thứ tự vận hành thực tế, từ tác nhân thực hiện đến kết quả sau cùng.
+Tai lieu nay mo ta cac quy trinh nghiep vu dang duoc ap dung trong he thong sau khi cap nhat logic xep thoi khoa bieu va phong hoc.
 
-## 1. Quy trình mở lớp học phần
+## 1. Tuyen sinh va lop hanh chinh
 
-### Mục đích
+### Dot tuyen sinh
 
-Mở lớp học phần cho sinh viên đăng ký theo đúng học kỳ, chương trình đào tạo, sĩ số và điều kiện tổ chức giảng dạy.
+1. Dot tuyen sinh duoc tach theo che do du lieu `system` va `test`.
+2. Phong Dao tao chi khong duoc mo lop hanh chinh khi:
+   - khong co dot tuyen sinh nao phu hop;
+   - dot duoc chon da o trang thai `completed`.
+3. Cac trang thai khac nhu `open`, `supplementary`, `reviewing` van duoc mo lop hanh chinh.
 
-### Tác nhân tham gia
+### Mo lop hanh chinh
 
-- Phòng Đào tạo.
-- Khoa/Viện.
-- Giảng viên.
-- Sinh viên.
+1. Phong Dao tao chon dot tuyen sinh va nganh.
+2. He thong sinh ma lop theo nam tuyen sinh, ma nganh va so thu tu, vi du `D26CNTT01`.
+3. Neu nganh/khoa da co lop trong dot do, he thong mo tiep so thu tu ke tiep.
+4. Lop hanh chinh luu si so du kien de lam can cu phan lop va mo lop hoc phan.
+5. Sau khi tao, chi duoc sua ten lop va si so.
+6. Ma lop, nganh, nam tuyen sinh, nien khoa va che do du lieu la dinh danh he thong, khong duoc sua.
+7. Chi duoc xoa lop khi lop chua co sinh vien va chua duoc dung trong lop hoc phan.
 
-### Luồng xử lý
+## 2. Tao va xep lop hoc phan
 
-1. Phòng Đào tạo cấu hình học kỳ và thời gian cho phép Khoa/Viện gửi đề xuất.
-2. Khoa/Viện chọn môn học thuộc chương trình đào tạo phù hợp.
-3. Khoa/Viện tạo đề xuất mở lớp học phần, bao gồm môn học, học kỳ, khoa/ngành, sĩ số và hình thức học.
-4. Khoa/Viện gửi đề xuất lên Phòng Đào tạo.
-5. Phòng Đào tạo kiểm tra điều kiện mở lớp.
-6. Hệ thống kiểm tra các thông tin liên quan như học kỳ, chương trình đào tạo, sĩ số tối thiểu và lịch học.
-7. Phòng Đào tạo duyệt mở lớp.
-8. Lớp học phần chuyển sang trạng thái mở và có thể xuất hiện trong danh sách đăng ký của sinh viên.
+### Muc dich
 
-### Kết quả
+Mo lop hoc phan dung hoc ky, dung chuong trinh dao tao, dung lop hanh chinh, co si so phu hop va co lich/phong khong trung.
 
-Lớp học phần được mở hợp lệ, có thể tiếp tục được xếp phòng, phân công giảng viên và cho sinh viên đăng ký.
+### Truoc khi tao lop hoc phan
 
-## 2. Quy trình nguyện vọng giảng dạy và phân công giảng viên
+1. Phong Dao tao cau hinh hoc ky:
+   - ngay bat dau va ket thuc hoc ky;
+   - thoi gian Khoa/Vien duoc gui de xuat;
+   - thoi gian Phong Dao tao duyet de xuat;
+   - thoi gian dang ky hoc phan.
+2. He thong can co du lieu chuong trinh dao tao, mon hoc, tong so tiet, khoa tuyen sinh/lop hanh chinh va danh muc phong hoc.
+3. Phong Dao tao tao lop hoc phan tu CTDT theo tung lop hanh chinh cua nganh/khoa.
+4. Giang vien co the dang ky nguyen vong giang day; Bo mon/Khoa co the duyet nguyen vong de lam can cu de xuat giang vien.
 
-### Mục đích
+### Phong Dao tao tao lop hoc phan tu CTDT
 
-Bảo đảm giảng viên được phân công phù hợp với chuyên môn, khoa phụ trách và nguyện vọng đã được duyệt.
+1. Chon hoc ky can mo.
+2. Chon nganh/khoa ap dung.
+3. He thong lay cac mon trong CTDT theo nam hoc va hoc ky tuong ung cua khoa.
+4. Voi moi mon, he thong tao mot lop hoc phan cho tung lop hanh chinh cua nganh/khoa.
+5. Neu mon/lop hanh chinh/hoc ky da co lop hoc phan thi bo qua, khong tao trung.
+6. Lop hoc phan duoc tao truoc voi si so, trang thai va che do du lieu theo hoc ky; lich/phong co the duoc xep sau bang thao tac hang loat.
 
-### Tác nhân tham gia
+### Phong Dao tao xep lich/phong hang loat
 
-- Giảng viên.
-- Bộ môn.
-- Khoa/Viện.
-- Phòng Đào tạo.
+1. Sau khi tao lop tu CTDT, Phong Dao tao dung nut `Xep lich/phong`.
+2. He thong chi xu ly cac lop hoc phan trong hoc ky dang thieu lich hoc hoac thieu phong.
+3. Cac lop da co lich/phong hop le duoc giu nguyen.
+4. He thong tu chon ca hoc, khoang tuan hoc va phong hoc phu hop.
+5. Sau moi lop duoc xep, cac lop tiep theo se kiem tra trung voi lich vua xep.
 
-### Luồng xử lý
+### Khoa/Vien de xuat dieu chinh/mo lop
 
-1. Phòng Đào tạo mở thời gian để giảng viên và Khoa/Viện thao tác.
-2. Giảng viên đăng ký nguyện vọng giảng dạy theo học kỳ.
-3. Bộ môn hoặc Khoa/Viện xem xét và duyệt nguyện vọng.
-4. Khoa/Viện đề xuất giảng viên cho lớp học phần.
-5. Hệ thống kiểm tra giảng viên có thuộc đúng khoa và có nguyện vọng hợp lệ hay không.
-6. Phòng Đào tạo duyệt phân công giảng viên.
-7. Giảng viên nhận thông báo và thấy lớp học phần trong danh sách được phân công.
+1. Khoa/Vien chon hoc ky va cac mon can mo theo chuong trinh dao tao.
+2. He thong chi goi y/cho chon mon thuoc dung CTDT, dung hoc ky cua khoa tuyen sinh.
+3. Khoa/Vien nhap so lop, si so du kien, ghi chu va co the de xuat giang vien.
+4. Lich hoc/phong hoc co the de trong. Neu de trong, he thong tu tinh va phan bo theo tong so tiet cua mon.
+5. Neu Khoa/Vien chon lich/phong cu the, he thong van kiem tra trung lop/khoa, trung phong va trung giang vien.
 
-### Kết quả
+### Phong Dao tao duyet de xuat
 
-Lớp học phần có giảng viên chính thức, sẵn sàng đưa vào thời khóa biểu và các nghiệp vụ liên quan.
+1. Phong Dao tao xem de xuat o trang duyet mo lop.
+2. He thong kiem tra:
+   - hoc ky con cho phep duyet;
+   - mon dung CTDT va dung khoa phu trach;
+   - si so toi thieu/toi da;
+   - lop/khoa tuyen sinh khong bi trung lich;
+   - giang vien khong bi trung lich neu da co de xuat;
+   - phong hoc du suc chua va dung loai phong.
+3. He thong xep thoi khoa bieu theo quy tac:
+   - 1 buoi hoc mac dinh 5 tiet;
+   - so buoi = tong so tiet / 5;
+   - so tuan hoc duoc tinh theo so buoi va do dai hoc ky;
+   - mon 60 tiet trong hoc ky 12 tuan se hoc gan/du 12 tuan;
+   - mon 30 tiet se hoc 6 tuan;
+   - tuan bat dau duoc phan bo trong toan hoc ky, khong mac dinh tat ca tu tuan 1.
+4. Hai lop duoc dung cung phong/cung ca neu khoang ngay hoc khong chong nhau.
+5. Hai lop cung phong/cung ca va chong ngay hoc se bi chan.
+6. Khi duyet thanh cong, lop hoc phan chuyen sang trang thai `open`.
 
-## 3. Quy trình xếp phòng học
+## 3. Phan cong giang vien
 
-### Mục đích
+1. Giang vien dang ky nguyen vong giang day theo hoc ky.
+2. Bo mon/Khoa duyet nguyen vong.
+3. Khoa/Vien de xuat giang vien cho lop hoc phan.
+4. Neu Khoa/Vien khong chon lich/phong khi de xuat giang vien, he thong tu xep theo logic chung.
+5. Phong Dao tao duyet phan cong.
+6. Sau khi duyet, giang vien thay lop trong danh sach giang day va thoi khoa bieu.
 
-Xếp phòng học phù hợp với lịch học, sĩ số, hình thức học và yêu cầu phòng của môn học.
+## 4. Dang ky hoc phan
 
-### Tác nhân tham gia
+### Hoc ky 1 nam nhat
 
-- Phòng Đào tạo.
-- Khoa/Viện.
+1. Sau tuyen sinh va phan lop, he thong tao yeu cau dang ky tu dong HK1.
+2. Phong Dao tao duyet yeu cau dang ky tu dong.
+3. He thong lay cac mon `suggested_semester = 1` trong CTDT.
+4. He thong tim lop hoc phan `open` phu hop voi khoa/lop cua sinh vien.
+5. Truoc khi ghi danh, he thong kiem tra trung lich cua sinh vien.
+6. Neu khong co lop phu hop hoac bi trung lich, dong dang ky duoc dua vao hang cho xu ly.
+7. Sinh vien HK1 nam nhat khong tu dang ky/huy nhu cac hoc ky sau.
 
-### Luồng xử lý
+### Cac hoc ky sau
 
-1. Khoa/Viện đề xuất lịch hoặc nhu cầu tổ chức lớp.
-2. Phòng Đào tạo xem xét khi duyệt mở lớp.
-3. Nếu lớp học offline hoặc hybrid, hệ thống yêu cầu có lịch học cụ thể.
-4. Hệ thống lấy danh sách phòng học từ cơ sở dữ liệu.
-5. Hệ thống loại các phòng đang bảo trì, không đủ sức chứa hoặc không phù hợp loại phòng.
-6. Hệ thống kiểm tra trùng lịch phòng trong học kỳ.
-7. Phòng Đào tạo chọn phòng thủ công hoặc để hệ thống gợi ý phòng phù hợp.
+1. Phong Dao tao mo thoi gian dang ky hoc phan.
+2. Sinh vien tu chon lop hoc phan dang mo.
+3. He thong kiem tra:
+   - con trong thoi gian dang ky;
+   - mon thuoc CTDT;
+   - khong trung mon trong cung hoc ky;
+   - khong trung lich;
+   - con si so;
+   - gioi han tin chi;
+   - dieu kien hoc vu va cong no neu co.
+4. Dang ky thanh cong thi tang si so lop; lop day co the chuyen sang `full`.
 
-### Kết quả
+## 5. Sau dang ky
 
-Lớp học phần được gán phòng học hợp lệ, hạn chế trùng lịch và sai loại phòng.
+1. Sinh vien va giang vien xem thoi khoa bieu theo `day_sessions`, `start_date`, `end_date`.
+2. Tai chinh tinh hoc phi theo danh sach mon da dang ky/tu dong dang ky.
+3. Phong Dao tao lap lich thi, kiem tra trung phong thi va trung lich thi sinh vien.
+4. Giang vien nhap diem trong thoi gian cho phep.
+5. Phong Dao tao khoa diem va theo doi lop thieu diem.
+6. Sinh vien xem ket qua hoc tap, lich thi va hoc phi.
 
-## 4. Quy trình đăng ký học phần
+## 6. Cac diem nghiep vu can nho
 
-### Mục đích
-
-Cho phép sinh viên đăng ký học phần theo chương trình đào tạo và các ràng buộc học vụ.
-
-### Tác nhân tham gia
-
-- Sinh viên.
-- Phòng Đào tạo.
-- Tài chính.
-
-### Luồng xử lý
-
-1. Phòng Đào tạo mở thời gian đăng ký học phần.
-2. Sinh viên xem danh sách lớp học phần có thể đăng ký.
-3. Hệ thống kiểm tra học kỳ có đang mở đăng ký hay không.
-4. Hệ thống kiểm tra môn học có thuộc chương trình đào tạo của sinh viên hay không.
-5. Hệ thống kiểm tra điều kiện tiên quyết, trùng môn, trùng lịch, sĩ số, giới hạn tín chỉ và công nợ học phí.
-6. Nếu hợp lệ, sinh viên đăng ký thành công và sĩ số lớp được cập nhật.
-7. Nếu lớp đủ sĩ số, trạng thái lớp có thể chuyển sang đầy.
-8. Sinh viên được phép hủy đăng ký trong thời gian cho phép.
-
-### Kết quả
-
-Sinh viên có danh sách học phần đã đăng ký, đồng thời hệ thống cập nhật sĩ số và dữ liệu học phí liên quan.
-
-## 5. Quy trình lập lịch thi
-
-### Mục đích
-
-Tổ chức lịch thi cuối kỳ phù hợp với lớp học phần, phòng thi và sinh viên tham gia.
-
-### Tác nhân tham gia
-
-- Phòng Đào tạo.
-- Sinh viên.
-- Giảng viên.
-- Khoa/Viện.
-
-### Luồng xử lý
-
-1. Phòng Đào tạo chọn lớp học phần cần lập lịch thi.
-2. Nhập ngày thi, giờ bắt đầu, giờ kết thúc và phòng thi.
-3. Hệ thống kiểm tra giờ kết thúc phải sau giờ bắt đầu.
-4. Hệ thống kiểm tra ngày thi phải phù hợp với thời gian học kỳ.
-5. Hệ thống kiểm tra phòng thi không bị trùng ca.
-6. Hệ thống kiểm tra sinh viên không bị trùng lịch thi với môn khác.
-7. Lịch thi được lưu và hiển thị cho các vai trò liên quan.
-
-### Kết quả
-
-Lịch thi được lập hợp lệ, hạn chế trùng phòng và trùng lịch thi của sinh viên.
-
-## 6. Quy trình nhập điểm và khóa điểm
-
-### Mục đích
-
-Quản lý việc nhập điểm đúng thời gian, đúng lớp được phân công và có cơ chế khóa điểm sau khi hoàn tất.
-
-### Tác nhân tham gia
-
-- Giảng viên.
-- Phòng Đào tạo.
-- Sinh viên.
-- Khoa/Viện.
-
-### Luồng xử lý
-
-1. Môn học kết thúc.
-2. Phòng Đào tạo cấu hình thời hạn nhập điểm.
-3. Giảng viên xem lớp được phân công và nhập điểm trong thời gian cho phép.
-4. Hệ thống kiểm tra cửa sổ nhập điểm và trạng thái khóa điểm.
-5. Phòng Đào tạo theo dõi lớp thiếu điểm, nhắc nhập điểm nếu cần.
-6. Khi hoàn tất, Phòng Đào tạo khóa điểm.
-7. Sinh viên xem kết quả học tập.
-8. Khoa/Viện theo dõi thống kê điểm và cảnh báo học vụ.
-
-### Kết quả
-
-Điểm được ghi nhận, khóa và hiển thị cho sinh viên theo đúng quy trình quản lý đào tạo.
+- Lop hoc phan co the duoc tao truoc tu CTDT, sau do Phong Dao tao xep lich/phong hang loat cho cac lop con thieu.
+- Xep lich/phong cung dien ra khi sua lop hoc phan, de xuat giang vien hoac duyet mo lop.
+- Lich/phong Khoa/Vien nhap chi la de xuat. Phong Dao tao va he thong co the chot lai theo rang buoc thuc te.
+- Cung phong/cung ca khong mac nhien la trung; chi trung khi khoang ngay hoc giao nhau.
+- HK1 nam nhat di theo luong dang ky tu dong; cac hoc ky sau sinh vien tu dang ky.

@@ -51,7 +51,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['_flash']=['type'=>'success','message'=>'Ghi nhận thanh toán thành công!'];
             }
         }
-        $qs=http_build_query(array_filter(['period_id'=>$_GET['period_id']??'','status'=>$_GET['status']??'','q'=>$_GET['q']??'']));
+        $qs=http_build_query(array_filter(['period_id'=>$_GET['period_id']??'','status'=>$_GET['status']??'','q'=>$_GET['q']??'','faculty_id'=>$_GET['faculty_id']??'','major_id'=>$_GET['major_id']??'','cohort_id'=>$_GET['cohort_id']??'','class_id'=>$_GET['class_id']??'']));
         header('Location: invoices.php'.($qs?"?$qs":'')); exit();
     }
 
@@ -69,7 +69,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['_flash']=['type'=>'success','message'=>'Cập nhật miễn giảm thành công!'];
             }
         }
-        $qs=http_build_query(array_filter(['period_id'=>$_GET['period_id']??'','status'=>$_GET['status']??'','q'=>$_GET['q']??'']));
+        $qs=http_build_query(array_filter(['period_id'=>$_GET['period_id']??'','status'=>$_GET['status']??'','q'=>$_GET['q']??'','faculty_id'=>$_GET['faculty_id']??'','major_id'=>$_GET['major_id']??'','cohort_id'=>$_GET['cohort_id']??'','class_id'=>$_GET['class_id']??'']));
         header('Location: invoices.php'.($qs?"?$qs":'')); exit();
     }
 }
@@ -78,22 +78,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $fPeriod = intval($_GET['period_id']??0);
 $fStatus = trim($_GET['status']??'');
 $fSearch = trim($_GET['q']??'');
+$fFaculty = intval($_GET['faculty_id'] ?? 0);
+$fMajor = intval($_GET['major_id'] ?? 0);
+$fCohort = intval($_GET['cohort_id'] ?? 0);
+$fClass = intval($_GET['class_id'] ?? 0);
 $perPage = 25; $page = max(1,intval($_GET['page']??1)); $offset=($page-1)*$perPage;
 
 $periods = $conn->query("SELECT tp.id, tp.title, sm.semester_name, sm.school_year FROM tuition_periods tp JOIN semesters sm ON tp.semester_id=sm.id ORDER BY tp.created_at DESC");
+$faculties = $conn->query("SELECT id, faculty_name FROM faculties ORDER BY faculty_name");
+$majors = $conn->query("SELECT m.id, m.major_name, m.faculty_id, f.faculty_name FROM majors m LEFT JOIN faculties f ON f.id=m.faculty_id ORDER BY f.faculty_name, m.major_name");
+$cohorts = $conn->query("SELECT tc.id, tc.cohort_code, tc.cohort_name, tc.major_id, m.major_name FROM training_cohorts tc LEFT JOIN majors m ON m.id=tc.major_id ORDER BY tc.enrollment_year DESC, tc.cohort_code");
+$classes = $conn->query("SELECT c.id, c.class_name, c.class_code, c.major_id, c.cohort_id, m.major_name FROM classes c LEFT JOIN majors m ON m.id=c.major_id ORDER BY c.class_name");
 
 $conds=["ti.status!='draft'"]; $params=[]; $types='';
 if ($fPeriod) { $conds[]="ti.period_id=$fPeriod"; }
 if ($fStatus) { $conds[]="ti.status='".addslashes($fStatus)."'"; }
 if ($fSearch) { $like=addslashes($fSearch); $conds[]="(u.full_name LIKE '%$like%' OR st.student_code LIKE '%$like%')"; }
+if ($fFaculty) { $conds[]="m.faculty_id=$fFaculty"; }
+if ($fMajor) { $conds[]="cl.major_id=$fMajor"; }
+if ($fCohort) { $conds[]="COALESCE(st.cohort_id, cl.cohort_id)= $fCohort"; }
+if ($fClass) { $conds[]="st.class_id=$fClass"; }
 $where='WHERE '.implode(' AND ',$conds);
 
-$total=(int)($conn->query("SELECT COUNT(*) c FROM tuition_invoices ti JOIN students st ON ti.student_id=st.id JOIN users u ON st.user_id=u.id $where")->fetch_assoc()['c']??0);
+$total=(int)($conn->query("SELECT COUNT(*) c FROM tuition_invoices ti JOIN students st ON ti.student_id=st.id JOIN users u ON st.user_id=u.id LEFT JOIN classes cl ON st.class_id=cl.id LEFT JOIN majors m ON cl.major_id=m.id $where")->fetch_assoc()['c']??0);
 $totalPages=max(1,(int)ceil($total/$perPage));
 
-$invoices=$conn->query("SELECT ti.*,u.full_name,st.student_code,cl.class_name,m.major_name,tp.title period_title,sm.semester_name,sm.school_year
+$invoices=$conn->query("SELECT ti.*,u.full_name,st.student_code,cl.class_name,m.major_name,f.faculty_name,tc.cohort_code,tp.title period_title,sm.semester_name,sm.school_year
     FROM tuition_invoices ti JOIN students st ON ti.student_id=st.id JOIN users u ON st.user_id=u.id
     LEFT JOIN classes cl ON st.class_id=cl.id LEFT JOIN majors m ON cl.major_id=m.id
+    LEFT JOIN faculties f ON f.id=m.faculty_id
+    LEFT JOIN training_cohorts tc ON tc.id=COALESCE(st.cohort_id, cl.cohort_id)
     JOIN tuition_periods tp ON ti.period_id=tp.id JOIN semesters sm ON tp.semester_id=sm.id
     $where ORDER BY u.full_name LIMIT $perPage OFFSET $offset");
 
@@ -131,9 +145,41 @@ $flash=getFlash();
             <div class="col-md-3">
                 <input type="text" name="q" class="form-control form-control-sm" placeholder="Tên, mã SV..." value="<?php echo htmlspecialchars($fSearch); ?>">
             </div>
+            <div class="col-md-2">
+                <select name="faculty_id" class="form-select form-select-sm">
+                    <option value="0">-- Khoa/Viện --</option>
+                    <?php if ($faculties) while ($f=$faculties->fetch_assoc()): ?>
+                    <option value="<?php echo (int)$f['id']; ?>" <?php echo $fFaculty===(int)$f['id']?'selected':''; ?>><?php echo htmlspecialchars($f['faculty_name']); ?></option>
+                    <?php endwhile; ?>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <select name="major_id" class="form-select form-select-sm">
+                    <option value="0">-- Ngành --</option>
+                    <?php if ($majors) while ($m=$majors->fetch_assoc()): ?>
+                    <option value="<?php echo (int)$m['id']; ?>" <?php echo $fMajor===(int)$m['id']?'selected':''; ?>><?php echo htmlspecialchars(($m['faculty_name'] ? $m['faculty_name'].' - ' : '').$m['major_name']); ?></option>
+                    <?php endwhile; ?>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <select name="cohort_id" class="form-select form-select-sm">
+                    <option value="0">-- Khóa --</option>
+                    <?php if ($cohorts) while ($c=$cohorts->fetch_assoc()): ?>
+                    <option value="<?php echo (int)$c['id']; ?>" <?php echo $fCohort===(int)$c['id']?'selected':''; ?>><?php echo htmlspecialchars($c['cohort_code'].' - '.$c['major_name']); ?></option>
+                    <?php endwhile; ?>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <select name="class_id" class="form-select form-select-sm">
+                    <option value="0">-- Lớp --</option>
+                    <?php if ($classes) while ($cl=$classes->fetch_assoc()): ?>
+                    <option value="<?php echo (int)$cl['id']; ?>" <?php echo $fClass===(int)$cl['id']?'selected':''; ?>><?php echo htmlspecialchars(($cl['class_code'] ?: $cl['class_name']).' - '.$cl['major_name']); ?></option>
+                    <?php endwhile; ?>
+                </select>
+            </div>
             <div class="col-md-2 d-flex gap-2">
                 <button type="submit" class="btn btn-navy btn-sm flex-fill"><i class="bi bi-search me-1"></i>Lọc</button>
-                <?php if ($fPeriod||$fStatus||$fSearch): ?><a href="invoices.php" class="btn btn-outline-secondary btn-sm"><i class="bi bi-x-lg"></i></a><?php endif; ?>
+                <?php if ($fPeriod||$fStatus||$fSearch||$fFaculty||$fMajor||$fCohort||$fClass): ?><a href="invoices.php" class="btn btn-outline-secondary btn-sm"><i class="bi bi-x-lg"></i></a><?php endif; ?>
             </div>
         </form>
     </div>

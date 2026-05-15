@@ -34,6 +34,10 @@ $_cur = basename($_SERVER['PHP_SELF']);
            class="sidebar-link <?php echo $_cur === 'timetable.php' ? 'active' : ''; ?>">
             <i class="bi bi-calendar3-week"></i> Thời khóa biểu
         </a>
+        <a href="/university/student/semester_timetable.php"
+           class="sidebar-link <?php echo $_cur === 'semester_timetable.php' ? 'active' : ''; ?>">
+            <i class="bi bi-calendar-range"></i> TKB học kỳ
+        </a>
         <a href="/university/student/exam_schedule.php"
            class="sidebar-link <?php echo $_cur === 'exam_schedule.php' ? 'active' : ''; ?>">
             <i class="bi bi-calendar-event-fill"></i> Lịch thi cuối kỳ

@@ -9,6 +9,7 @@ $stmt->bind_param('i', $_SESSION['user_id']);
 $stmt->execute();
 $student = $stmt->get_result()->fetch_assoc();
 $stmt->close();
+requireNoTuitionLock((int)($student['id'] ?? 0));
 
 $colCheck = $conn->query("SHOW COLUMNS FROM course_sections LIKE 'schedule_data'");
 if ($colCheck->num_rows == 0) {
@@ -17,17 +18,18 @@ if ($colCheck->num_rows == 0) {
 
 $stmt = $conn->prepare("
     SELECT ss.id as ss_id, cs.id as section_id, cs.section_code, cs.schedule_text, cs.schedule_data,
-           cs.room, cs.day_sessions, cs.start_date, cs.end_date,
+           cs.room, cs.day_sessions, cs.start_date, cs.end_date, cs.data_mode as section_data_mode,
            s.subject_name, s.credits,
            COALESCE(NULLIF(s.total_periods,0), s.theory_periods + s.practice_periods, s.credits * 15, 45) AS total_periods,
-           u.full_name as teacher_name,
-           sm.semester_name, sm.school_year, sm.id as semester_id, sm.start_date as sem_start, sm.end_date as sem_end
+           COALESCE(u.full_name, 'Chưa phân công') as teacher_name,
+           sm.semester_name, sm.school_year, sm.data_mode as semester_data_mode,
+           sm.id as semester_id, sm.start_date as sem_start, sm.end_date as sem_end
     FROM student_subjects ss
     JOIN course_sections cs ON ss.course_section_id = cs.id
     JOIN subjects s ON cs.subject_id = s.id
     JOIN semesters sm ON cs.semester_id = sm.id
-    JOIN teachers t ON cs.teacher_id = t.id
-    JOIN users u ON t.user_id = u.id
+    LEFT JOIN teachers t ON cs.teacher_id = t.id
+    LEFT JOIN users u ON t.user_id = u.id
     WHERE ss.student_id = ? AND ss.status IN ('registered','auto_enrolled')
     ORDER BY sm.school_year DESC, sm.semester_name
 ");
@@ -42,6 +44,9 @@ foreach ($allSubjects as $sub) {
     $bySemester[$key]['info']      = $sub['semester_name'] . ' - Năm học ' . $sub['school_year'];
     $bySemester[$key]['sem_start'] = $sub['sem_start'];
     $bySemester[$key]['sem_end']   = $sub['sem_end'];
+    $bySemester[$key]['data_mode'] = (($sub['semester_data_mode'] ?? 'system') === 'test' || ($sub['section_data_mode'] ?? 'system') === 'test')
+        ? 'test'
+        : ($bySemester[$key]['data_mode'] ?? 'system');
     $bySemester[$key]['subjects'][] = $sub;
 }
 
@@ -72,12 +77,13 @@ function parseScheduleData(string $json): array {
 }
 
 // Tiết theo buổi
-$SESSION_PERIODS = ['sang'=>[1,5],'chieu'=>[6,10],'toi'=>[11,15]];
+$SESSION_PERIODS = ['sang'=>[1,5],'chieu'=>[6,10]];
+$SESSION_TIMES = ['sang'=>'7h00 - 11h20','chieu'=>'12h30 - 16h50'];
 $DAYS = [2=>'Thứ 2',3=>'Thứ 3',4=>'Thứ 4',5=>'Thứ 5',6=>'Thứ 6',7=>'Thứ 7',8=>'Chủ Nhật'];
 
 if (isset($bySemester[$selectedSem])) {
     foreach ($bySemester[$selectedSem]['subjects'] as &$sub) {
-        $limitEnd = $bySemester[$selectedSem]['sem_end'] ?? null;
+        $limitEnd = $sub['end_date'] ?: ($bySemester[$selectedSem]['sem_end'] ?? null);
         $dates = academicScheduleSectionDates(
             $sub['start_date'] ?: ($sub['sem_start'] ?? null),
             $sub['day_sessions'] ?? '',
@@ -133,9 +139,13 @@ $semEndTs = isset($bySemester[$selectedSem]['sem_end']) && $bySemester[$selected
 $dow = (int)date('N', $semStartTs);
 if ($dow!=1) $semStartTs = strtotime('next monday', $semStartTs);
 
+$timetableEndTs = isset($bySemester[$selectedSem])
+    ? academicTimetableResolveEndTs($bySemester[$selectedSem], $bySemester[$selectedSem]['subjects'] ?? [])
+    : $semEndTs;
+
 $totalWeeks = 20;
-if ($semEndTs) {
-    $totalWeeks = max(1,(int)ceil(($semEndTs-$semStartTs + 86400)/(7*86400)));
+if ($timetableEndTs) {
+    $totalWeeks = max(1,(int)ceil(($timetableEndTs-$semStartTs + 86400)/(7*86400)));
 }
 
 $nowWeek     = max(0,(int)floor((time()-$semStartTs)/(7*86400)));
@@ -238,24 +248,25 @@ $classDays = array_unique($classDays);
     <link rel="stylesheet" href="/university/assets/css/style.css">
     <style>
         :root{--navy:#0d2d6b;--gold:#f5a623;}
-        body{background:#f5f6fa;}
+        body{background:#eef3f8;}
         .pw{max-width:1300px;margin:0 auto;padding:16px;}
 
         /* Controls bar */
-        .ctrl-bar{background:#fff;border:1px solid #dde3ee;border-radius:8px;padding:14px 18px;margin-bottom:10px;}
+        .ctrl-bar{background:#fff;border:1px solid #dde3ee;border-radius:8px;padding:14px 18px;margin-bottom:12px;box-shadow:0 6px 18px rgba(13,45,107,.06);}
         .ctrl-bar .form-select{font-size:.84rem;height:36px;border-color:#ccc;}
         .sec-title{font-weight:700;font-size:.82rem;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;display:flex;align-items:center;gap:7px;margin-bottom:12px;}
         .sec-title::before{content:'';width:8px;height:8px;border-radius:50%;background:var(--gold);flex-shrink:0;}
 
         /* TKB table */
-        .tkb{width:100%;border-collapse:collapse;table-layout:fixed;font-size:.78rem;}
-        .tkb th,.tkb td{border:1px solid #d0d7e3;padding:0;}
+        .tkb{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;font-size:.78rem;background:#fff;}
+        .tkb th,.tkb td{border-right:1px solid #d8e0ec;border-bottom:1px solid #d8e0ec;padding:0;}
 
         /* Header / footer row */
         .tkb thead th,.tkb tfoot th{
             background:var(--navy);color:#fff;
             text-align:center;padding:10px 4px;
             font-weight:600;font-size:.8rem;
+            position:sticky;top:0;z-index:4;
         }
         .tkb thead th.th-today,.tkb tfoot th.th-today{background:#1565c0;}
         .tkb thead th.th-nav,.tkb tfoot th.th-nav{width:42px;cursor:pointer;}
@@ -267,31 +278,36 @@ $classDays = array_unique($classDays);
             width:62px;min-width:62px;text-align:center;font-size:.73rem;
             font-weight:600;color:#0d2d6b;padding:4px 3px;
             border-right:2px solid #d0d7e3;
-            background:#f8f9fc;white-space:nowrap;
+            background:#f8f9fc;white-space:nowrap;position:sticky;left:0;z-index:3;
         }
         .td-period.s-sang{border-left:3px solid #1976d2;background:#f0f7ff;}
         .td-period.s-chieu{border-left:3px solid #f57c00;background:#fff8f0;}
-        .td-period.s-toi{border-left:3px solid #7b1fa2;background:#fdf4ff;}
+        .td-period .session-time{display:block;font-size:.62rem;font-weight:500;color:#667085;margin-top:2px;}
 
         /* Subject cell */
-        .td-sub{height:34px;padding:0;vertical-align:top;position:relative;background:#fff;}
+        .td-sub{height:38px;padding:0;vertical-align:top;position:relative;background:#fff;}
         .td-sub.td-today{background:#fffde7 !important;}
 
         /* Subject card — spans multiple rows via absolute + height */
         .sub-card{
             position:absolute;left:2px;right:2px;top:2px;
-            border-radius:5px;
-            padding:5px 8px;
+            border-radius:7px;
+            padding:6px 8px;
             font-size:.73rem;line-height:1.4;
             overflow:hidden;cursor:pointer;
             border-left:4px solid;
             transition:filter .15s, box-shadow .15s;
             z-index:2;
-            box-shadow:0 1px 4px rgba(0,0,0,.08);
+            box-shadow:0 4px 12px rgba(13,45,107,.12);
         }
         .sub-card:hover{filter:brightness(.94);box-shadow:0 3px 10px rgba(0,0,0,.15);}
         .sub-card .sn{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.75rem;}
         .sub-card .si{font-size:.68rem;margin-top:3px;line-height:1.5;}
+        .tkb-shell{background:#fff;border:1px solid #d0d7e3;border-radius:8px;overflow:auto;box-shadow:0 8px 22px rgba(13,45,107,.07);}
+        .week-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:12px;}
+        .week-summary .item{background:#fff;border:1px solid #dde3ee;border-radius:8px;padding:12px 14px;box-shadow:0 4px 12px rgba(13,45,107,.05);}
+        .week-summary .label{font-size:.72rem;color:#667085;text-transform:uppercase;font-weight:700;}
+        .week-summary .value{font-size:1.1rem;font-weight:800;color:var(--navy);}
 
         /* Timeline */
         .tl-wrap{background:#fff;border:1px solid #dde3ee;border-radius:8px;padding:16px 18px;margin-top:14px;}
@@ -323,6 +339,7 @@ $classDays = array_unique($classDays);
         .mc td.iw.td-today-cal{background:#1565c0;}
 
         @media print{.no-print{display:none!important;}body{background:#fff;}.pw{padding:0;}}
+        @media (max-width: 768px){.week-summary{grid-template-columns:1fr}.pw{padding:10px}.tkb{min-width:920px}}
     </style>
 </head>
 <body>
@@ -335,6 +352,7 @@ $classDays = array_unique($classDays);
                 <span class="fw-bold text-navy"><i class="bi bi-calendar3-week me-2"></i>Thời khóa biểu</span>
             </div>
             <div class="d-flex gap-2 no-print">
+                <a href="/university/student/semester_timetable.php<?php echo $selectedSem ? '?semester_id=' . (int)$selectedSem : ''; ?>" class="btn btn-sm btn-outline-primary"><i class="bi bi-calendar-range me-1"></i>Dạng học kỳ</a>
                 <button onclick="window.print()" class="btn btn-sm btn-outline-secondary"><i class="bi bi-printer me-1"></i>In</button>
                 <a href="/university/login.php?logout=1" class="btn btn-sm btn-outline-danger"><i class="bi bi-box-arrow-right"></i></a>
             </div>
@@ -388,7 +406,21 @@ $classDays = array_unique($classDays);
 <?php else: ?>
 
 <!-- TKB Grid -->
-<div style="background:#fff;border:1px solid #d0d7e3;border-radius:8px;overflow-x:auto;">
+<?php
+$weekSubjectCodes = [];
+foreach ($timetable as $dayRows) {
+    foreach ($dayRows as $item) {
+        $weekSubjectCodes[$item['section_code']] = true;
+    }
+}
+$selectedSemesterSubjectCount = isset($bySemester[$selectedSem]) ? count($bySemester[$selectedSem]['subjects']) : 0;
+?>
+<div class="week-summary no-print">
+    <div class="item"><div class="label">Học kỳ</div><div class="value"><?php echo htmlspecialchars($bySemester[$selectedSem]['info']); ?></div></div>
+    <div class="item"><div class="label">Môn đã đăng ký</div><div class="value"><?php echo (int)$selectedSemesterSubjectCount; ?> môn</div></div>
+    <div class="item"><div class="label">Có lịch trong tuần</div><div class="value"><?php echo count($weekSubjectCodes); ?> môn</div></div>
+</div>
+<div class="tkb-shell">
 <table class="tkb">
 <thead>
 <tr>
@@ -406,15 +438,18 @@ $classDays = array_unique($classDays);
 </thead>
 <tbody>
 <?php
-$sessBorderColor = ['sang'=>'#1976d2','chieu'=>'#f57c00','toi'=>'#7b1fa2'];
-for ($period=1; $period<=16; $period++):
-    $sess = $period<=5 ? 'sang' : ($period<=10 ? 'chieu' : 'toi');
+$sessBorderColor = ['sang'=>'#1976d2','chieu'=>'#f57c00'];
+for ($period=1; $period<=10; $period++):
+    $sess = $period<=5 ? 'sang' : 'chieu';
     $borderTop = in_array($period,[1,6,11]) ? 'border-top:2px solid '.$sessBorderColor[$sess].';' : '';
     $rowBg = in_array($period,[1,6,11]) ? 'background:#f5f8ff;' : '';
 ?>
 <tr style="<?php echo $rowBg; ?>">
     <td class="td-period s-<?php echo $sess; ?>" style="<?php echo $borderTop; ?>">
         Tiết <?php echo $period; ?>
+        <?php if (in_array($period, [1,6], true)): ?>
+        <span class="session-time"><?php echo $SESSION_TIMES[$sess]; ?></span>
+        <?php endif; ?>
     </td>
     <?php foreach ($DAYS as $dn => $dl):
         $dt = $dayDates[$dn] ?? 0;
@@ -429,7 +464,7 @@ for ($period=1; $period<=16; $period++):
             if ($subSess && isset($SESSION_PERIODS[$subSess])):
                 [$pS,$pE] = $SESSION_PERIODS[$subSess];
                 if ($period === $pS):
-                    $cardH = ($pE - $pS + 1) * 34 - 4;
+                    $cardH = ($pE - $pS + 1) * 38 - 4;
                     // Light bg from color
                     $r = hexdec(substr($color,1,2));
                     $g = hexdec(substr($color,3,2));

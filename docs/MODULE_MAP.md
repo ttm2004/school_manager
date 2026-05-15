@@ -118,3 +118,11 @@ Admin quản lý dữ liệu nền và cấu hình hệ thống:
 ## 5. Ý nghĩa thiết kế
 
 Hệ thống được chia theo vai trò vận hành thực tế trong trường đại học. Mỗi phân hệ có phạm vi riêng nhưng liên kết với nhau qua các quy trình nghiệp vụ. Cách tổ chức này giúp người dùng thao tác đúng chức năng, đồng thời giúp người đọc dễ theo dõi luồng dữ liệu từ lúc mở lớp đến khi sinh viên nhận kết quả học tập.
+ 
+## 6. Cap nhat workflow lop hanh chinh va lop hoc phan
+
+- `academic/classes.php`: Phong Dao tao mo lop hanh chinh tu dot tuyen sinh `system` hoac `test`. Chi chan khi dot da `completed` hoac khong co dot phu hop. Sau khi tao lop chi duoc sua ten lop va si so; ma lop, nganh, khoa va che do du lieu la dinh danh he thong.
+- `academic/course_sections.php`: Phong Dao tao tao lop hoc phan tu CTDT theo tung lop hanh chinh cua nganh/khoa, khong tao trung mon/lop/hoc ky da co.
+- `academic/course_sections.php`: Nut `Xep lich/phong` tu dong phan bo ca hoc, khoang tuan hoc va phong cho cac lop hoc phan dang thieu lich/phong trong hoc ky dang chon.
+- `includes/AcademicPolicy.php` va `app/Services/RoomSchedulingService.php`: Chua logic tinh so buoi/so tuan theo tong so tiet, random tuan bat dau trong hoc ky va kiem tra trung phong, giang vien, lop hanh chinh theo khoang ngay hoc.
+- `app/Services/AdmissionsEnrollmentService.php`: Dung cho luong tu dong dang ky HK1 nam nhat; cac hoc ky sau sinh vien tu dang ky.

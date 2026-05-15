@@ -24,20 +24,36 @@ if (!$student) {
     exit();
 }
 
-// Học kỳ hiện tại
-$semester = $conn->query("SELECT * FROM semesters WHERE status='open' ORDER BY id DESC LIMIT 1")->fetch_assoc();
+// Học kỳ hiện tại theo đúng chế độ dữ liệu của sinh viên
+$studentDataMode = ($student['data_mode'] ?? 'system') === 'test' ? 'test' : 'system';
+$semesterModeSql = $studentDataMode === 'test'
+    ? "AND (data_mode = 'test' OR LOWER(semester_name) LIKE '%test%')"
+    : "AND COALESCE(data_mode, 'system') = 'system' AND LOWER(semester_name) NOT LIKE '%test%'";
+$semester = $conn->query("SELECT * FROM semesters WHERE status='open' $semesterModeSql ORDER BY id DESC LIMIT 1")->fetch_assoc();
 
-// Số môn đã đăng ký
-$regCount = $conn->prepare("SELECT COUNT(*) as c FROM student_subjects WHERE student_id=? AND status IN ('registered','auto_enrolled')");
-$regCount->bind_param('i', $student['id']);
-$regCount->execute();
-$regCount = $regCount->get_result()->fetch_assoc()['c'];
+// Số môn đang học trong học kỳ hiện tại để khớp trang đăng ký/TKB.
+if ($semester) {
+    $regCountStmt = $conn->prepare(
+        "SELECT COUNT(*) AS c
+         FROM student_subjects ss
+         JOIN course_sections cs ON cs.id = ss.course_section_id
+         WHERE ss.student_id = ? AND ss.status IN ('registered','auto_enrolled') AND cs.semester_id = ?"
+    );
+    $regCountStmt->bind_param('ii', $student['id'], $semester['id']);
+} else {
+    $regCountStmt = $conn->prepare("SELECT COUNT(*) AS c FROM student_subjects WHERE student_id=? AND status IN ('registered','auto_enrolled')");
+    $regCountStmt->bind_param('i', $student['id']);
+}
+$regCountStmt->execute();
+$regCount = (int)($regCountStmt->get_result()->fetch_assoc()['c'] ?? 0);
+$regCountStmt->close();
 
 // Số môn hoàn thành
-$doneCount = $conn->prepare("SELECT COUNT(*) as c FROM student_subjects WHERE student_id=? AND status='completed'");
-$doneCount->bind_param('i', $student['id']);
-$doneCount->execute();
-$doneCount = $doneCount->get_result()->fetch_assoc()['c'];
+$doneCountStmt = $conn->prepare("SELECT COUNT(*) as c FROM student_subjects WHERE student_id=? AND status='completed'");
+$doneCountStmt->bind_param('i', $student['id']);
+$doneCountStmt->execute();
+$doneCount = (int)($doneCountStmt->get_result()->fetch_assoc()['c'] ?? 0);
+$doneCountStmt->close();
 
 // Điểm trung bình
 $avgStmt = $conn->prepare("SELECT AVG(g.total_score) as avg FROM grades g JOIN student_subjects ss ON g.student_subject_id=ss.id WHERE ss.student_id=? AND g.total_score IS NOT NULL");

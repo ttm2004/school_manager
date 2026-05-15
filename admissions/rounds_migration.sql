@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS `admission_rounds` (
     `supp_enroll_deadline` DATETIME NULL COMMENT 'Hạn nhập học bổ sung',
     `supp_score_bonus`    DECIMAL(4,2) DEFAULT 0 COMMENT 'Điểm chuẩn bổ sung cao hơn bao nhiêu so với chính thức',
 
-    `status`              ENUM('draft','open','reviewing','enrolling','supplementary','completed') DEFAULT 'draft',
+    `status`              ENUM('draft','open','reviewing','results','enrolling','supplementary','completed') DEFAULT 'draft',
     `notes`               TEXT,
     `created_by`          INT COMMENT 'user_id admin tạo',
     `created_at`          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

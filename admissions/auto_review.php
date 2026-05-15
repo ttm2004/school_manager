@@ -136,25 +136,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // ── 4. DUYỆT / TỪ CHỐI THỦ CÔNG ────────────────────────
     if ($action === 'bulk_approve' || $action === 'bulk_reject') {
-        if (!hasPermission('admissions', 'approve_application')) {
-            $error = 'Bạn không có quyền duyệt hồ sơ.';
-        } elseif ($reviewLocked) {
-            $error = 'Chức năng chỉ khả dụng trong giai đoạn xét tuyển.';
-        } else {
-            $ids = $_POST['ids'] ?? [];
-            $newSt = $action === 'bulk_approve' ? 'approved' : 'rejected';
-            $cnt = 0;
-            foreach ($ids as $id) {
-                $id = intval($id);
-                if ($id) {
-                    $upd = $conn->prepare("UPDATE admission_applications SET status=? WHERE id=? AND data_mode=?");
-                    $upd->bind_param('sis', $newSt, $id, $filter_mode);
-                    $upd->execute(); $upd->close(); $cnt++;
-                }
-            }
-            $label = $action === 'bulk_approve' ? 'duyệt' : 'từ chối';
-            $success = "Đã $label <strong>$cnt</strong> hồ sơ.";
-        }
+        $error = 'Trang xét tuyển chỉ tạo bản xem trước. Vui lòng chọn ngành trong kết quả xét tuyển rồi bấm Công bố để cập nhật trạng thái hồ sơ.';
     }
 
     // ── PRG: redirect sau POST để tránh F5 gửi lại form ──
@@ -236,6 +218,7 @@ $lockMap = [
     'no_round'       => 'Không có đợt tuyển sinh nào đang hoạt động.',
     'before_reg'     => 'Chưa đến thời gian nhận hồ sơ.',
     'reg_open'       => 'Đang nhận hồ sơ — chưa đến giai đoạn xét tuyển.',
+    'results'        => 'Đã công bố kết quả — chuyển sang trạng thái Đang nhập học để làm thủ tục nhập học.',
     'enrolling'      => 'Đã qua giai đoạn xét tuyển — đang trong thời gian nhập học.',
     'supp_enrolling' => 'Đang trong giai đoạn nhập học bổ sung.',
     'after_enroll'   => 'Đã hết hạn nhập học.',
@@ -548,27 +531,15 @@ document.addEventListener('DOMContentLoaded', function() {
             <div class="card-body p-0">
                 <div id="bulkWrapper">
                     <div class="p-2 border-bottom d-flex gap-2 flex-wrap align-items-center">
-                        <?php if (hasPermission('admissions','approve_application') && !$reviewLocked): ?>
-                        <button type="button" class="btn btn-sm btn-success" onclick="bulkAction('bulk_approve')">
-                            <i class="bi bi-check-all me-1"></i>Duyệt đã chọn
-                        </button>
-                        <button type="button" class="btn btn-sm btn-danger" onclick="bulkAction('bulk_reject')">
-                            <i class="bi bi-x-lg me-1"></i>Từ chối đã chọn
-                        </button>
-                        <?php elseif ($reviewLocked): ?>
-                        <span class="text-muted small"><i class="bi bi-lock me-1"></i>Chỉ khả dụng trong giai đoạn xét tuyển</span>
-                        <?php else: ?>
-                        <span class="text-muted small"><i class="bi bi-lock me-1"></i>Không có quyền duyệt</span>
-                        <?php endif; ?>
-                        <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" onclick="toggleAll()">
-                            <i class="bi bi-check2-square me-1"></i>Chọn tất cả
-                        </button>
+                        <span class="text-muted small">
+                            <i class="bi bi-info-circle me-1"></i>
+                            Danh sách này chỉ để kiểm tra hồ sơ chờ xét. Trạng thái chỉ đổi khi công bố kết quả theo ngành ở bản xem trước.
+                        </span>
                     </div>
                     <div class="table-responsive" style="max-height:420px;overflow-y:auto;">
                         <table class="table table-hover table-sm mb-0">
                             <thead style="position:sticky;top:0;z-index:1;">
                                 <tr>
-                                    <th width="30"><input type="checkbox" id="checkAll"></th>
                                     <th>Họ tên</th><th>Ngành</th>
                                     <th class="text-center">Toán</th>
                                     <th class="text-center">Văn</th>
@@ -581,7 +552,6 @@ document.addEventListener('DOMContentLoaded', function() {
                             <?php if ($pending && $pending->num_rows > 0):
                                 while ($app = $pending->fetch_assoc()): ?>
                             <tr>
-                                <td><input type="checkbox" name="ids[]" value="<?php echo $app['id']; ?>" class="app-check"></td>
                                 <td>
                                     <div class="fw-semibold" style="font-size:.82rem;"><?php echo htmlspecialchars($app['full_name']); ?></div>
                                     <div class="text-muted" style="font-size:.7rem;"><?php echo htmlspecialchars($app['email']); ?></div>
@@ -598,7 +568,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 </td>
                             </tr>
                             <?php endwhile; else: ?>
-                            <tr><td colspan="8" class="text-center text-muted py-5">
+                            <tr><td colspan="7" class="text-center text-muted py-5">
                                 <i class="bi bi-check2-all fs-2 d-block mb-2 text-success"></i>
                                 Không có hồ sơ nào đang chờ xét
                             </td></tr>
@@ -646,6 +616,7 @@ function setLoading(btn, loading) {
 }
 
 let currentPreviewToken = '';
+let currentPreviewResults = [];
 
 function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[ch]));
@@ -674,9 +645,11 @@ function renderCandidateRows(list, emptyText) {
 
 function showResults(results, previewToken = '') {
     currentPreviewToken = previewToken;
+    currentPreviewResults = Array.isArray(results) ? results : [];
     document.getElementById('autoReviewPreviewCard')?.remove();
 
-    let totalPublish = results.reduce((sum, r) => sum + Number(r.total || 0), 0);
+    let totalPublish = currentPreviewResults.reduce((sum, r) => sum + Number(r.total || 0), 0);
+    let checkedCount = currentPreviewResults.length;
     let html = `<div class="card mb-4 border-0 shadow-sm" id="autoReviewPreviewCard">
         <div class="card-header d-flex align-items-center justify-content-between gap-2" style="background:linear-gradient(135deg,#0d2d6b,#1a4fa0);">
             <div><i class="bi bi-clipboard2-data-fill fs-5 me-2"></i><span class="fw-bold">B&#7843;n xem tr&#432;&#7899;c k&#7871;t qu&#7843; x&#233;t tuy&#7875;n</span></div>
@@ -686,81 +659,150 @@ function showResults(results, previewToken = '') {
             <div class="alert alert-warning d-flex align-items-start gap-2 py-2">
                 <i class="bi bi-exclamation-triangle-fill mt-1"></i>
                 <div class="small">&#272;&#226;y l&#224; k&#7871;t qu&#7843; xem tr&#432;&#7899;c. H&#227;y ki&#7875;m tra ch&#7881; ti&#234;u, &#273;i&#7875;m chu&#7849;n v&#224; danh s&#225;ch th&#237; sinh. H&#7891; s&#417; ch&#432;a &#273;&#7893;i tr&#7841;ng th&#225;i cho t&#7899;i khi b&#7845;m <strong>C&#244;ng b&#7889; k&#7871;t qu&#7843;</strong>.</div>
-            </div>`;
+            </div>
+            <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+                <div class="small text-muted">
+                    <strong>${currentPreviewResults.length}</strong> ng&#224;nh &#273;&#227; x&#233;t, <strong>${totalPublish}</strong> h&#7891; s&#417; trong b&#7843;n xem tr&#432;&#7899;c.
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="btnSelectAllPreviewMajors">
+                    <i class="bi bi-check2-square me-1"></i>Ch&#7885;n t&#7845;t c&#7843; ng&#224;nh
+                </button>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-sm table-hover align-middle mb-3">
+                    <thead>
+                        <tr>
+                            <th style="width:36px;"><input type="checkbox" id="previewCheckAll" ${checkedCount ? 'checked' : ''}></th>
+                            <th>Ng&#224;nh &#273;&#227; x&#233;t</th>
+                            <th class="text-center">Ch&#7881; ti&#234;u</th>
+                            <th class="text-center">&#272;i&#7875;m chu&#7849;n</th>
+                            <th class="text-center">&#272;&#7853;u</th>
+                            <th class="text-center">R&#7899;t</th>
+                            <th class="text-center">T&#7893;ng</th>
+                            <th class="text-end">Chi ti&#7871;t</th>
+                        </tr>
+                    </thead>
+                    <tbody>`;
 
-    results.forEach((r, idx) => {
-        const approvedId = `previewApproved${idx}`;
-        const rejectedId = `previewRejected${idx}`;
-        html += `<div class="border rounded mb-3 overflow-hidden">
-            <div class="p-3 bg-light d-flex align-items-center justify-content-between flex-wrap gap-2">
-                <div>
-                    <span class="fw-bold text-navy">${escapeHtml(r.major_name)}</span>
-                    <span class="badge bg-secondary ms-2">&#272;i&#7875;m chu&#7849;n: ${Number(r.threshold || 0).toFixed(2)}</span>
-                    <span class="badge bg-info ms-1">Ch&#7881; ti&#234;u: ${r.quota || 0}</span>
-                </div>
-                <div class="d-flex gap-2">
-                    <span class="badge bg-success fs-6 px-3"><i class="bi bi-check-circle me-1"></i>${r.approved} &#272;&#7853;u</span>
-                    <span class="badge bg-danger fs-6 px-3"><i class="bi bi-x-circle me-1"></i>${r.rejected} R&#7899;t</span>
-                    <span class="badge bg-secondary fs-6 px-3"><i class="bi bi-people me-1"></i>${r.total} T&#7893;ng</span>
-                </div>
-            </div>
-            <div class="p-3">
-                <div class="d-flex gap-2 mb-2">
-                    <button class="btn btn-sm btn-outline-success" type="button" data-bs-toggle="collapse" data-bs-target="#${approvedId}">
-                        <i class="bi bi-chevron-down me-1"></i>Danh s&#225;ch &#273;&#7853;u (${r.approved})
-                    </button>
-                    <button class="btn btn-sm btn-outline-danger" type="button" data-bs-toggle="collapse" data-bs-target="#${rejectedId}">
-                        <i class="bi bi-chevron-down me-1"></i>Danh s&#225;ch r&#7899;t (${r.rejected})
-                    </button>
-                </div>
-                <div class="collapse show" id="${approvedId}">
-                    <div class="table-responsive mb-3" style="max-height:280px;overflow:auto;">
-                        <table class="table table-sm table-hover align-middle mb-0">
-                            <thead><tr><th class="text-center">H&#7841;ng</th><th>Th&#237; sinh</th><th class="text-center">To&#225;n</th><th class="text-center">V&#259;n</th><th class="text-center">Anh</th><th class="text-center">T&#7893;ng</th><th class="text-center">KQ</th><th class="text-center">ID</th></tr></thead>
-                            <tbody>${renderCandidateRows(r.approved_list, 'Kh&#244;ng c&#243; th&#237; sinh &#273;&#7853;u')}</tbody>
-                        </table>
+    currentPreviewResults.forEach((r, idx) => {
+        const detailId = `previewMajorDetail${idx}`;
+        html += `<tr>
+            <td><input type="checkbox" class="preview-major-check" value="${Number(r.major_id || 0)}" checked></td>
+            <td>
+                <div class="fw-semibold text-navy">${escapeHtml(r.major_name || '--')}</div>
+                <div class="text-muted small">${escapeHtml(r.major_code || '')}</div>
+            </td>
+            <td class="text-center">${Number(r.quota || 0)}</td>
+            <td class="text-center fw-bold">${Number(r.threshold || 0).toFixed(2)}</td>
+            <td class="text-center"><span class="badge bg-success">${Number(r.approved || 0)} &#273;&#7853;u</span></td>
+            <td class="text-center"><span class="badge bg-danger">${Number(r.rejected || 0)} r&#7899;t</span></td>
+            <td class="text-center"><span class="badge bg-secondary">${Number(r.total || 0)}</span></td>
+            <td class="text-end">
+                <button class="btn btn-sm btn-outline-navy" type="button" data-bs-toggle="collapse" data-bs-target="#${detailId}">
+                    <i class="bi bi-list-ul me-1"></i>Chi ti&#7871;t
+                </button>
+            </td>
+        </tr>
+        <tr class="collapse" id="${detailId}">
+            <td colspan="8" class="bg-light">
+                <div class="row g-3 p-2">
+                    <div class="col-lg-6">
+                        <div class="fw-semibold text-success small mb-1">H&#7891; s&#417; &#273;&#7853;u (${Number(r.approved || 0)})</div>
+                        <div class="table-responsive" style="max-height:280px;overflow:auto;">
+                            <table class="table table-sm table-hover align-middle mb-0 bg-white">
+                                <thead><tr><th class="text-center">H&#7841;ng</th><th>Th&#237; sinh</th><th class="text-center">To&#225;n</th><th class="text-center">V&#259;n</th><th class="text-center">Anh</th><th class="text-center">T&#7893;ng</th><th class="text-center">KQ</th><th class="text-center">ID</th></tr></thead>
+                                <tbody>${renderCandidateRows(r.approved_list, 'Kh&#244;ng c&#243; th&#237; sinh &#273;&#7853;u')}</tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="col-lg-6">
+                        <div class="fw-semibold text-danger small mb-1">H&#7891; s&#417; r&#7899;t (${Number(r.rejected || 0)})</div>
+                        <div class="table-responsive" style="max-height:280px;overflow:auto;">
+                            <table class="table table-sm table-hover align-middle mb-0 bg-white">
+                                <thead><tr><th class="text-center">H&#7841;ng</th><th>Th&#237; sinh</th><th class="text-center">To&#225;n</th><th class="text-center">V&#259;n</th><th class="text-center">Anh</th><th class="text-center">T&#7893;ng</th><th class="text-center">KQ</th><th class="text-center">ID</th></tr></thead>
+                                <tbody>${renderCandidateRows(r.rejected_list, 'Kh&#244;ng c&#243; th&#237; sinh r&#7899;t')}</tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
-                <div class="collapse" id="${rejectedId}">
-                    <div class="table-responsive" style="max-height:280px;overflow:auto;">
-                        <table class="table table-sm table-hover align-middle mb-0">
-                            <thead><tr><th class="text-center">H&#7841;ng</th><th>Th&#237; sinh</th><th class="text-center">To&#225;n</th><th class="text-center">V&#259;n</th><th class="text-center">Anh</th><th class="text-center">T&#7893;ng</th><th class="text-center">KQ</th><th class="text-center">ID</th></tr></thead>
-                            <tbody>${renderCandidateRows(r.rejected_list, 'Kh&#244;ng c&#243; th&#237; sinh r&#7899;t')}</tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-        </div>`;
+            </td>
+        </tr>`;
     });
 
-    html += `<div class="d-flex justify-content-end gap-2">
+    html += `</tbody></table></div>
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <div class="small text-muted" id="previewPublishSummary">${checkedCount} ng&#224;nh &#273;ang &#273;&#432;&#7907;c ch&#7885;n &#273;&#7875; c&#244;ng b&#7889;.</div>
+                <div class="d-flex gap-2">
                 <button type="button" class="btn btn-outline-secondary" onclick="document.getElementById('autoReviewPreviewCard')?.remove(); currentPreviewToken='';">
                     <i class="bi bi-x-lg me-1"></i>H&#7911;y b&#7843;n xem tr&#432;&#7899;c
                 </button>
                 <button type="button" class="btn btn-success" id="btnPublishPreview" ${totalPublish ? '' : 'disabled'}>
-                    <i class="bi bi-megaphone-fill me-1"></i>C&#244;ng b&#7889; k&#7871;t qu&#7843; (${totalPublish} h&#7891; s&#417;)
+                    <i class="bi bi-megaphone-fill me-1"></i>C&#244;ng b&#7889; ng&#224;nh &#273;&#227; ch&#7885;n
                 </button>
+                </div>
             </div>
         </div>
     </div>`;
 
+    const mainRow = document.querySelector('.row.g-4.mb-4');
     const content = document.querySelector('.adm-content');
-    if (content) content.insertAdjacentHTML('afterbegin', html);
+    if (mainRow) mainRow.insertAdjacentHTML('afterend', html);
+    else if (content) content.insertAdjacentHTML('afterbegin', html);
     document.getElementById('autoReviewPreviewCard')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     document.getElementById('btnPublishPreview')?.addEventListener('click', publishPreview);
+    document.getElementById('previewCheckAll')?.addEventListener('change', function() {
+        document.querySelectorAll('.preview-major-check').forEach(cb => cb.checked = this.checked);
+        updatePreviewPublishSummary();
+    });
+    document.getElementById('btnSelectAllPreviewMajors')?.addEventListener('click', function() {
+        const checks = [...document.querySelectorAll('.preview-major-check')];
+        const allChecked = checks.length && checks.every(cb => cb.checked);
+        checks.forEach(cb => cb.checked = !allChecked);
+        const master = document.getElementById('previewCheckAll');
+        if (master) master.checked = !allChecked;
+        updatePreviewPublishSummary();
+    });
+    document.querySelectorAll('.preview-major-check').forEach(cb => cb.addEventListener('change', updatePreviewPublishSummary));
+    updatePreviewPublishSummary();
+}
+
+function getSelectedPreviewMajorIds() {
+    return [...document.querySelectorAll('.preview-major-check:checked')]
+        .map(cb => Number(cb.value))
+        .filter(id => id > 0);
+}
+
+function updatePreviewPublishSummary() {
+    const selectedIds = getSelectedPreviewMajorIds();
+    const selectedSet = new Set(selectedIds);
+    const selectedTotal = currentPreviewResults
+        .filter(r => selectedSet.has(Number(r.major_id || 0)))
+        .reduce((sum, r) => sum + Number(r.total || 0), 0);
+    const summary = document.getElementById('previewPublishSummary');
+    if (summary) summary.textContent = `${selectedIds.length} ngành, ${selectedTotal} hồ sơ đang được chọn để công bố.`;
+    const btn = document.getElementById('btnPublishPreview');
+    if (btn) btn.disabled = selectedIds.length === 0 || selectedTotal === 0;
+    const master = document.getElementById('previewCheckAll');
+    if (master) master.checked = selectedIds.length > 0 && selectedIds.length === document.querySelectorAll('.preview-major-check').length;
 }
 
 function publishPreview() {
     if (!currentPreviewToken) { showToast('error', 'Kh\u00f4ng t\u00ecm th\u1ea5y b\u1ea3n xem tr\u01b0\u1edbc. Vui l\u00f2ng ch\u1ea1y l\u1ea1i x\u00e9t tuy\u1ec3n.'); return; }
-    if (!confirm('C\u00f4ng b\u1ed1 k\u1ebft qu\u1ea3 n\u00e0y? Sau khi c\u00f4ng b\u1ed1, tr\u1ea1ng th\u00e1i h\u1ed3 s\u01a1 s\u1ebd \u0111\u01b0\u1ee3c c\u1eadp nh\u1eadt \u0110\u1eadu/R\u1edbt.')) return;
+    const majorIds = getSelectedPreviewMajorIds();
+    if (!majorIds.length) { showToast('error', 'Vui lòng chọn ít nhất một ngành để công bố.'); return; }
+    if (!confirm(`C\u00f4ng b\u1ed1 k\u1ebft qu\u1ea3 cho ${majorIds.length} ng\u00e0nh \u0111\u00e3 ch\u1ecdn? Sau khi c\u00f4ng b\u1ed1, tr\u1ea1ng th\u00e1i h\u1ed3 s\u01a1 c\u1ee7a c\u00e1c ng\u00e0nh n\u00e0y s\u1ebd \u0111\u01b0\u1ee3c c\u1eadp nh\u1eadt \u0110\u1eadu/R\u1edbt.`)) return;
     const btn = document.getElementById('btnPublishPreview');
     setLoading(btn, true);
-    admFetch({ action: 'publish_auto_review', preview_token: currentPreviewToken, data_mode: <?php echo json_encode($filter_mode); ?> })
+    admFetch({ action: 'publish_auto_review', preview_token: currentPreviewToken, major_ids: JSON.stringify(majorIds), data_mode: <?php echo json_encode($filter_mode); ?> })
         .then(res => {
             setLoading(btn, false);
             if (res.success) {
                 showToast('success', res.message);
-                setTimeout(() => window.location.href = 'auto_review.php?mode=<?php echo urlencode($filter_mode); ?>', 900);
+                if (res.data?.remaining_results?.length) {
+                    showResults(res.data.remaining_results, currentPreviewToken);
+                } else {
+                    setTimeout(() => window.location.href = 'auto_review.php?mode=<?php echo urlencode($filter_mode); ?>', 900);
+                }
             } else {
                 showToast('error', res.message);
             }
@@ -823,39 +865,11 @@ function clearImport(btn) {
 
 // Bulk approve/reject
 function bulkAction(action) {
-    const checked = [...document.querySelectorAll('.app-check:checked')].map(c => c.value);
-    if (!checked.length) { showToast('error', 'Vui lòng chọn ít nhất một hồ sơ.'); return; }
-    const label = action === 'bulk_approve' ? 'duyệt' : 'từ chối';
-    if (!confirm(`Xác nhận ${label} ${checked.length} hồ sơ đã chọn?`)) return;
-
-    const fd = new FormData();
-    fd.append('_csrf_token', CSRF);
-    fd.append('module', 'applications');
-    fd.append('action', action === 'bulk_approve' ? 'bulk_approve' : 'bulk_reject');
-    fd.append('data_mode', <?php echo json_encode($filter_mode); ?>);
-    checked.forEach(id => fd.append('ids[]', id));
-
-    fetch('/university/admissions/api/actions.php', {
-        method: 'POST', body: fd, credentials: 'same-origin'
-    }).then(r => r.json()).then(res => {
-        if (res.success) {
-            showToast('success', res.message);
-            // Xóa các dòng đã xử lý khỏi bảng
-            checked.forEach(id => {
-                const cb = document.querySelector(`.app-check[value="${id}"]`);
-                if (cb) cb.closest('tr')?.remove();
-            });
-        } else { showToast('error', res.message); }
-    }).catch(() => showToast('error', 'Lỗi kết nối.'));
+    showToast('error', 'Trang này chỉ cập nhật trạng thái khi công bố kết quả theo ngành.');
 }
 
 function toggleAll() {
-    const checks = document.querySelectorAll('.app-check');
-    const allChecked = [...checks].every(c => c.checked);
-    checks.forEach(c => c.checked = !allChecked);
+    return false;
 }
-document.getElementById('checkAll')?.addEventListener('change', function() {
-    document.querySelectorAll('.app-check').forEach(c => c.checked = this.checked);
-});
 </script>
 <?php include __DIR__ . '/includes/footer.php'; ?>

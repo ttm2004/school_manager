@@ -78,6 +78,13 @@ include 'includes/header.php';
         </nav>
         <h1><i class="bi bi-pencil-square me-2"></i>Thông tin tuyển sinh</h1>
         <p class="text-white-50 mb-0">Đăng ký xét tuyển vào Trường Đại học Thủ Dầu Một năm <?php echo date('Y'); ?></p>
+        <?php if (isAnyAdmissionLookupOpen()): ?>
+        <div class="mt-3">
+            <a href="/university/admission_lookup.php" class="btn btn-gold">
+                <i class="bi bi-search-heart me-2"></i>Tra cứu kết quả tuyển sinh
+            </a>
+        </div>
+        <?php endif; ?>
     </div>
 </div>
 

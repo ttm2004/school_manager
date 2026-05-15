@@ -41,6 +41,11 @@ $totalFaculties = $conn->query("SELECT COUNT(*) as c FROM faculties")->fetch_ass
                     <a href="/university/admission.php" class="btn btn-gold btn-lg px-4 py-2">
                         <i class="bi bi-pencil-square me-2"></i>Đăng ký tuyển sinh
                     </a>
+                    <?php if (isAnyAdmissionLookupOpen()): ?>
+                    <a href="/university/admission_lookup.php" class="btn btn-outline-light btn-lg px-4 py-2">
+                        <i class="bi bi-search-heart me-2"></i>Tra cứu kết quả
+                    </a>
+                    <?php endif; ?>
                     <a href="/university/about.php" class="btn btn-outline-light btn-lg px-4 py-2">
                         <i class="bi bi-info-circle me-2"></i>Tìm hiểu thêm
                     </a>

@@ -10,6 +10,11 @@ requireRole('admin');
 
 header('Content-Type: application/json; charset=utf-8');
 
+$commonCol = $conn->query("SHOW COLUMNS FROM subjects LIKE 'is_common'");
+if ($commonCol && $commonCol->num_rows === 0) {
+    $conn->query("ALTER TABLE subjects ADD COLUMN is_common TINYINT(1) NOT NULL DEFAULT 0");
+}
+
 function importResponse(bool $success, string $message, array $extra = []): never
 {
     echo json_encode(array_merge([
@@ -24,7 +29,9 @@ function normalizeCsvText(?string $value): string
     $value = trim((string)$value);
     if ($value === '') return '';
 
-    $encoding = mb_detect_encoding($value, ['UTF-8', 'Windows-1258', 'ISO-8859-1'], true);
+    $supported = array_map('strtoupper', mb_list_encodings());
+    $candidates = array_values(array_filter(['UTF-8', 'Windows-1258', 'CP1258', 'ISO-8859-1'], fn($enc) => in_array(strtoupper($enc), $supported, true)));
+    $encoding = mb_detect_encoding($value, $candidates ?: ['UTF-8', 'ISO-8859-1'], true);
     if ($encoding && $encoding !== 'UTF-8') {
         $converted = @mb_convert_encoding($value, 'UTF-8', $encoding);
         if ($converted !== false) $value = $converted;
@@ -41,6 +48,12 @@ function getSemesterOrder(string $semLabel, string $yearLabel): int
 
     $baseYear = 2022;
     return (($yearStart - $baseYear) * 3) + $semNum;
+}
+
+function normalizedSemesterLabelFromOrder(int $semesterOrder): string
+{
+    $slot = (($semesterOrder - 1) % 3) + 1;
+    return 'Học kỳ ' . ($slot === 2 ? 2 : 1);
 }
 
 function normalizeCurriculumImportType(string $subjectCode, bool $isMandatory): string
@@ -99,7 +112,7 @@ if ($mode === 'replace') {
     $stmtDel->execute();
     $stmtDel->close();
 
-    $stmtDelS = $conn->prepare("DELETE FROM subjects WHERE major_id = ?");
+    $stmtDelS = $conn->prepare("DELETE FROM subjects WHERE major_id = ? AND COALESCE(is_common,0)=0");
     $stmtDelS->bind_param('i', $majorId);
     $stmtDelS->execute();
     $stmtDelS->close();
@@ -132,9 +145,13 @@ foreach ($rows as $i => $row) {
 
     $subjectTypeNew = normalizeCurriculumImportType($subjectCode, (bool)$isMandatory);
     $subjectTypeVi  = $isMandatory ? 'Bắt buộc' : 'Tự chọn';
+    if ((int)preg_replace('/\D/', '', $semesterLabel) === 3) {
+        continue;
+    }
     $semesterOrder  = getSemesterOrder($semesterLabel, $yearLabel);
+    $semesterLabel  = normalizedSemesterLabelFromOrder($semesterOrder);
 
-    $stmtChk = $conn->prepare("SELECT id FROM subjects WHERE subject_code = ? LIMIT 1");
+    $stmtChk = $conn->prepare("SELECT id, is_common FROM subjects WHERE subject_code = ? LIMIT 1");
     $stmtChk->bind_param('s', $subjectCode);
     $stmtChk->execute();
     $existing = $stmtChk->get_result()->fetch_assoc();
@@ -145,12 +162,13 @@ foreach ($rows as $i => $row) {
             "UPDATE subjects SET
                 subject_name=?, credits=?, theory_periods=?, practice_periods=?,
                 total_periods=?, subject_type_new=?, is_mandatory=?,
-                semester_order=?, major_id=?, subject_type=?
+                semester_order=?, major_id=?, subject_type=?, is_common=?
              WHERE id=?"
         );
         $existingId = (int)$existing['id'];
+        $isCommon = (int)($existing['is_common'] ?? 0);
         $stmtUpd->bind_param(
-            'siiiisiiisi',
+            'siiiisiiisii',
             $subjectName,
             $credits,
             $theoryPeriods,
@@ -161,6 +179,7 @@ foreach ($rows as $i => $row) {
             $semesterOrder,
             $majorId,
             $subjectTypeVi,
+            $isCommon,
             $existingId
         );
         $stmtUpd->execute();
@@ -171,8 +190,8 @@ foreach ($rows as $i => $row) {
         $stmtIns = $conn->prepare(
             "INSERT INTO subjects
                 (major_id, subject_code, subject_name, credits, theory_periods, practice_periods,
-                 total_periods, subject_type_new, is_mandatory, semester_order, subject_type)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                 total_periods, subject_type_new, is_mandatory, semester_order, subject_type, is_common)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,0)"
         );
         $stmtIns->bind_param(
             'issiiiisiis',

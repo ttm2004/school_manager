@@ -88,6 +88,7 @@ $methodMap = [
     'online' => 'Online',
     'other' => 'Khac',
 ];
+$flash = getFlash();
 ?>
 <!DOCTYPE html>
 <html lang="vi">
@@ -115,6 +116,17 @@ $methodMap = [
         </div>
 
         <div class="student-content">
+            <?php if ($flash): ?>
+            <div class="alert alert-<?php echo htmlspecialchars($flash['type']); ?> alert-dismissible fade show">
+                <i class="bi bi-exclamation-circle-fill me-2"></i><?php echo htmlspecialchars($flash['message']); ?>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+            <?php elseif (isset($_GET['locked'])): ?>
+            <div class="alert alert-danger">
+                <i class="bi bi-lock-fill me-2"></i>
+                Chức năng này đang bị khóa do còn học phí quá hạn. Vui lòng hoàn tất thanh toán để tiếp tục sử dụng.
+            </div>
+            <?php endif; ?>
             <?php if (!$tableExists): ?>
             <div class="alert alert-warning">
                 <i class="bi bi-exclamation-triangle-fill me-2"></i>

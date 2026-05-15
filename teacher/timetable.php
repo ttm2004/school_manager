@@ -20,11 +20,12 @@ if ($colCheck->num_rows == 0) {
 // Lấy tất cả lớp học phần được phân công kèm lịch học
 $stmt = $conn->prepare("
     SELECT cs.id as section_id, cs.section_code, cs.schedule_text, cs.schedule_data,
-           cs.day_sessions, cs.start_date, cs.end_date,
+           cs.day_sessions, cs.start_date, cs.end_date, cs.data_mode as section_data_mode,
            cs.room, cs.max_students, cs.current_students, cs.status,
            s.subject_name, s.credits, s.subject_code,
            COALESCE(NULLIF(s.total_periods,0), s.theory_periods + s.practice_periods, s.credits * 15, 45) AS total_periods,
-           sm.semester_name, sm.school_year, sm.id as semester_id, sm.start_date as sem_start, sm.end_date as sem_end,
+           sm.semester_name, sm.school_year, sm.data_mode as semester_data_mode,
+           sm.id as semester_id, sm.start_date as sem_start, sm.end_date as sem_end,
            sm.grade_submit_deadline
     FROM course_sections cs
     JOIN subjects s ON cs.subject_id = s.id
@@ -67,7 +68,7 @@ function parseScheduleText(string $text): array {
         // Xác định buổi theo tiết
         if ($periodStart <= 5)      $session = 'sang';
         elseif ($periodStart <= 10) $session = 'chieu';
-        else                        $session = 'toi';
+        else                        continue;
         $slots[] = ['day' => $dayNum, 'session' => $session, 'period_start' => $periodStart];
     }
     return $slots;
@@ -80,6 +81,9 @@ foreach ($allCourses as $c) {
     $bySemester[$key]['info']       = $c['semester_name'] . ' ' . $c['school_year'];
     $bySemester[$key]['start_date'] = $c['sem_start'];
     $bySemester[$key]['end_date']   = $c['sem_end'];
+    $bySemester[$key]['data_mode']  = (($c['semester_data_mode'] ?? 'system') === 'test' || ($c['section_data_mode'] ?? 'system') === 'test')
+        ? 'test'
+        : ($bySemester[$key]['data_mode'] ?? 'system');
     $bySemester[$key]['courses'][]  = $c;
 }
 
@@ -93,20 +97,20 @@ if (isset($bySemester[$selectedSem])) {
 }
 
 $SESSIONS = [
-    'sang'  => ['label'=>'Sáng',  'color'=>'#e3f2fd','border'=>'#1976d2','text'=>'#0d47a1','time'=>'7:00 - 11:30'],
-    'chieu' => ['label'=>'Chiều', 'color'=>'#fff3e0','border'=>'#f57c00','text'=>'#e65100','time'=>'12:30 - 17:00'],
-    'toi'   => ['label'=>'Tối',   'color'=>'#f3e5f5','border'=>'#7b1fa2','text'=>'#4a148c','time'=>'17:30 - 22:00'],
+    'sang'  => ['label'=>'Sáng',  'color'=>'#e3f2fd','border'=>'#1976d2','text'=>'#0d47a1','time'=>'7h00 - 11h20'],
+    'chieu' => ['label'=>'Chiều', 'color'=>'#fff3e0','border'=>'#f57c00','text'=>'#e65100','time'=>'12h30 - 16h50'],
 ];
 $DAYS = [2=>'Thứ 2',3=>'Thứ 3',4=>'Thứ 4',5=>'Thứ 5',6=>'Thứ 6',7=>'Thứ 7',8=>'Chủ nhật'];
 
 if (isset($bySemester[$selectedSem])) {
     foreach ($bySemester[$selectedSem]['courses'] as &$c) {
+        $limitEnd = $c['end_date'] ?: ($bySemester[$selectedSem]['end_date'] ?? null);
         $dates = academicScheduleSectionDates(
             $c['start_date'] ?: ($c['sem_start'] ?? null),
             $c['day_sessions'] ?? '',
             (int)($c['total_periods'] ?? 45),
             5,
-            $bySemester[$selectedSem]['end_date'] ?? null
+            $limitEnd
         );
         if ($dates) {
             $dateSessions = [];
@@ -158,8 +162,11 @@ $dow = (int)date('N', $semStartTs);
 if ($dow != 1) $semStartTs = strtotime('next monday', $semStartTs);
 
 $totalWeeks = 20;
-if ($semEndTs) {
-    $totalWeeks = max(1, (int)ceil(($semEndTs - $semStartTs + 86400) / (7 * 86400)));
+$timetableEndTs = isset($bySemester[$selectedSem])
+    ? academicTimetableResolveEndTs($bySemester[$selectedSem], $bySemester[$selectedSem]['courses'] ?? [])
+    : $semEndTs;
+if ($timetableEndTs) {
+    $totalWeeks = max(1, (int)ceil(($timetableEndTs - $semStartTs + 86400) / (7 * 86400)));
 }
 
 $nowWeek     = max(0, (int)floor((time() - $semStartTs) / (7 * 86400)));
@@ -294,10 +301,38 @@ $qString = $qParams ? '&' . http_build_query($qParams) : '';
             cursor: pointer;
             transition: transform 0.1s;
             min-height: 150px;
+            position: relative;
         }
         .subject-card:hover { transform: scale(1.02); }
         .subject-card .sub-name { font-weight: 700; line-height: 1.2; }
         .subject-card .sub-info { color: #555; font-size: 0.72rem; margin-top: 2px; }
+        .subject-actions {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            display: flex;
+            gap: 4px;
+            opacity: 0;
+            transform: translateY(-3px);
+            transition: opacity .15s ease, transform .15s ease;
+            z-index: 3;
+        }
+        .subject-card:hover .subject-actions,
+        .subject-card:focus-within .subject-actions {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .subject-actions .btn {
+            width: 28px;
+            height: 28px;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: #fff;
+            border-color: #c9d4e5;
+            box-shadow: 0 3px 10px rgba(13,45,107,.12);
+        }
         .legend-dot { width: 14px; height: 14px; border-radius: 3px; display: inline-block; }
         .session-time { font-size: 0.7rem; color: #888; font-weight: normal; }
         @media print {
@@ -446,6 +481,28 @@ $qString = $qParams ? '&' . http_build_query($qParams) : '';
                                                  style="background:<?php echo $color; ?>18; border-left-color:<?php echo $color; ?>;"
                                                  data-bs-toggle="tooltip"
                                                  title="<?php echo htmlspecialchars($c['subject_name'] . ' | ' . $c['section_code'] . ' | ' . ($c['_display_room'] ?? $c['room']) . ' | ' . $c['current_students'] . '/' . $c['max_students'] . ' SV'); ?>">
+                                                <div class="subject-actions">
+                                                    <a class="btn btn-sm btn-outline-navy"
+                                                       href="/university/teacher/my_courses.php?view_students=<?php echo (int)$c['section_id']; ?>"
+                                                       title="Xem danh sách sinh viên"
+                                                       data-bs-toggle="tooltip">
+                                                        <i class="bi bi-people-fill"></i>
+                                                    </a>
+                                                    <a class="btn btn-sm btn-outline-success"
+                                                       href="/university/teacher/export_section_students.php?section_id=<?php echo (int)$c['section_id']; ?>"
+                                                       title="Xuất Excel danh sách sinh viên"
+                                                       data-bs-toggle="tooltip">
+                                                        <i class="bi bi-file-earmark-excel-fill"></i>
+                                                    </a>
+                                                    <?php if (isGradeInputWindowOpen($c['end_date'] ?? null, $c['grade_submit_deadline'] ?? null)): ?>
+                                                    <a class="btn btn-sm btn-outline-warning"
+                                                       href="/university/teacher/grades.php?section_id=<?php echo (int)$c['section_id']; ?>"
+                                                       title="Nhập điểm"
+                                                       data-bs-toggle="tooltip">
+                                                        <i class="bi bi-pencil-square"></i>
+                                                    </a>
+                                                    <?php endif; ?>
+                                                </div>
                                                 <div class="sub-name" style="color:<?php echo $color; ?>">
                                                     <?php echo htmlspecialchars($c['subject_name']); ?>
                                                 </div>
@@ -496,9 +553,10 @@ $qString = $qParams ? '&' . http_build_query($qParams) : '';
                                 <?php $idx = 1; foreach ($bySemester[$selectedSem]['courses'] as $c):
                                     $color   = $sectionColors[$c['section_code']] ?? '#1a3a6b';
                                     $dayMap  = $c['_day_map'] ?? [];
-                                    $SESSION_LABEL = ['sang'=>'Sáng','chieu'=>'Chiều','toi'=>'Tối'];
-                                    $SESSION_COLOR = ['sang'=>'#f57c00','chieu'=>'#1976d2','toi'=>'#7b1fa2'];
-                                    $SESSION_TIME  = ['sang'=>'7:00–11:30','chieu'=>'12:30–17:00','toi'=>'17:30–22:00'];
+                                    $SESSION_LABEL = ['sang'=>'Sáng','chieu'=>'Chiều'];
+                                    $SESSION_COLOR = ['sang'=>'#f57c00','chieu'=>'#1976d2'];
+                                    $SESSION_TIME  = ['sang'=>'7h00-11h20','chieu'=>'12h30-16h50'];
+                                    $displayDayMap = array_filter($dayMap, fn($s) => isset($SESSION_LABEL[$s]));
                                     $subStart = !empty($c['start_date']) ? date('d/m/Y', strtotime($c['start_date'])) : '--';
                                     $subEnd   = !empty($c['end_date'])   ? date('d/m/Y', strtotime($c['end_date']))   : '--';
                                 ?>
@@ -521,9 +579,9 @@ $qString = $qParams ? '&' . http_build_query($qParams) : '';
                                         </span>
                                     </td>
                                     <td>
-                                        <?php if (!empty($dayMap)): ?>
+                                        <?php if (!empty($displayDayMap)): ?>
                                         <div class="d-flex flex-wrap gap-1 mb-1">
-                                            <?php foreach ($dayMap as $d => $s): ?>
+                                            <?php foreach ($displayDayMap as $d => $s): ?>
                                             <span class="badge" style="background:<?php echo $SESSION_COLOR[$s]??'#666'; ?>; font-size:0.75rem;"
                                                   title="<?php echo $SESSION_TIME[$s]??''; ?>">
                                                 <?php echo $DAYS[$d] ?? 'N'.$d; ?>
@@ -532,7 +590,7 @@ $qString = $qParams ? '&' . http_build_query($qParams) : '';
                                             <?php endforeach; ?>
                                         </div>
                                         <div class="text-muted" style="font-size:0.7rem">
-                                            <?php echo count($dayMap); ?> buổi/tuần × 5 tiết
+                                            <?php echo count($displayDayMap); ?> buổi/tuần × 5 tiết
                                         </div>
                                         <?php
                                         $sdStart = !empty($c['start_date']) ? date('d/m/Y', strtotime($c['start_date'])) : null;

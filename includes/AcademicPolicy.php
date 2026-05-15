@@ -32,17 +32,15 @@ function academicPolicySemesterDemoContext(mysqli $conn, int $semesterId): array
         return $cache[$semesterId];
     }
 
-    if (!academicPolicyColumnExists($conn, 'semesters', 'data_mode')) {
-        return $cache[$semesterId] = ['data_mode' => 'system', 'demo_batch_id' => ''];
-    }
+    $modeSelect = academicPolicyColumnExists($conn, 'semesters', 'data_mode') ? 'data_mode' : "'system' AS data_mode";
     $batchSelect = academicPolicyColumnExists($conn, 'semesters', 'demo_batch_id') ? 'demo_batch_id' : "'' AS demo_batch_id";
-    $stmt = $conn->prepare("SELECT data_mode, $batchSelect FROM semesters WHERE id = ? LIMIT 1");
+    $stmt = $conn->prepare("SELECT semester_name, $modeSelect, $batchSelect FROM semesters WHERE id = ? LIMIT 1");
     $stmt->bind_param('i', $semesterId);
     $stmt->execute();
     $row = $stmt->get_result()->fetch_assoc() ?: [];
     $stmt->close();
     return $cache[$semesterId] = [
-        'data_mode' => (($row['data_mode'] ?? 'system') === 'test') ? 'test' : 'system',
+        'data_mode' => academicPolicyIsTestSemester($row) ? 'test' : 'system',
         'demo_batch_id' => (string)($row['demo_batch_id'] ?? ''),
     ];
 }
@@ -143,7 +141,10 @@ function academicPolicyCurriculumSemesterOrder(int $enrollmentYear, array $semes
         return null;
     }
 
-    return (($yearStart - $enrollmentYear) * 3) + academicPolicySemesterNumber($semester);
+    $semesterNumber = academicPolicySemesterNumber($semester);
+    $curriculumSemesterInYear = min(2, max(1, $semesterNumber));
+
+    return (($yearStart - $enrollmentYear) * 3) + $curriculumSemesterInYear;
 }
 
 function academicPolicyGetSemester(mysqli $conn, int $semesterId): ?array
@@ -309,7 +310,33 @@ function academicPolicyScheduleTokens(?string $daySessions): array
     return array_values(array_unique($tokens));
 }
 
-function academicPolicyHasScheduleConflict(mysqli $conn, int $sectionId, string $field, mixed $fieldValue, int $semesterId, ?string $daySessions): bool
+function academicPolicyDateRangesOverlap(?string $startA, ?string $endA, ?string $startB, ?string $endB): bool
+{
+    if (!$startA || !$endA || !$startB || !$endB) {
+        return true;
+    }
+    $aStart = strtotime($startA . ' 00:00:00');
+    $aEnd = strtotime($endA . ' 23:59:59');
+    $bStart = strtotime($startB . ' 00:00:00');
+    $bEnd = strtotime($endB . ' 23:59:59');
+    if (!$aStart || !$aEnd || !$bStart || !$bEnd) {
+        return true;
+    }
+    return $aStart <= $bEnd && $bStart <= $aEnd;
+}
+
+function academicPolicyScheduleWindowsOverlap(?string $scheduleA, ?string $startA, ?string $endA, ?string $scheduleB, ?string $startB, ?string $endB): bool
+{
+    $tokensA = academicPolicyScheduleTokens($scheduleA);
+    $tokensB = academicPolicyScheduleTokens($scheduleB);
+    if (empty($tokensA) || empty($tokensB) || !array_intersect($tokensA, $tokensB)) {
+        return false;
+    }
+
+    return academicPolicyDateRangesOverlap($startA, $endA, $startB, $endB);
+}
+
+function academicPolicyHasScheduleConflict(mysqli $conn, int $sectionId, string $field, mixed $fieldValue, int $semesterId, ?string $daySessions, ?string $startDate = null, ?string $endDate = null): bool
 {
     if ($fieldValue === null || $fieldValue === '' || !in_array($field, ['teacher_id', 'room'], true)) {
         return false;
@@ -325,13 +352,17 @@ function academicPolicyHasScheduleConflict(mysqli $conn, int $sectionId, string 
         : academicPolicySemesterDemoContext($conn, $semesterId);
     $modeSql = academicPolicyColumnExists($conn, 'course_sections', 'data_mode') ? " AND data_mode = ?" : "";
 
+    $fieldSql = $field === 'teacher_id'
+        ? '(teacher_id = ? OR proposed_teacher_id = ?)'
+        : "$field = ?";
+
     $stmt = $conn->prepare(
-        "SELECT id, day_sessions
+        "SELECT id, day_sessions, start_date, end_date
          FROM course_sections
          WHERE id <> ?
            AND semester_id = ?
-           AND status IN ('open','full','closed')
-           AND $field = ?
+           AND status IN ('draft','proposed','open','full','closed')
+           AND $fieldSql
            AND day_sessions IS NOT NULL
            AND day_sessions <> ''
            $modeSql"
@@ -340,9 +371,9 @@ function academicPolicyHasScheduleConflict(mysqli $conn, int $sectionId, string 
     if ($field === 'teacher_id') {
         $intValue = (int)$fieldValue;
         if ($modeSql) {
-            $stmt->bind_param('iiis', $sectionId, $semesterId, $intValue, $demoContext['data_mode']);
+            $stmt->bind_param('iiiis', $sectionId, $semesterId, $intValue, $intValue, $demoContext['data_mode']);
         } else {
-            $stmt->bind_param('iii', $sectionId, $semesterId, $intValue);
+            $stmt->bind_param('iiii', $sectionId, $semesterId, $intValue, $intValue);
         }
     } else {
         $stringValue = (string)$fieldValue;
@@ -358,7 +389,7 @@ function academicPolicyHasScheduleConflict(mysqli $conn, int $sectionId, string 
     $stmt->close();
 
     foreach ($rows as $row) {
-        if (array_intersect($tokens, academicPolicyScheduleTokens($row['day_sessions'] ?? ''))) {
+        if (academicPolicyScheduleWindowsOverlap($daySessions, $startDate, $endDate, $row['day_sessions'] ?? '', $row['start_date'] ?? null, $row['end_date'] ?? null)) {
             return true;
         }
     }
@@ -444,7 +475,9 @@ function academicPolicyFindAvailableClassrooms(
     int $maxStudents,
     string $teachingMode,
     ?string $daySessions,
-    string $roomRequirement = ''
+    string $roomRequirement = '',
+    ?string $startDate = null,
+    ?string $endDate = null
 ): array {
     if ($teachingMode === 'online' || $conn->query("SHOW TABLES LIKE 'classrooms'")->num_rows === 0) {
         return [];
@@ -467,7 +500,7 @@ function academicPolicyFindAvailableClassrooms(
         if (!academicPolicyClassroomIsSuitable($room, $maxStudents, $needsSpecialRoom)) {
             continue;
         }
-        if (academicPolicyHasScheduleConflict($conn, $sectionId, 'room', $room['room_code'], $semesterId, $daySessions)) {
+        if (academicPolicyHasScheduleConflict($conn, $sectionId, 'room', $room['room_code'], $semesterId, $daySessions, $startDate, $endDate)) {
             continue;
         }
 
@@ -481,6 +514,381 @@ function academicPolicyFindAvailableClassrooms(
     });
 
     return $available;
+}
+
+function academicPolicySubjectLoad(mysqli $conn, int $subjectId, int $fallbackCredits = 3): array
+{
+    $selects = ['credits'];
+    foreach (['theory_periods', 'practice_periods', 'total_periods'] as $column) {
+        if (academicPolicyColumnExists($conn, 'subjects', $column)) {
+            $selects[] = $column;
+        }
+    }
+
+    $stmt = $conn->prepare('SELECT ' . implode(', ', $selects) . ' FROM subjects WHERE id = ? LIMIT 1');
+    $stmt->bind_param('i', $subjectId);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc() ?: [];
+    $stmt->close();
+
+    $credits = max(1, (int)($row['credits'] ?? $fallbackCredits));
+    $theory = (int)($row['theory_periods'] ?? 0);
+    $practice = (int)($row['practice_periods'] ?? 0);
+    $total = (int)($row['total_periods'] ?? 0);
+    if ($total <= 0) {
+        $total = $theory + $practice;
+    }
+    if ($total <= 0) {
+        $total = $credits * 15;
+    }
+
+    return [
+        'credits' => $credits,
+        'theory_periods' => $theory,
+        'practice_periods' => $practice,
+        'total_periods' => $total,
+    ];
+}
+
+function academicPolicyEffectiveSemesterWindow(array $semester): ?array
+{
+    if (!empty($semester['start_date']) && !empty($semester['end_date'])) {
+        return ['start_date' => $semester['start_date'], 'end_date' => $semester['end_date']];
+    }
+
+    return academicPolicySemesterWindowFromRow($semester);
+}
+
+function academicPolicySemesterWeekCount(array $semester): int
+{
+    $window = academicPolicyEffectiveSemesterWindow($semester);
+    if (!$window || empty($window['start_date']) || empty($window['end_date'])) {
+        return academicPolicyIsTestSemester($semester) ? 4 : 15;
+    }
+
+    $start = strtotime((string)$window['start_date']);
+    $end = strtotime((string)$window['end_date']);
+    if (!$start || !$end || $end <= $start) {
+        return academicPolicyIsTestSemester($semester) ? 4 : 15;
+    }
+
+    return max(1, (int)ceil(($end - $start + 86400) / (7 * 86400)));
+}
+
+function academicPolicySessionsPerWeek(array $semester, array $subjectLoad, int $periodsPerSession = 5): int
+{
+    $totalPeriods = max(1, (int)($subjectLoad['total_periods'] ?? 0));
+    $meetings = (int)ceil($totalPeriods / max(1, $periodsPerSession));
+    $weeks = academicPolicySemesterWeekCount($semester);
+
+    return max(1, min(6, (int)ceil($meetings / $weeks)));
+}
+
+function academicPolicyCourseWeekCount(array $semester, array $subjectLoad, int $periodsPerSession = 5): int
+{
+    $meetings = (int)ceil(max(1, (int)($subjectLoad['total_periods'] ?? 0)) / max(1, $periodsPerSession));
+    $sessionsPerWeek = academicPolicySessionsPerWeek($semester, $subjectLoad, $periodsPerSession);
+
+    return max(1, min(academicPolicySemesterWeekCount($semester), (int)ceil($meetings / $sessionsPerWeek)));
+}
+
+function academicPolicyMondayOfWeek(string $date): ?DateTimeImmutable
+{
+    try {
+        return (new DateTimeImmutable($date))->modify('monday this week');
+    } catch (Throwable) {
+        return null;
+    }
+}
+
+function academicPolicyScheduleWindowForLoad(array $semester, array $subjectLoad, string $daySessions, int $seed = 0): array
+{
+    $window = academicPolicyEffectiveSemesterWindow($semester);
+    if (!$window) {
+        return ['start_date' => null, 'end_date' => null, 'week_offset' => 0, 'course_weeks' => 1];
+    }
+
+    $semesterWeeks = academicPolicySemesterWeekCount($semester);
+    $courseWeeks = academicPolicyCourseWeekCount($semester, $subjectLoad);
+    $maxOffset = max(0, $semesterWeeks - $courseWeeks);
+    $offset = $maxOffset > 0 ? abs($seed) % ($maxOffset + 1) : 0;
+    $semesterMonday = academicPolicyMondayOfWeek((string)$window['start_date']);
+    if (!$semesterMonday) {
+        return ['start_date' => $window['start_date'], 'end_date' => $window['end_date'], 'week_offset' => $offset, 'course_weeks' => $courseWeeks];
+    }
+
+    $tokens = academicPolicyScheduleTokens($daySessions);
+    $firstDay = 8;
+    $lastDay = 2;
+    foreach ($tokens as $token) {
+        [$day] = array_pad(explode(':', $token, 2), 2, '2');
+        $dayInt = (int)$day;
+        if ($dayInt === 8) {
+            $dayInt = 7;
+        }
+        $firstDay = min($firstDay, max(2, $dayInt));
+        $lastDay = max($lastDay, max(2, $dayInt));
+    }
+
+    $start = $semesterMonday->modify('+' . ($offset * 7 + ($firstDay - 2)) . ' days');
+    $end = $semesterMonday->modify('+' . (($offset + $courseWeeks - 1) * 7 + ($lastDay - 2)) . ' days');
+    $semesterStart = new DateTimeImmutable((string)$window['start_date']);
+    $semesterEnd = new DateTimeImmutable((string)$window['end_date']);
+    if ($start < $semesterStart) {
+        $start = $semesterStart;
+    }
+    if ($end > $semesterEnd) {
+        $end = $semesterEnd;
+    }
+
+    return [
+        'start_date' => $start->format('Y-m-d'),
+        'end_date' => $end->format('Y-m-d'),
+        'week_offset' => $offset,
+        'course_weeks' => $courseWeeks,
+    ];
+}
+
+function academicPolicyCourseEndDateFromStart(string $startDate, string $daySessions, array $subjectLoad, int $periodsPerSession = 5): ?string
+{
+    $tokens = academicPolicyScheduleTokens($daySessions);
+    if (trim($startDate) === '' || empty($tokens)) {
+        return null;
+    }
+
+    try {
+        $cursor = new DateTimeImmutable($startDate);
+    } catch (Throwable) {
+        return null;
+    }
+
+    $studyDays = [];
+    foreach ($tokens as $token) {
+        [$day] = array_pad(explode(':', $token, 2), 2, '2');
+        $dayInt = (int)$day;
+        $studyDays[] = $dayInt === 8 ? 0 : max(1, min(6, $dayInt - 1));
+    }
+    $studyDays = array_values(array_unique($studyDays));
+    sort($studyDays);
+    if (empty($studyDays)) {
+        return null;
+    }
+
+    $totalPeriods = max(1, (int)($subjectLoad['total_periods'] ?? 0));
+    $meetingsNeeded = max(1, (int)ceil($totalPeriods / max(1, $periodsPerSession)));
+    $meetings = 0;
+    for ($i = 0; $i < 370; $i++) {
+        $weekday = (int)$cursor->format('w'); // 0=Sunday, 1=Monday...
+        if (in_array($weekday, $studyDays, true)) {
+            $meetings++;
+            if ($meetings >= $meetingsNeeded) {
+                return $cursor->format('Y-m-d');
+            }
+        }
+        $cursor = $cursor->modify('+1 day');
+    }
+
+    return null;
+}
+
+function academicPolicyScheduleCandidates(array $semester, array $subjectLoad, int $seed = 0): array
+{
+    $sessionsPerWeek = academicPolicySessionsPerWeek($semester, $subjectLoad);
+    $days = [2, 3, 4, 5, 6, 7];
+    $sessions = ['sang', 'chieu', 'toi'];
+    $candidates = [];
+
+    foreach ($sessions as $sessionIndex => $session) {
+        foreach ($days as $dayIndex => $startDay) {
+            $tokens = [];
+            for ($i = 0; $i < count($days) && count($tokens) < $sessionsPerWeek; $i++) {
+                $day = $days[($dayIndex + $i) % count($days)];
+                $tokens[] = $day . ':' . $session;
+            }
+            $value = implode(',', $tokens);
+            if (isset($candidates[$value])) {
+                continue;
+            }
+            $window = academicPolicyScheduleWindowForLoad($semester, $subjectLoad, $value, $seed + (int)sprintf('%u', crc32($value)));
+            $candidates[$value] = [
+                'value' => $value,
+                'sessions_per_week' => $sessionsPerWeek,
+                'weeks' => academicPolicySemesterWeekCount($semester),
+                'course_weeks' => academicPolicyCourseWeekCount($semester, $subjectLoad),
+                'total_periods' => (int)($subjectLoad['total_periods'] ?? 0),
+                'start_date' => $window['start_date'],
+                'end_date' => $window['end_date'],
+                'week_offset' => $window['week_offset'],
+                'rank' => (($dayIndex + $sessionIndex + $seed) % 17),
+            ];
+        }
+    }
+
+    $items = array_values($candidates);
+    usort($items, static fn(array $a, array $b): int => [$a['rank'], $a['value']] <=> [$b['rank'], $b['value']]);
+
+    return $items;
+}
+
+function academicPolicyHasStudentGroupScheduleConflict(mysqli $conn, array $section, string $daySessions, ?string $startDate, ?string $endDate): bool
+{
+    $tokens = academicPolicyScheduleTokens($daySessions);
+    if (!$tokens) {
+        return false;
+    }
+
+    $sectionId = (int)($section['id'] ?? 0);
+    $semesterId = (int)($section['semester_id'] ?? 0);
+    $targetCohortId = (int)($section['target_cohort_id'] ?? 0);
+    $hasClassId = academicPolicyColumnExists($conn, 'course_sections', 'class_id');
+    $classId = $hasClassId ? (int)($section['class_id'] ?? 0) : 0;
+    if ($semesterId <= 0 || ($classId <= 0 && $targetCohortId <= 0)) {
+        return false;
+    }
+
+    $conditions = [];
+    $types = 'ii';
+    $params = [$sectionId, $semesterId];
+    if ($classId > 0) {
+        $conditions[] = 'class_id = ?';
+        $types .= 'i';
+        $params[] = $classId;
+    } elseif ($targetCohortId > 0) {
+        $conditions[] = 'target_cohort_id = ?';
+        $types .= 'i';
+        $params[] = $targetCohortId;
+    }
+
+    $sql = "SELECT id, day_sessions, start_date, end_date
+            FROM course_sections
+            WHERE id <> ?
+              AND semester_id = ?
+              AND status IN ('draft','proposed','open','full','closed')
+              AND day_sessions IS NOT NULL
+              AND day_sessions <> ''
+              AND (" . implode(' OR ', $conditions) . ")";
+    if (academicPolicyColumnExists($conn, 'course_sections', 'data_mode') && isset($section['data_mode'])) {
+        $sql .= ' AND data_mode = ?';
+        $types .= 's';
+        $params[] = (string)$section['data_mode'];
+    }
+
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param($types, ...$params);
+    $stmt->execute();
+    $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->close();
+
+    foreach ($rows as $row) {
+        if (academicPolicyScheduleWindowsOverlap($daySessions, $startDate, $endDate, $row['day_sessions'] ?? '', $row['start_date'] ?? null, $row['end_date'] ?? null)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function academicPolicyPlanSectionOpening(mysqli $conn, array $section, int $maxStudents, string $teachingMode, ?string $preferredDaySessions = '', ?string $preferredRoom = ''): array
+{
+    $semesterId = (int)($section['semester_id'] ?? 0);
+    $subjectId = (int)($section['subject_id'] ?? 0);
+    $semester = academicPolicyGetSemester($conn, $semesterId);
+    if (!$semester) {
+        return ['ok' => false, 'message' => 'Khong tim thay hoc ky de xep lich.'];
+    }
+
+    $subjectLoad = academicPolicySubjectLoad($conn, $subjectId, 3);
+    $seedBase = (int)sprintf('%u', crc32($semesterId . ':' . $subjectId . ':' . ($section['id'] ?? 0) . ':' . ($section['section_code'] ?? '')));
+    $candidates = academicPolicyScheduleCandidates($semester, $subjectLoad, $seedBase);
+    $preferredDaySessions = trim((string)$preferredDaySessions);
+    if ($preferredDaySessions !== '') {
+        $preferredWindow = academicPolicyScheduleWindowForLoad($semester, $subjectLoad, $preferredDaySessions, $seedBase + (int)sprintf('%u', crc32($preferredDaySessions)));
+        array_unshift($candidates, [
+            'value' => $preferredDaySessions,
+            'sessions_per_week' => count(academicPolicyScheduleTokens($preferredDaySessions)),
+            'weeks' => academicPolicySemesterWeekCount($semester),
+            'course_weeks' => academicPolicyCourseWeekCount($semester, $subjectLoad),
+            'total_periods' => (int)$subjectLoad['total_periods'],
+            'start_date' => $preferredWindow['start_date'],
+            'end_date' => $preferredWindow['end_date'],
+            'week_offset' => $preferredWindow['week_offset'],
+        ]);
+    }
+
+    $checked = [];
+    $teacherId = (int)(($section['teacher_id'] ?? 0) ?: ($section['proposed_teacher_id'] ?? 0));
+    foreach ($candidates as $candidate) {
+        $daySessions = (string)($candidate['value'] ?? '');
+        if ($daySessions === '' || isset($checked[$daySessions])) {
+            continue;
+        }
+        $checked[$daySessions] = true;
+        if ($preferredDaySessions !== '' && $daySessions !== $preferredDaySessions) {
+            break;
+        }
+
+        $startDate = (string)($candidate['start_date'] ?? '');
+        $endDate = (string)($candidate['end_date'] ?? '');
+        if ($teacherId > 0 && academicPolicyHasScheduleConflict($conn, (int)($section['id'] ?? 0), 'teacher_id', $teacherId, $semesterId, $daySessions, $startDate, $endDate)) {
+            continue;
+        }
+        if (academicPolicyHasStudentGroupScheduleConflict($conn, $section, $daySessions, $startDate, $endDate)) {
+            continue;
+        }
+
+        $room = '';
+        $classroomId = null;
+        if ($teachingMode !== 'online') {
+            $availableRooms = academicPolicyFindAvailableClassrooms(
+                $conn,
+                (int)($section['id'] ?? 0),
+                $semesterId,
+                $subjectId,
+                $maxStudents,
+                $teachingMode,
+                $daySessions,
+                (string)($section['room_requirement'] ?? ''),
+                $startDate,
+                $endDate
+            );
+            if (!$availableRooms) {
+                continue;
+            }
+
+            $selectedRoom = null;
+            $preferredRoom = trim((string)$preferredRoom);
+            if ($preferredRoom !== '') {
+                foreach ($availableRooms as $availableRoom) {
+                    if ((string)$availableRoom['room_code'] === $preferredRoom) {
+                        $selectedRoom = $availableRoom;
+                        break;
+                    }
+                }
+                if (!$selectedRoom) {
+                    continue;
+                }
+            } else {
+                $selectedRoom = $availableRooms[0];
+            }
+            $room = (string)$selectedRoom['room_code'];
+            $classroomId = (int)$selectedRoom['id'];
+        }
+
+        return [
+            'ok' => true,
+            'message' => '',
+            'day_sessions' => $daySessions,
+            'start_date' => $startDate,
+            'end_date' => $endDate,
+            'room' => $room,
+            'classroom_id' => $classroomId,
+            'total_periods' => (int)$subjectLoad['total_periods'],
+            'sessions_per_week' => (int)($candidate['sessions_per_week'] ?? 1),
+            'course_weeks' => (int)($candidate['course_weeks'] ?? 1),
+        ];
+    }
+
+    return ['ok' => false, 'message' => 'Khong tim duoc lich/phong trong, khong trung lop, giang vien va phong trong hoc ky.'];
 }
 
 function academicPolicyValidateTeachingSchedule(string $teachingMode, ?string $daySessions): array
@@ -604,40 +1012,10 @@ function academicPolicyFindEligibleOpenings(mysqli $conn, int $facultyId, int $s
     $rows = [];
     $seen = [];
 
-    $isTestSemester = academicPolicyIsTestSemester($semester);
-    if ($isTestSemester && $subjectId === null && $cohortId === null) {
-        $testMajorCodes = ['CNTT' => true, 'KETOAN' => true, '7480201' => true, '7340301' => true];
-        $allowedMajorIds = [];
-        $filteredCohorts = [];
-        foreach ($cohorts as $cohort) {
-            $majorId = (int)($cohort['major_id'] ?? 0);
-            $majorCode = strtoupper((string)($cohort['major_code'] ?? ''));
-            if ($majorId <= 0 || !isset($testMajorCodes[$majorCode])) {
-                continue;
-            }
-            $allowedMajorIds[$majorId] = true;
-            $filteredCohorts[] = $cohort;
-        }
-        if (empty($filteredCohorts)) {
-            foreach ($cohorts as $cohort) {
-                $majorId = (int)($cohort['major_id'] ?? 0);
-                if ($majorId <= 0) {
-                    continue;
-                }
-                if (!isset($allowedMajorIds[$majorId]) && count($allowedMajorIds) >= 2) {
-                    continue;
-                }
-                $allowedMajorIds[$majorId] = true;
-                $filteredCohorts[] = $cohort;
-            }
-        }
-        $cohorts = $filteredCohorts;
-    }
-
     foreach ($cohorts as $cohort) {
         $enrollmentYear = (int)$cohort['enrollment_year'];
         $semesterOrder = academicPolicyCurriculumSemesterOrder($enrollmentYear, $semester);
-        if (!$isTestSemester && ($semesterOrder === null || $semesterOrder < 1)) {
+        if ($semesterOrder === null || $semesterOrder < 1) {
             continue;
         }
 
@@ -650,9 +1028,7 @@ function academicPolicyFindEligibleOpenings(mysqli $conn, int $facultyId, int $s
                 JOIN subjects s ON c.subject_id = s.id
                 JOIN majors m ON c.major_id = m.id
                 WHERE c.major_id = ? AND c.deleted_at IS NULL";
-        if (!$isTestSemester) {
-            $sql .= " AND c.suggested_semester = ?";
-        }
+        $sql .= " AND c.suggested_semester = ?";
         if ($hasCurriculumProgram) {
             $sql .= " AND (c.program_id IS NULL OR c.program_id = ?)";
         }
@@ -662,33 +1038,21 @@ function academicPolicyFindEligibleOpenings(mysqli $conn, int $facultyId, int $s
         $sql .= " ORDER BY c.suggested_semester ASC, s.subject_name ASC";
 
         $stmtCur = $conn->prepare($sql);
-        if ($isTestSemester) {
-            if ($hasCurriculumProgram && $subjectId !== null) {
-                $stmtCur->bind_param('iii', $majorId, $programId, $subjectId);
-            } elseif ($hasCurriculumProgram) {
-                $stmtCur->bind_param('ii', $majorId, $programId);
-            } elseif ($subjectId !== null) {
-                $stmtCur->bind_param('ii', $majorId, $subjectId);
-            } else {
-                $stmtCur->bind_param('i', $majorId);
-            }
+        if ($hasCurriculumProgram && $subjectId !== null) {
+            $stmtCur->bind_param('iiii', $majorId, $semesterOrder, $programId, $subjectId);
+        } elseif ($hasCurriculumProgram) {
+            $stmtCur->bind_param('iii', $majorId, $semesterOrder, $programId);
+        } elseif ($subjectId !== null) {
+            $stmtCur->bind_param('iii', $majorId, $semesterOrder, $subjectId);
         } else {
-            if ($hasCurriculumProgram && $subjectId !== null) {
-                $stmtCur->bind_param('iiii', $majorId, $semesterOrder, $programId, $subjectId);
-            } elseif ($hasCurriculumProgram) {
-                $stmtCur->bind_param('iii', $majorId, $semesterOrder, $programId);
-            } elseif ($subjectId !== null) {
-                $stmtCur->bind_param('iii', $majorId, $semesterOrder, $subjectId);
-            } else {
-                $stmtCur->bind_param('ii', $majorId, $semesterOrder);
-            }
+            $stmtCur->bind_param('ii', $majorId, $semesterOrder);
         }
         $stmtCur->execute();
         $subjects = $stmtCur->get_result()->fetch_all(MYSQLI_ASSOC);
         $stmtCur->close();
 
         foreach ($subjects as $subject) {
-            $effectiveSemesterOrder = $isTestSemester ? (int)$subject['suggested_semester'] : (int)$semesterOrder;
+            $effectiveSemesterOrder = (int)$semesterOrder;
             $key = $subject['subject_id'] . ':' . $majorId . ':' . $effectiveSemesterOrder . ':' . ($cohort['cohort_id'] ?? 'legacy');
             if (isset($seen[$key])) {
                 continue;
@@ -701,6 +1065,7 @@ function academicPolicyFindEligibleOpenings(mysqli $conn, int $facultyId, int $s
             $subject['enrollment_year'] = $enrollmentYear;
             $subject['graduation_year'] = $enrollmentYear + (int)ceil((float)($cohort['duration_years'] ?? 4));
             $subject['semester_window'] = academicPolicySemesterWindowFromRow($semester);
+            $subject['semester_order'] = $effectiveSemesterOrder;
             $rows[] = $subject;
             if ($maxRows !== null && count($rows) >= $maxRows) {
                 return $rows;
@@ -733,12 +1098,20 @@ function academicPolicyValidateSectionOpening(mysqli $conn, int $sectionId): arr
     $minStudentsSelect = academicPolicyColumnExists($conn, 'course_sections', 'min_students')
         ? 'cs.min_students,'
         : '20 AS min_students,';
+    $classIdSelect = academicPolicyColumnExists($conn, 'course_sections', 'class_id')
+        ? 'cs.class_id,'
+        : 'NULL AS class_id,';
+    $dataModeSelect = academicPolicyColumnExists($conn, 'course_sections', 'data_mode')
+        ? 'cs.data_mode,'
+        : "'system' AS data_mode,";
 
     $stmt = $conn->prepare(
         "SELECT cs.id, cs.subject_id, cs.semester_id, cs.target_cohort_id, cs.open_proposed_by,
                 cs.expected_students, cs.max_students, cs.teacher_id, cs.proposed_teacher_id,
-                cs.room, cs.room_requirement, cs.day_sessions, cs.teaching_mode,
+                cs.room, cs.room_requirement, cs.day_sessions, cs.start_date, cs.end_date, cs.teaching_mode,
                 $minStudentsSelect
+                $classIdSelect
+                $dataModeSelect
                 s.subject_name, s.subject_code, $subjectActiveSelect
                 sm.status AS semester_status, sm.proposal_deadline,
                 f.id AS faculty_id,
@@ -786,12 +1159,16 @@ function academicPolicyValidateSectionOpening(mysqli $conn, int $sectionId): arr
     }
 
     $teacherId = (int)($row['teacher_id'] ?: $row['proposed_teacher_id'] ?: 0);
-    if ($teacherId > 0 && academicPolicyHasScheduleConflict($conn, $sectionId, 'teacher_id', $teacherId, (int)$row['semester_id'], $row['day_sessions'] ?? '')) {
+    if ($teacherId > 0 && academicPolicyHasScheduleConflict($conn, $sectionId, 'teacher_id', $teacherId, (int)$row['semester_id'], $row['day_sessions'] ?? '', $row['start_date'] ?? null, $row['end_date'] ?? null)) {
         return ['ok' => false, 'message' => 'Giảng viên đang bị trùng lịch trong học kỳ này.', 'eligible' => []];
     }
 
-    if (academicPolicyHasScheduleConflict($conn, $sectionId, 'room', $row['room'] ?? '', (int)$row['semester_id'], $row['day_sessions'] ?? '')) {
+    if (academicPolicyHasScheduleConflict($conn, $sectionId, 'room', $row['room'] ?? '', (int)$row['semester_id'], $row['day_sessions'] ?? '', $row['start_date'] ?? null, $row['end_date'] ?? null)) {
         return ['ok' => false, 'message' => 'Phòng học đang bị trùng lịch trong học kỳ này.', 'eligible' => []];
+    }
+
+    if (academicPolicyHasStudentGroupScheduleConflict($conn, $row, $row['day_sessions'] ?? '', $row['start_date'] ?? null, $row['end_date'] ?? null)) {
+        return ['ok' => false, 'message' => 'Lop/khoa tuyen sinh dang bi trung lich voi lop hoc phan khac.', 'eligible' => []];
     }
 
     $policyCheck = academicPolicyValidateSubjectOpening(
@@ -870,7 +1247,7 @@ function academicPolicyRegisteredCredits(mysqli $conn, int $studentId, int $seme
 function academicPolicyStudentScheduleConflict(mysqli $conn, int $studentId, int $sectionId): array
 {
     $stmtSection = $conn->prepare(
-        "SELECT cs.id, cs.semester_id, cs.day_sessions, s.subject_name, cs.section_code
+        "SELECT cs.id, cs.semester_id, cs.day_sessions, cs.start_date, cs.end_date, s.subject_name, cs.section_code
          FROM course_sections cs
          JOIN subjects s ON cs.subject_id = s.id
          WHERE cs.id = ?
@@ -891,7 +1268,7 @@ function academicPolicyStudentScheduleConflict(mysqli $conn, int $studentId, int
     }
 
     $stmtRegistered = $conn->prepare(
-        "SELECT cs.id, cs.day_sessions, cs.section_code, s.subject_name
+        "SELECT cs.id, cs.day_sessions, cs.start_date, cs.end_date, cs.section_code, s.subject_name
          FROM student_subjects ss
          JOIN course_sections cs ON ss.course_section_id = cs.id
          JOIN subjects s ON cs.subject_id = s.id
@@ -910,6 +1287,9 @@ function academicPolicyStudentScheduleConflict(mysqli $conn, int $studentId, int
     $conflicts = [];
 
     foreach ($registered as $row) {
+        if (!academicPolicyDateRangesOverlap($section['start_date'] ?? null, $section['end_date'] ?? null, $row['start_date'] ?? null, $row['end_date'] ?? null)) {
+            continue;
+        }
         foreach (array_intersect($newTokens, academicPolicyScheduleTokens($row['day_sessions'] ?? '')) as $token) {
             [$day, $session] = array_pad(explode(':', $token, 2), 2, '');
             $conflicts[] = [
@@ -1034,8 +1414,11 @@ function academicPolicyValidateStudentRegistration(mysqli $conn, int $studentId,
         return ['ok' => false, 'message' => 'Sinh viên không ở trạng thái đang học nên không được đăng ký học phần.'];
     }
 
+    $classIdSelect = academicPolicyColumnExists($conn, 'course_sections', 'class_id')
+        ? 'cs.class_id,'
+        : 'NULL AS class_id,';
     $stmt = $conn->prepare(
-        "SELECT cs.id, cs.subject_id, cs.semester_id, cs.target_cohort_id, cs.current_students, cs.max_students,
+        "SELECT cs.id, cs.subject_id, cs.semester_id, cs.target_cohort_id, $classIdSelect cs.current_students, cs.max_students,
                 cs.status, subj.credits,
                 sm.semester_name, sm.school_year, sm.data_mode AS semester_data_mode
          FROM course_sections cs
@@ -1053,13 +1436,15 @@ function academicPolicyValidateStudentRegistration(mysqli $conn, int $studentId,
         return ['ok' => false, 'message' => 'Lớp học phần chưa mở đăng ký.'];
     }
     $studentDataMode = ($student['data_mode'] ?? 'system') === 'test' ? 'test' : 'system';
-    $isTestSemester = (($section['semester_data_mode'] ?? 'system') === 'test') || str_contains(strtolower((string)$section['semester_name']), 'test');
+    $isTestSemester = (($section['semester_data_mode'] ?? 'system') === 'test')
+        || str_contains(mb_strtolower((string)$section['semester_name'], 'UTF-8'), 'test');
     if ($studentDataMode === 'test' && !$isTestSemester) {
         return ['ok' => false, 'message' => 'Tai khoan test chi duoc dang ky hoc phan trong hoc ky Test.'];
     }
     if ($studentDataMode !== 'test' && $isTestSemester) {
         return ['ok' => false, 'message' => 'Hoc ky Test chi danh cho du lieu demo, khong ap dung cho sinh vien he thong that.'];
     }
+    $allowDemoScope = $studentDataMode === 'test' && $isTestSemester;
     if ((int)$section['current_students'] >= (int)$section['max_students']) {
         return ['ok' => false, 'message' => 'Lớp học phần đã đủ sĩ số.'];
     }
@@ -1088,8 +1473,12 @@ function academicPolicyValidateStudentRegistration(mysqli $conn, int $studentId,
     }
 
     $studentCohortId = (int)($student['cohort_id'] ?: $student['class_cohort_id'] ?: 0);
-    if (!empty($section['target_cohort_id']) && $studentCohortId > 0 && (int)$section['target_cohort_id'] !== $studentCohortId) {
+    if (!$allowDemoScope && !empty($section['target_cohort_id']) && $studentCohortId > 0 && (int)$section['target_cohort_id'] !== $studentCohortId) {
         return ['ok' => false, 'message' => 'Lớp học phần này không mở cho khóa tuyển sinh của bạn.'];
+    }
+
+    if (!$allowDemoScope && !empty($section['class_id']) && (int)$section['class_id'] !== (int)($student['class_id'] ?? 0)) {
+        return ['ok' => false, 'message' => 'Lop hoc phan nay khong mo cho lop hanh chinh cua ban.'];
     }
 
     $programCondition = '';
@@ -1140,15 +1529,17 @@ function academicPolicyValidateStudentRegistration(mysqli $conn, int $studentId,
         return ['ok' => false, 'message' => 'Bạn đã đạt môn này. Đăng ký học cải thiện cần quy trình riêng của Phòng đào tạo.'];
     }
 
+    $allowDemoOffSemester = $allowDemoScope;
     $prereqIds = array_filter(array_map('intval', preg_split('/\s*,\s*/', (string)($curriculum['prerequisite_ids'] ?? ''), -1, PREG_SPLIT_NO_EMPTY)));
-    foreach ($prereqIds as $prereqId) {
+    foreach ($allowDemoOffSemester ? [] : $prereqIds as $prereqId) {
         if (!academicPolicySubjectPassed($conn, $studentId, $prereqId)) {
             return ['ok' => false, 'message' => 'Bạn chưa đạt môn tiên quyết nên không thể đăng ký học phần này.'];
         }
     }
 
     $currentOrder = $enrollmentYear > 0 ? academicPolicyCurriculumSemesterOrder($enrollmentYear, $section) : null;
-    if ($currentOrder !== null
+    if (!$allowDemoOffSemester
+        && $currentOrder !== null
         && (int)$curriculum['suggested_semester'] > $currentOrder
         && (int)($curriculum['allow_off_semester'] ?? 0) !== 1
     ) {

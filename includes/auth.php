@@ -657,8 +657,186 @@ function getFlash(): ?array {
  * Điều kiện khóa: có hóa đơn đã published + quá hạn + chưa đóng đủ
  * Trả về ['locked'=>bool, 'message'=>string, 'period_title'=>string]
  */
+function refreshOverdueTuitionInvoices(?int $studentId = null): void {
+    global $conn;
+    $tbl = $conn->query("SHOW TABLES LIKE 'tuition_invoices'");
+    if (!$tbl || $tbl->num_rows === 0) return;
+    $tblPeriod = $conn->query("SHOW TABLES LIKE 'tuition_periods'");
+    if (!$tblPeriod || $tblPeriod->num_rows === 0) return;
+    $studentWhere = $studentId ? ' AND ti.student_id = ' . (int)$studentId : '';
+    $conn->query(
+        "UPDATE tuition_invoices ti
+         JOIN tuition_periods tp ON tp.id = ti.period_id
+         SET ti.status = 'overdue', ti.updated_at = NOW()
+         WHERE ti.status IN ('unpaid','partial')
+           AND ti.net_amount > ti.paid_amount
+           AND tp.status IN ('published','closed')
+           AND tp.due_date < CURDATE()
+           $studentWhere"
+    );
+}
+
+function syncStudentTuitionInvoiceFromRegistrations(int $studentId, int $semesterId, int $createdBy = 0): bool {
+    global $conn;
+    if ($studentId <= 0 || $semesterId <= 0) return false;
+    $periodTable = $conn->query("SHOW TABLES LIKE 'tuition_periods'");
+    $invoiceTable = $conn->query("SHOW TABLES LIKE 'tuition_invoices'");
+    if (!$periodTable || $periodTable->num_rows === 0 || !$invoiceTable || $invoiceTable->num_rows === 0) return false;
+
+    $periodStmt = $conn->prepare("SELECT id, status FROM tuition_periods WHERE semester_id=? LIMIT 1");
+    if (!$periodStmt) return false;
+    $periodStmt->bind_param('i', $semesterId);
+    $periodStmt->execute();
+    $period = $periodStmt->get_result()->fetch_assoc();
+    $periodStmt->close();
+    if (!$period) return false;
+
+    $calcStmt = $conn->prepare(
+        "SELECT COALESCE(SUM(CASE WHEN cs.semester_id = ? THEN sub.credits ELSE 0 END),0) AS total_credits,
+                COALESCE(MAX(m.tuition_per_credit),0) AS unit_price,
+                COALESCE(MAX(st.data_mode),'system') AS data_mode,
+                COALESCE(MAX(st.demo_batch_id),'') AS demo_batch_id
+         FROM students st
+         LEFT JOIN student_subjects ss ON ss.student_id = st.id AND ss.status IN ('registered','auto_enrolled')
+         LEFT JOIN course_sections cs ON cs.id = ss.course_section_id
+         LEFT JOIN subjects sub ON sub.id = cs.subject_id
+         LEFT JOIN classes cl ON cl.id = st.class_id
+         LEFT JOIN majors m ON m.id = cl.major_id
+         WHERE st.id = ?
+         GROUP BY st.id"
+    );
+    if (!$calcStmt) return false;
+    $calcStmt->bind_param('ii', $semesterId, $studentId);
+    $calcStmt->execute();
+    $calc = $calcStmt->get_result()->fetch_assoc();
+    $calcStmt->close();
+    if (!$calc) return false;
+
+    $periodId = (int)$period['id'];
+    $totalCredits = (int)($calc['total_credits'] ?? 0);
+    $unitPrice = (float)($calc['unit_price'] ?? 0);
+    $gross = $totalCredits * $unitPrice;
+    $dataMode = (($calc['data_mode'] ?? 'system') === 'test') ? 'test' : 'system';
+    $demoBatchId = (string)($calc['demo_batch_id'] ?? '');
+
+    $chk = $conn->prepare("SELECT id, discount, paid_amount, status FROM tuition_invoices WHERE period_id=? AND student_id=? LIMIT 1");
+    if (!$chk) return false;
+    $chk->bind_param('ii', $periodId, $studentId);
+    $chk->execute();
+    $invoice = $chk->get_result()->fetch_assoc();
+    $chk->close();
+
+    if ($invoice) {
+        $discount = min((float)($invoice['discount'] ?? 0), $gross);
+        $net = max(0, $gross - $discount);
+        $paid = (float)($invoice['paid_amount'] ?? 0);
+        $status = (string)($invoice['status'] ?? 'draft');
+        if ($status === 'waived') {
+            $newStatus = 'waived';
+        } elseif ($status === 'draft') {
+            $newStatus = 'draft';
+        } elseif ($net <= 0 || $paid >= $net) {
+            $newStatus = 'paid';
+        } elseif ($paid > 0) {
+            $newStatus = 'partial';
+        } else {
+            $newStatus = $status === 'overdue' ? 'overdue' : 'unpaid';
+        }
+        $invoiceId = (int)$invoice['id'];
+        $upd = $conn->prepare(
+            "UPDATE tuition_invoices
+             SET total_credits=?, unit_price=?, gross_amount=?, discount=?, net_amount=?,
+                 status=?, data_mode=?, demo_batch_id=?, updated_at=NOW()
+             WHERE id=?"
+        );
+        if (!$upd) return false;
+        $upd->bind_param('iddddsssi', $totalCredits, $unitPrice, $gross, $discount, $net, $newStatus, $dataMode, $demoBatchId, $invoiceId);
+        $ok = $upd->execute();
+        $upd->close();
+        refreshOverdueTuitionInvoices($studentId);
+        return $ok;
+    }
+
+    $initialStatus = ((string)$period['status'] === 'draft') ? 'draft' : 'unpaid';
+    $ins = $conn->prepare(
+        "INSERT INTO tuition_invoices
+         (period_id, student_id, semester_id, total_credits, unit_price, gross_amount, discount, net_amount, paid_amount, status, data_mode, demo_batch_id, created_by)
+         VALUES (?,?,?,?,?,?,0,?,0,?,?,?,?)"
+    );
+    if (!$ins) return false;
+    $ins->bind_param('iiiidddsssi', $periodId, $studentId, $semesterId, $totalCredits, $unitPrice, $gross, $gross, $initialStatus, $dataMode, $demoBatchId, $createdBy);
+    $ok = $ins->execute();
+    $ins->close();
+    refreshOverdueTuitionInvoices($studentId);
+    return $ok;
+}
+
+function requireNoTuitionLock(int $studentId, string $redirect = '/university/student/tuition.php'): void {
+    $lock = getTuitionLockStatus($studentId);
+    if (!empty($lock['locked'])) {
+        $GLOBALS['_tuition_lock_status'] = $lock;
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            if (session_status() === PHP_SESSION_NONE) session_start();
+            $_SESSION['_flash'] = ['type' => 'danger', 'message' => $lock['message']];
+            $back = strtok($_SERVER['REQUEST_URI'] ?? '/university/student/tuition.php', '?');
+            header('Location: ' . $back . '?tuition_locked=1');
+            exit();
+        }
+        registerTuitionLockModal($lock);
+    }
+}
+
+function registerTuitionLockModal(array $lock): void {
+    static $registered = false;
+    if ($registered) return;
+    $registered = true;
+    register_shutdown_function(function () use ($lock) {
+        $message = htmlspecialchars($lock['message'] ?? 'Bạn đang nợ học phí. Vui lòng đóng học phí để tiếp tục sử dụng hệ thống.', ENT_QUOTES, 'UTF-8');
+        $period = htmlspecialchars($lock['period_title'] ?? '', ENT_QUOTES, 'UTF-8');
+        echo <<<HTML
+<style>
+body.tuition-locked .student-content{filter:blur(4px);pointer-events:none;user-select:none}
+body.tuition-locked .student-topbar{pointer-events:none}
+.tuition-lock-modal .modal-content{border:0;border-radius:14px;box-shadow:0 18px 60px rgba(13,45,107,.28)}
+.tuition-lock-modal .modal-header{background:#0d2d6b;color:#fff;border-bottom:3px solid #f5a623}
+.tuition-lock-modal .lock-icon{width:54px;height:54px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#fff3cd;color:#a16207;font-size:1.7rem;margin:0 auto 12px}
+</style>
+<div class="modal fade tuition-lock-modal" id="tuitionLockModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-lock-fill me-2"></i>Chức năng đang bị khóa</h5>
+      </div>
+      <div class="modal-body text-center p-4">
+        <div class="lock-icon"><i class="bi bi-exclamation-triangle-fill"></i></div>
+        <div class="fw-bold mb-2">Bạn đang nợ học phí</div>
+        <p class="text-muted mb-2">{$message}</p>
+        <div class="small text-muted">{$period}</div>
+      </div>
+      <div class="modal-footer justify-content-center">
+        <a href="/university/student/tuition.php" class="btn btn-navy"><i class="bi bi-cash-coin me-1"></i>Xem học phí</a>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  document.body.classList.add('tuition-locked');
+  function showLock(){
+    var el=document.getElementById('tuitionLockModal');
+    if(!el || !window.bootstrap) return;
+    bootstrap.Modal.getOrCreateInstance(el,{backdrop:'static',keyboard:false}).show();
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', showLock); else showLock();
+})();
+</script>
+HTML;
+    });
+}
+
 function getTuitionLockStatus(int $studentId): array {
     global $conn;
+    refreshOverdueTuitionInvoices($studentId);
     $tbl = $conn->query("SHOW TABLES LIKE 'tuition_invoices'");
     if (!$tbl || $tbl->num_rows === 0) return ['locked' => false, 'message' => '', 'period_title' => ''];
 
@@ -668,13 +846,13 @@ function getTuitionLockStatus(int $studentId): array {
 
     // Hóa đơn đã published (status=unpaid/partial/overdue) + đợt thu đã quá hạn
     $res = $conn->prepare("
-        SELECT ti.id, tp.title, tp.due_date, ti.net_amount, ti.paid_amount
+        SELECT ti.id, ti.status, tp.title, tp.due_date, ti.net_amount, ti.paid_amount
         FROM tuition_invoices ti
         JOIN tuition_periods tp ON ti.period_id = tp.id
         WHERE ti.student_id = ?
           AND ti.status IN ('unpaid','partial','overdue')
           AND tp.status IN ('published','closed')
-          AND tp.due_date < CURDATE()
+          AND (ti.status = 'overdue' OR tp.due_date < CURDATE())
         LIMIT 1
     ");
     if (!$res) return ['locked' => false, 'message' => '', 'period_title' => ''];
@@ -684,7 +862,8 @@ function getTuitionLockStatus(int $studentId): array {
     $res->close();
 
     if ($row) {
-        $remaining = number_format($row['net_amount'] - $row['paid_amount'], 0, ',', '.');
+        $remaining = number_format(max(0, $row['net_amount'] - $row['paid_amount']), 0, ',', '.');
+        $reason = ($row['status'] ?? '') === 'overdue' ? 'Hóa đơn đã bị đánh dấu quá hạn' : 'Đợt thu đã quá hạn đóng';
         return [
             'locked'       => true,
             'message'      => "Bạn đang nợ học phí {$remaining} ₫ ({$row['title']}). Vui lòng đóng học phí để tiếp tục sử dụng hệ thống.",
@@ -706,9 +885,19 @@ function isTuitionLocked(int $studentId): bool {
  */
 function hasTuitionDebt(int $studentId): bool {
     global $conn;
+    refreshOverdueTuitionInvoices($studentId);
     $tbl = $conn->query("SHOW TABLES LIKE 'tuition_invoices'");
     if (!$tbl || $tbl->num_rows === 0) return false;
-    $res = $conn->prepare("SELECT id FROM tuition_invoices WHERE student_id=? AND status IN ('unpaid','partial','overdue') LIMIT 1");
+    $res = $conn->prepare(
+        "SELECT ti.id
+         FROM tuition_invoices ti
+         JOIN tuition_periods tp ON tp.id = ti.period_id
+         WHERE ti.student_id=?
+           AND ti.status IN ('unpaid','partial','overdue')
+           AND tp.status IN ('published','closed')
+           AND (ti.status = 'overdue' OR tp.due_date < CURDATE())
+          LIMIT 1"
+    );
     if (!$res) return false;
     $res->bind_param('i', $studentId);
     $res->execute();
@@ -836,6 +1025,7 @@ function getRoundPhase(string $dataMode = 'system'): string {
     $statusMap = [
         'open'          => 'reg_open',
         'reviewing'     => 'reviewing',
+        'results'       => 'results',
         'enrolling'     => 'enrolling',
         'supplementary' => 'supp_reg_open',
         'completed'     => 'completed',
@@ -896,6 +1086,59 @@ function isRegistrationOpen(string $dataMode = 'system'): bool {
 }
 
 /**
+ * Kiểm tra kết quả tuyển sinh đã được công bố cho đợt hiện tại chưa.
+ */
+function hasAdmissionPublishedResults(string $dataMode = 'system', ?int $roundId = null): bool {
+    global $conn;
+    $dataMode = admissionRoundDataMode($dataMode);
+
+    if ($roundId === null) {
+        $round = getActiveRound($dataMode);
+        if (!$round) return false;
+        $roundId = (int)$round['id'];
+    }
+
+    $stmt = $conn->prepare("
+        SELECT COUNT(*) AS total
+        FROM admission_applications
+        WHERE round_id = ?
+          AND data_mode = ?
+          AND status IN ('approved', 'rejected', 'enrolled')
+    ");
+    if (!$stmt) return false;
+    $stmt->bind_param('is', $roundId, $dataMode);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+
+    return (int)($row['total'] ?? 0) > 0;
+}
+
+/**
+ * Trang tra cứu kết quả công khai chỉ mở khi đang trong giai đoạn nhập học
+ * và kết quả xét tuyển của đợt hiện tại đã được công bố.
+ */
+function isAdmissionLookupOpen(string $dataMode = 'system'): bool {
+    $dataMode = admissionRoundDataMode($dataMode);
+    $round = getActiveRound($dataMode);
+    if (!$round) return false;
+
+    $phase = getRoundPhase($dataMode);
+    if (!in_array($phase, ['results', 'enrolling'], true)) {
+        return false;
+    }
+
+    return hasAdmissionPublishedResults($dataMode, (int)$round['id']);
+}
+
+/**
+ * Kiểm tra có chế độ dữ liệu nào đang được mở tra cứu công khai không.
+ */
+function isAnyAdmissionLookupOpen(): bool {
+    return isAdmissionLookupOpen('system') || isAdmissionLookupOpen('test');
+}
+
+/**
  * Kiểm tra có phải đợt bổ sung không
  */
 function isSupplementaryPhase(string $dataMode = 'system'): bool {
@@ -915,6 +1158,7 @@ function getRoundStatusMessage(string $dataMode = 'system'): array {
         'before_reg'     => ['info',    'Chưa đến thời gian nhận hồ sơ.'],
         'reg_open'       => ['success', 'Đang trong thời gian nhận hồ sơ chính thức.'],
         'reviewing'      => ['danger',  '⚠️ Đang trong giai đoạn XÉT TUYỂN — Các tác vụ thủ công bị tạm khóa.'],
+        'results'        => ['success', 'Đã công bố kết quả xét tuyển. Thí sinh có thể tra cứu kết quả.'],
         'enrolling'      => ['success', 'Đang trong thời gian làm thủ tục nhập học.'],
         'after_enroll'   => ['warning', 'Đã hết hạn nhập học chính thức. Đang chờ mở đợt bổ sung.'],
         'supp_reg_open'  => ['info',    'Đang trong thời gian nhận hồ sơ BỔ SUNG.'],

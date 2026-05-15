@@ -36,12 +36,13 @@ if (isset($_GET['ajax'])) {
     else { $total = (int)$conn->query("SELECT COUNT(*) c FROM admission_applications aa $wSQL")->fetch_assoc()['c']; }
     $totalPages = ceil($total / $perPage);
 
-    $dSQL = "SELECT aa.*, m.major_name, m.major_code, am.method_name,
+    $dSQL = "SELECT aa.*, m.major_name, m.major_code, am.method_name, ar.year AS admission_year,
         (aa.math_score+aa.literature_score+aa.english_score) as total_score,
-        (SELECT u.id FROM users u JOIN students s ON u.id=s.user_id WHERE u.email=aa.email LIMIT 1) as has_account
+        (SELECT u.id FROM users u JOIN students s ON u.id=s.user_id WHERE u.email=aa.email AND s.data_mode=aa.data_mode LIMIT 1) as has_account
         FROM admission_applications aa
         LEFT JOIN majors m ON aa.major_id=m.id
         LEFT JOIN admission_methods am ON aa.method_id=am.id
+        LEFT JOIN admission_rounds ar ON ar.id=aa.round_id
         $wSQL ORDER BY aa.created_at DESC LIMIT ? OFFSET ?";
     $allP = array_merge($params, [$perPage, $offset]); $allT = $types . 'ii';
     $stmt = $conn->prepare($dSQL); $stmt->bind_param($allT, ...$allP); $stmt->execute();
@@ -93,19 +94,20 @@ if ($params) { $cs = $conn->prepare($cSQL); $cs->bind_param($types, ...$params);
 else { $total = (int)$conn->query($cSQL)->fetch_assoc()['c']; }
 $totalPages = ceil($total / $perPage);
 
-$dSQL = "SELECT aa.*, m.major_name, m.major_code, am.method_name,
+$dSQL = "SELECT aa.*, m.major_name, m.major_code, am.method_name, ar.year AS admission_year,
     (aa.math_score+aa.literature_score+aa.english_score) as total_score,
-    (SELECT u.id FROM users u JOIN students s ON u.id=s.user_id WHERE u.email=aa.email LIMIT 1) as has_account
+    (SELECT u.id FROM users u JOIN students s ON u.id=s.user_id WHERE u.email=aa.email AND s.data_mode=aa.data_mode LIMIT 1) as has_account
     FROM admission_applications aa
     LEFT JOIN majors m ON aa.major_id=m.id
     LEFT JOIN admission_methods am ON aa.method_id=am.id
+    LEFT JOIN admission_rounds ar ON ar.id=aa.round_id
     $wSQL ORDER BY aa.created_at DESC LIMIT ? OFFSET ?";
 $allP = array_merge($params, [$perPage, $offset]); $allT = $types . 'ii';
 $stmt = $conn->prepare($dSQL); $stmt->bind_param($allT, ...$allP); $stmt->execute();
 $applications = $stmt->get_result(); $stmt->close();
 
 $majors  = $conn->query('SELECT id, major_name FROM majors ORDER BY major_name');
-$classes = $conn->query('SELECT c.id, c.class_name, c.class_code, c.school_year, m.major_name, m.id as major_id FROM classes c LEFT JOIN majors m ON c.major_id=m.id ORDER BY c.class_name');
+$classes = $conn->query('SELECT c.id, c.class_name, c.class_code, c.school_year, c.enrollment_year, m.major_name, m.id as major_id FROM classes c LEFT JOIN majors m ON c.major_id=m.id ORDER BY c.enrollment_year DESC, c.class_name');
 $classArr = [];
 if ($classes) while ($cl = $classes->fetch_assoc()) $classArr[] = $cl;
 
@@ -123,6 +125,7 @@ $lockMap = [
     'before_reg'     => 'Chưa đến thời gian nhận hồ sơ.',
     'reg_open'       => 'Đang nhận hồ sơ — chưa đến giai đoạn nhập học.',
     'reviewing'      => 'Đang xét tuyển — chưa có kết quả chính thức.',
+    'results'        => 'Đã công bố kết quả — thí sinh có thể tra cứu đậu/rớt, nhưng chưa mở thủ tục nhập học.',
     'supp_reviewing' => 'Đang xét tuyển bổ sung.',
     'after_enroll'   => 'Đã hết hạn nhập học chính thức.',
     'completed'      => 'Đợt tuyển sinh đã hoàn tất.',
@@ -326,6 +329,7 @@ let currentMode   = <?php echo json_encode($filter_mode); ?>;
 let currentPage   = <?php echo $page; ?>;
 let pendingAppId  = null;
 let pendingMajorId= null;
+let pendingTargetYear = 0;
 
 // ── Helpers ──────────────────────────────────────────────────
 function toast(type, msg) {
@@ -367,6 +371,33 @@ function loadTable(tab, major, search, page, mode = currentMode) {
 
 // ── Bind events cho các nút trong bảng ──────────────────────
 function bindTableEvents() {
+    const bulkChecks = Array.from(document.querySelectorAll('.bulk-enroll-check'));
+    const bulkAll = document.getElementById('bulkSelectAll');
+    const bulkBtn = document.getElementById('btnBulkEnroll');
+    const bulkCount = document.getElementById('bulkSelectedCount');
+    const refreshBulkState = () => {
+        const selected = bulkChecks.filter(cb => cb.checked);
+        if (bulkCount) bulkCount.textContent = selected.length;
+        if (bulkBtn) bulkBtn.disabled = selected.length === 0;
+        if (bulkAll) {
+            bulkAll.checked = bulkChecks.length > 0 && selected.length === bulkChecks.length;
+            bulkAll.indeterminate = selected.length > 0 && selected.length < bulkChecks.length;
+        }
+    };
+    bulkAll?.addEventListener('change', function() {
+        bulkChecks.forEach(cb => cb.checked = this.checked);
+        refreshBulkState();
+    });
+    bulkChecks.forEach(cb => cb.addEventListener('change', refreshBulkState));
+    bulkBtn?.addEventListener('click', function() {
+        const ids = bulkChecks.filter(cb => cb.checked).map(cb => cb.value);
+        if (!ids.length) return;
+        tdmuConfirm('Xác nhận nhập học ' + ids.length + ' hồ sơ test đã chọn?').then(ok => {
+            if (!ok) return;
+            doBulkEnroll(ids);
+        });
+    });
+
     // Nút Nhập học
     document.querySelectorAll('.btn-enroll').forEach(btn => {
         btn.addEventListener('click', function() {
@@ -396,11 +427,12 @@ function bindTableEvents() {
         btn.addEventListener('click', function() {
             pendingAppId   = this.dataset.id;
             pendingMajorId = parseInt(this.dataset.majorId);
+            pendingTargetYear = parseInt(this.dataset.targetYear || '0');
             document.getElementById('modalStudentName').textContent = this.dataset.name;
             const autoMode = currentMode === 'test' ? 'test' : 'system';
             const radio = document.querySelector(`input[name="modalAutoEnrollMode"][value="${autoMode}"]`);
             if (radio) radio.checked = true;
-            buildClassSelect(pendingMajorId);
+            buildClassSelect(pendingMajorId, pendingTargetYear);
             new bootstrap.Modal(document.getElementById('accountModal')).show();
         });
     });
@@ -415,6 +447,29 @@ function bindTableEvents() {
 }
 
 // ── AJAX: Nhập học ───────────────────────────────────────────
+function doBulkEnroll(ids) {
+    const fd = new FormData();
+    fd.append('action', 'bulk_enroll');
+    fd.append('ids', JSON.stringify(ids));
+    fd.append('data_mode', currentMode);
+
+    fetch('enrollment_api.php', { method: 'POST', body: fd, credentials: 'same-origin' })
+        .then(r => r.json())
+        .then(res => {
+            if (res.ok) {
+                const affected = parseInt(res.affected || ids.length);
+                toast('success', res.msg);
+                const approved = Math.max(0, parseInt(document.getElementById('statApproved').textContent) - affected);
+                const enrolled = parseInt(document.getElementById('statEnrolled').textContent) + affected;
+                updateStats(approved, enrolled);
+                loadTable(currentTab, currentMajor, currentSearch, currentPage, currentMode);
+            } else {
+                toast('error', res.error);
+            }
+        })
+        .catch(() => toast('error', 'Lỗi kết nối.'));
+}
+
 function doEnroll(id, row) {
     const fd = new FormData();
     fd.append('action', 'enroll');
@@ -460,15 +515,32 @@ function doCancelEnroll(id, row) {
 }
 
 // ── Build class select ───────────────────────────────────────
-function buildClassSelect(majorId) {
+function buildClassSelect(majorId, targetYear = 0) {
     const sel = document.getElementById('modalClassSelect');
-    sel.innerHTML = '<option value="">-- Chọn lớp --</option>';
-    let filtered = allClasses.filter(c => !majorId || parseInt(c.major_id) === majorId);
-    if (!filtered.length) filtered = allClasses;
+    sel.innerHTML = '<option value="">-- Ch?n l?p --</option>';
+    let filtered = allClasses.filter(c => {
+        const okMajor = !majorId || parseInt(c.major_id) === majorId;
+        const okYear = !targetYear || parseInt(c.enrollment_year || 0) === targetYear;
+        return okMajor && okYear;
+    });
+    if (!filtered.length) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = targetYear
+            ? 'Chưa có lớp đúng ngành cho khóa ' + targetYear
+            : 'Chưa có lớp phù hợp';
+        sel.appendChild(opt);
+        sel.disabled = true;
+        return;
+    }
+    sel.disabled = false;
     filtered.forEach(cl => {
         const opt = document.createElement('option');
         opt.value = cl.id;
-        opt.textContent = cl.class_name + (cl.school_year ? ' (' + cl.school_year + ')' : '') + (filtered.length === allClasses.length ? ' — ' + (cl.major_name||'') : '');
+        opt.textContent = cl.class_name
+            + (cl.enrollment_year ? ' - kh?a ' + cl.enrollment_year : '')
+            + (cl.school_year ? ' (' + cl.school_year + ')' : '')
+            + (filtered.length === allClasses.length ? ' ? ' + (cl.major_name || '') : '');
         sel.appendChild(opt);
     });
 }
